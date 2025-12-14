@@ -19,13 +19,13 @@ No pairing is required in order to receive telemetry data.
 
 - 🔋 Battery percentage
 - ⚡ Total Power In/Out
-- 🔌 AC Power In/Out
-- 🚗 DC Power In/Out
-- ⏰ AC/DC Timer value
+- 🔌 AC Power In/Out (Exl DC on C1000)
+- 🚗 DC Power In/Out (Exl DC on C1000)
+- ⏰ AC/DC Timer value (Exl DC on C1000)
 - ⏲️ Time remaining to full/empty
 - ☀️ Solar Power In
-- 📱 USB Port Status
-- 💡 Light bar status
+- 📱 USB Port Status (Not on C1000)
+- 💡 Light bar status (Not on C1000)
 - 🔂 Simple structure
 - ✔️ More emojis than strictly necessary
 
@@ -33,6 +33,7 @@ No pairing is required in order to receive telemetry data.
 ## Supported Devices
 
 - C300X
+- C1000
 - Maybe more? IDK
 
 

@@ -6,9 +6,6 @@
 
 import asyncio
 import logging
-
-from bleak import BleakScanner
-
 import SolixBLE
 
 
@@ -20,8 +17,19 @@ async def main():
     # Find device
     devices = await SolixBLE.discover_devices()
 
+    selected_device = None
+    for device in devices:
+        if device.name is not None and "C300" in device.name:
+            selected_device = device
+            break
+
+    if selected_device is None:
+        print("Device not found!")
+        return
+
     # Initialize the device
-    device = SolixBLE.SolixBLEDevice(devices[0])
+    device = SolixBLE.C300(selected_device)
+    # device = SolixBLE.C1000(selected_device)
 
     # Connect
     connected = await device.connect()
