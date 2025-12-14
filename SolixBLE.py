@@ -330,10 +330,20 @@ class SolixBLEDevice:
         :param data: Bytes from status update message.
         """
 
-        # If the size is wrong then it is not a telemetry message
-        if len(data) != self._EXPECTED_TELEMETRY_LENGTH:
+        # If we are expecting a particular size and the data is not that size then the
+        # data we received is not the telemetry data we want
+        if (
+            self._EXPECTED_TELEMETRY_LENGTH != 0
+            and len(data) != self._EXPECTED_TELEMETRY_LENGTH
+        ):
             _LOGGER.debug(
                 f"Data is not telemetry data. The size is wrong ({len(data)} != {self._EXPECTED_TELEMETRY_LENGTH}). Data: '{data}'"
+            )
+            return
+
+        if len(data) < 100:
+            _LOGGER.debug(
+                f"Data is not telemetry data. It is too small. We expect > 100 but got '{len(data)}'. Data: '{data}'"
             )
             return
 
