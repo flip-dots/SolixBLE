@@ -220,7 +220,7 @@ class SolixBLEDevice:
 
         # If there is a client disconnect and throw it away
         if self._client:
-            self._client.disconnect()
+            await self._client.disconnect()
             self._client = None
 
     @property
