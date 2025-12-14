@@ -330,10 +330,20 @@ class SolixBLEDevice:
         :param data: Bytes from status update message.
         """
 
-        # If the size is wrong then it is not a telemetry message
-        if len(data) != self._EXPECTED_TELEMETRY_LENGTH:
+        # If we are expecting a particular size and the data is not that size then the
+        # data we received is not the telemetry data we want
+        if (
+            self._EXPECTED_TELEMETRY_LENGTH != 0
+            and len(data) != self._EXPECTED_TELEMETRY_LENGTH
+        ):
             _LOGGER.debug(
                 f"Data is not telemetry data. The size is wrong ({len(data)} != {self._EXPECTED_TELEMETRY_LENGTH}). Data: '{data}'"
+            )
+            return
+
+        if len(data) < 100:
+            _LOGGER.debug(
+                f"Data is not telemetry data. It is too small. We expect > 100 but got '{len(data)}'. Data: '{data}'"
             )
             return
 
@@ -858,3 +868,19 @@ class C1000(SolixBLEDevice):
         :returns: Percentage charge of battery or default int value.
         """
         return self._data[169] if self._data is not None else DEFAULT_METADATA_INT
+
+
+class Generic(SolixBLEDevice):
+    """
+    Generic to be used for adding support for an unsupported device.
+
+    Add support for a device like this:
+
+    1. Copy this subclass to a new class with a name of the device.
+    2. Initialise the new class inside example.py and connect to it.
+    3. Change values (e.g turn things on and off) to cause changes in the device state.
+    4. Observe which values change in the log and add properties to your subclass that parse them (see C300, C1000, etc for examples).
+    5. Profit???
+    """
+
+    _EXPECTED_TELEMETRY_LENGTH: int = 0
