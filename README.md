@@ -74,3 +74,7 @@ the dependencies are installed as well.
 ```
 pip install bleak bleak-retry-connector
 ```
+
+## Adding support for new devices
+
+See the `Generic` class inside `SolixBLE.py` for guidance on how to add support for new devices.
