@@ -75,6 +75,7 @@ class SolixBLEDevice:
         self._connection_attempts: int = 0
         self._shared_key: bytes | None = None
         self._iv: bytes | None = None
+        self._unencrypted_session: bool = False
 
     def add_callback(self, function: Callable[[], None]) -> None:
         """Register a callback to be run on state updates.
@@ -143,6 +144,10 @@ class SolixBLEDevice:
         _LOGGER.debug(
             f"Established initial connection to '{self.name}' on attempt {self._connection_attempts}!"
         )
+
+        # macOS can report service discovery as incomplete if we try to write
+        # immediately after connect. Ensure services are available first.
+        await self._ensure_services_discovered()
         try:
             _LOGGER.debug(f"Subscribing to notifications from device '{self.name}'!")
             await self._client.start_notify(
@@ -170,11 +175,22 @@ class SolixBLEDevice:
                         _LOGGER.debug(
                             f"Sending negotiation initiation request to '{self.name}'..."
                         )
-                        await self._client.write_gatt_char(
-                            UUID_COMMAND,
-                            bytes.fromhex(NEGOTIATION_COMMAND_0),
-                            response=True,
-                        )
+                        try:
+                            await self._client.write_gatt_char(
+                                UUID_COMMAND,
+                                bytes.fromhex(NEGOTIATION_COMMAND_0),
+                                response=True,
+                            )
+                        except BleakError as exc:
+                            if "Service Discovery has not been performed yet" in str(
+                                exc
+                            ):
+                                _LOGGER.debug(
+                                    "Service discovery incomplete while negotiating, retrying..."
+                                )
+                                await self._ensure_services_discovered()
+                                continue
+                            raise
 
                     # Wait at this long to see if we get any response to
                     # our initial request in stage 0. This weird layout
@@ -249,10 +265,25 @@ class SolixBLEDevice:
         """
         return (
             self.connected
-            and self._shared_key is not None
-            and self._iv is not None
+            and (
+                (self._shared_key is not None and self._iv is not None)
+                or self._unencrypted_session
+            )
             and self._negotiation_timestamp is not None
         )
+
+    async def _ensure_services_discovered(self) -> None:
+        """Ensure BLE services have been discovered when required by backend."""
+        if self._client is None:
+            return
+        get_services = getattr(self._client, "get_services", None)
+        if callable(get_services):
+            try:
+                await get_services()
+            except Exception:
+                _LOGGER.debug(
+                    "Service discovery check failed, continuing with existing state."
+                )
 
     @property
     def available(self) -> bool:
@@ -573,9 +604,20 @@ class SolixBLEDevice:
                         parameters = self._parse_payload(decrypted_payload)
                         return await self._process_telemetry(cmd, parameters)
 
+                    # C200 DC telemetry appears to be sent unencrypted on 0402.
+                    case "0402":
+                        _LOGGER.debug("Received plaintext telemetry message!")
+                        parameters = self._parse_payload(payload)
+                        return await self._process_telemetry(cmd, parameters)
+
                     # Unknown messages
                     case _:
                         _LOGGER.debug(f"Received unknown message of type: {cmd.hex()}")
+                        if self._shared_key is None or self._iv is None:
+                            _LOGGER.debug(
+                                "Skipping decrypt attempt for unknown message because session key is unavailable."
+                            )
+                            return
                         try:
 
                             # If the payload is one byte too short try putting the
@@ -668,6 +710,18 @@ class SolixBLEDevice:
                 parameters = self._parse_payload(payload)
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
 
+                # C200 DC appears to use an alternate handshake and does not
+                # provide a stage-5 public key (a1). For this path we accept
+                # the session as negotiated without setting AES key/IV.
+                if "a1" not in parameters:
+                    _LOGGER.debug(
+                        "Device did not provide a stage-5 public key. Assuming unencrypted session."
+                    )
+                    self._unencrypted_session = True
+                    if self._negotiation_timestamp is None:
+                        self._negotiation_timestamp = time.time()
+                    return
+
                 # Extract public key of device from payload
                 device_public_key_bytes = bytes.fromhex("04") + parameters["a1"]
                 _LOGGER.debug(f"Public key of device: {device_public_key_bytes.hex()}")
@@ -702,6 +756,9 @@ class SolixBLEDevice:
                 _LOGGER.debug(
                     "Entered negotiation stage 6 (optional) due to response from device!"
                 )
+                if self._shared_key is None or self._iv is None:
+                    _LOGGER.debug("Skipping stage 6 decrypt due to missing AES key/IV.")
+                    return
                 decrypted_payload = self._decrypt_payload(payload)
                 parameters = self._parse_payload(decrypted_payload)
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
@@ -974,6 +1031,7 @@ class SolixBLEDevice:
         self._telemetry_payload_large = None
         self._shared_key = None
         self._iv = None
+        self._unencrypted_session = False
         self._last_packet_timestamp = None
         self._negotiation_timestamp = None
         self._packet_futures: dict[bytes, list[asyncio.Future]] = {}

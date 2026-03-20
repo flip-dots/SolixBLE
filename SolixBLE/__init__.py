@@ -7,6 +7,7 @@
 from .device import SolixBLEDevice
 from .devices import (
     C300,
+    C200DC,
     C300DC,
     C800,
     C1000,
@@ -31,6 +32,7 @@ from .utilities import discover_devices
 __all__ = [
     "SolixBLEDevice",
     "C300",
+    "C200DC",
     "C300DC",
     "C800",
     "C1000",

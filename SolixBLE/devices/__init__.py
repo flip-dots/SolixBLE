@@ -5,6 +5,7 @@
 """
 
 from .c300 import C300
+from .c200dc import C200DC
 from .c300dc import C300DC
 from .c800 import C800
 from .c1000 import C1000
@@ -18,6 +19,7 @@ from .solarbank3 import Solarbank3
 
 __all__ = [
     "C300",
+    "C200DC",
     "C300DC",
     "C800",
     "C1000",
