@@ -6,7 +6,11 @@
 
 import struct
 
-from ..const import DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_STRING
+from ..const import (
+    DEFAULT_METADATA_FLOAT,
+    DEFAULT_METADATA_INT,
+    DEFAULT_METADATA_STRING,
+)
 from ..device import SolixBLEDevice
 
 CMD_SB_SET_SCHEDULE = "405e"
@@ -86,7 +90,7 @@ class Solarbank1(SolixBLEDevice):
         return self._parse_int("aa", begin=1, signed=True)
 
     @property
-    def solar_power_in(self) -> int:
+    def solar_power_in(self) -> float:
         """Total Solar Power In.
 
         :returns: Total solar power in or default float value.
@@ -103,7 +107,7 @@ class Solarbank1(SolixBLEDevice):
         :returns: Total power out in watts or default float value.
         """
         if self._data is None:
-            return DEFAULT_METADATA_FLOAT
+            return DEFAULT_METADATA_INT
 
         return self._parse_int("ac", begin=1)
 
@@ -157,7 +161,7 @@ class Solarbank1(SolixBLEDevice):
         return " | ".join(periods)
 
     @property
-    def battery_charge_power(self) -> int:
+    def battery_charge_power(self) -> float:
         """Battery charging power.
 
         :returns: Total battery power in or default float value.
@@ -168,7 +172,7 @@ class Solarbank1(SolixBLEDevice):
         return self._parse_int("b0", begin=1) / 100.0
 
     @property
-    def pv_yield(self) -> int:
+    def pv_yield(self) -> float:
         """Solar power generated.
 
         :returns: Total solar power generated or default float value.
@@ -179,7 +183,7 @@ class Solarbank1(SolixBLEDevice):
         return self._parse_int("b1", begin=1) / 10000.0
 
     @property
-    def charged_energy(self) -> int:
+    def charged_energy(self) -> float:
         """Probably aggregated energy charged in Wh?
 
         :returns: Charged energy or default float value.
@@ -190,7 +194,7 @@ class Solarbank1(SolixBLEDevice):
         return self._parse_int("b2", begin=1) / 10000.0
 
     @property
-    def output_energy(self) -> int:
+    def output_energy(self) -> float:
         """Output energy.
 
         :returns: Total energy output or default float value.
