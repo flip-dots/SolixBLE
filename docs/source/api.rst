@@ -19,6 +19,7 @@ the list of properties for that class.
    c1000g2
    f2000
    f3800
+   solarbank1
    solarbank2
    solarbank3
    prime_charger_160w
