@@ -239,10 +239,21 @@ The scripts are provided below for convenience in addition to being in the main 
 patch.sh
 ^^^^^^^^
 
-This script automates the patching of the Anker app
+This script automates the patching of the Anker app. This script is
+designed for MacOS and Linux.
 
 .. literalinclude :: ../../scripts/patch.sh
    :language: bash
+
+
+patch.bat
+^^^^^^^^^
+
+This script automates the patching of the Anker app. This script is
+designed for Windows.
+
+.. literalinclude :: ../../scripts/patch.bat
+   :language: bat
 
 
 frida.js
