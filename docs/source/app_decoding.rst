@@ -256,6 +256,18 @@ log their inputs and outputs.
    :language: javascript
 
 
+frida_2.js
+^^^^^^^^^^
+
+This is an enhanced version of the frida.js script which includes some
+additional logging functionality and more encryption hooks. If you 
+are having issues with the frida.js script not capturing encryption 
+data, then try using this one.
+
+.. literalinclude :: ../../scripts/frida_2.js
+   :language: javascript
+
+
 run.sh
 ^^^^^^
 
