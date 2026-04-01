@@ -5,6 +5,7 @@
 """
 
 import struct
+from dataclasses import dataclass
 
 from ..const import (
     DEFAULT_METADATA_FLOAT,
@@ -12,8 +13,106 @@ from ..const import (
     DEFAULT_METADATA_STRING,
 )
 from ..device import SolixBLEDevice
+from ..states import ChargingStatus
 
 CMD_SB_SET_SCHEDULE = "405e"
+
+@dataclass
+class ChargingSchedule:
+    start_time: int
+    """
+    Start of schedule in minutes since midnight.
+    """
+    end_time: int
+    """
+    End of schedule in minutes since midnight.
+    """
+    output_wattage: int
+
+    max_soc : int
+    """
+    Maximum SOC before Solarbank (presumably) goes into passthrough mode.
+    """
+
+    def __str__(self) -> str:
+        """Convert the integer minutes back to HH:MM format for a nice display"""
+        start_time_str = f"{self.start_time // 60:02d}:{self.start_time % 60:02d}"
+        end_time_str = f"{self.end_time // 60:02d}:{self.end_time % 60:02d}"
+        
+        return (
+            f"Charging Schedule:\n"
+            f"   Time:    {start_time_str} - {end_time_str}\n"
+            f"   Wattage: {self.output_wattage}W\n"
+            f"   Max SOC: {self.max_soc}%"
+        )
+
+    def __post_init__(self):
+        MIN_WATTAGE, MAX_WATTAGE = 0, 800 
+        MIN_SOC, MAX_SOC = 0, 100
+        
+        if not (MIN_WATTAGE <= self.output_wattage <= MAX_WATTAGE):
+            raise ValueError(
+                f"Invalid output_wattage: {self.output_wattage}. "
+                f"Must be between {MIN_WATTAGE} and {MAX_WATTAGE}."
+            )
+        
+        if not (MIN_SOC <= self.max_soc <= MAX_SOC):
+            raise ValueError(
+                f"Invalid max_soc: {self.max_soc}. "
+                f"Must be between {MIN_SOC} and {MAX_SOC}."
+            )
+        
+        if not (self.end_time - self.start_time > 0):
+            raise ValueError(
+                f"Invalid time frame: Start: {self.start_time}, End: {self.end_time}. "
+                f"Start time must be smaller than end time."
+            )
+        
+        if not (self.start_time >= 0 and self.start_time <= 1440):
+            raise ValueError(
+                f"Invalid start time: {self.start_time}. "
+                f"Start time cannot be less than 0 minutes or greater than 1440 minutes (24 hours)"
+            )
+        
+        if not (self.end_time >= 0 and self.end_time <= 1440):
+            raise ValueError(
+                f"Invalid start time: {self.end_time}. "
+                f"End time cannot be less than 0 minutes or greater than 1440 minutes (24 hours)"
+            )
+
+    @classmethod
+    def from_time_strings(cls, start: str, end: str, output_wattage: int, max_soc: int) -> "ChargingSchedule":
+        """Alternative constructor to create a schedule using HH:MM string formats."""
+        return cls(
+            start_time=cls.time_from_string(start),
+            end_time=cls.time_from_string(end),
+            output_wattage=output_wattage,
+            max_soc=max_soc
+        )
+
+    @staticmethod
+    def time_from_string(time: str) -> int:
+        """
+        Converts a string time in 24-hour HH:MM format to minutes since midnight.
+
+        :param time: Time string in 24-hour HH:MM format.
+        :returns: Minutes since midnight.
+        """
+
+        hours_str, minutes_str = time.split(":")
+        hours = int(hours_str)
+        minutes = int(minutes_str)
+        
+        if hours > 24:
+            raise ValueError(f"Invalid hour value: {hours}. Hour must be between 0 and 24.")
+        
+        if minutes > 59:
+            raise ValueError(f"Invalid minute value: {minutes}. Minute must be between 0 and 59.")
+        
+        if hours == 24 and minutes != 0:
+            raise ValueError(f"Invalid time string: {time}. If hour is set to 24 then minutes may only be 0.")
+
+        return hours * 60 + minutes
 
 
 class Solarbank1(SolixBLEDevice):
@@ -24,13 +123,15 @@ class Solarbank1(SolixBLEDevice):
     This model is also known as the A17C0.
 
     .. note::
-        This model was added using data from anker-solix-api as well as logging the actual anker app.
+        This model was added using data from anker-solix-api as well as logging the actual anker app as described in the SolixBLE docs.
         It seems to be working so far, altough not everything has been reverse engineered so far.
 
 
     """
 
     _EXPECTED_TELEMETRY_LENGTH: int = 253
+
+    ChargingSchedule = ChargingSchedule # Added so the user only has to do one import
 
     @property
     def serial_number(self) -> str:
@@ -112,21 +213,34 @@ class Solarbank1(SolixBLEDevice):
         return self._parse_int("ac", begin=1)
 
     @property
-    def charging_status(self) -> int:
-        """Charging status.
-
-        :returns: Charging status or default int value.
+    def charging_status(self) -> ChargingStatus:
+        """Retrieve the current charging status of the device.
+        Parses the charging status from the device data. If device data is unavailable
+        or does not contain charging status information, returns UNKNOWN.
+        
+        :returns: ChargingStatus enum member representing the current charging state
+                  (e.g., CHARGING, DISCHARGING, IDLE, or UNKNOWN if status cannot be determined).
         """
-        return self._parse_int("ad", begin=1)
+
+        if self._data is None or "ad" not in self._data:
+            return ChargingStatus.UNKNOWN
+
+        value = self._parse_int("ad", begin=1)
+        
+        try:
+            return ChargingStatus(value)
+        except ValueError:
+            return ChargingStatus.UNKNOWN
 
     @property
-    def current_schedule(self) -> str:
+    def current_schedule(self) -> list[ChargingSchedule]:
         """Parse the active daily schedule block(s).
 
-        :returns: A human-readable string describing the current schedule or a message if no schedule is set.
+        :returns: A list of ChargingSchedule objects representing the current schedule,
+                  or an empty list if no schedule is set.
         """
         if self._data is None or "ae" not in self._data:
-            return "No Schedule Set"
+            return []
 
         data = self._data["ae"]
 
@@ -137,14 +251,13 @@ class Solarbank1(SolixBLEDevice):
             hex_str = data.get("hex", "")
             raw_bytes = bytes.fromhex(hex_str)
         else:
-            return "Invalid data format"
+            return []
 
         # A valid payload has a 1-byte header, plus N * 8-byte blocks
         if len(raw_bytes) < 9 or (len(raw_bytes) - 1) % 8 != 0:
-            return f"Unknown structure: {raw_bytes.hex()}"
+            return []
 
-        # We can ignore the first byte (04 header) and loop through the rest
-        periods = []
+        schedules = []
         for i in range(1, len(raw_bytes), 8):
             chunk = raw_bytes[i : i + 8]
 
@@ -153,12 +266,16 @@ class Solarbank1(SolixBLEDevice):
             watts = int.from_bytes(chunk[4:6], byteorder="little")
             limit = int.from_bytes(chunk[6:8], byteorder="little")
 
-            start_time = f"{start_min // 60:02d}:{start_min % 60:02d}"
-            end_time = f"{end_min // 60:02d}:{end_min % 60:02d}"
+            schedules.append(
+                ChargingSchedule(
+                    start_time=start_min,
+                    end_time=end_min,
+                    output_wattage=watts,
+                    max_soc=limit,
+                )
+            )
 
-            periods.append(f"[{start_time}-{end_time} @ {watts}W, Limit: {limit}%]")
-
-        return " | ".join(periods)
+        return schedules
 
     @property
     def battery_charge_power(self) -> float:
@@ -213,7 +330,7 @@ class Solarbank1(SolixBLEDevice):
         if self._data is None:
             return DEFAULT_METADATA_STRING
 
-        return self._parse_string("b7", begin=1)  # TODO: Check this later
+        return self._parse_string("b7", begin=1)
 
     @property
     def inverter_model(self) -> str:
@@ -224,7 +341,7 @@ class Solarbank1(SolixBLEDevice):
         if self._data is None:
             return DEFAULT_METADATA_STRING
 
-        return self._parse_string("b8", begin=1)  # TODO: Check this later
+        return self._parse_string("b8", begin=1)
 
     @property
     def min_load(self) -> int:
@@ -233,27 +350,16 @@ class Solarbank1(SolixBLEDevice):
         :returns: Don't know yet or default str value.
         """
         if self._data is None:
-            return DEFAULT_METADATA_STRING
+            return DEFAULT_METADATA_INT
 
         return self._parse_int("b9", begin=1)  # TODO: Check this later
 
-    async def set_schedule(self, schedules: list[dict]) -> None:
+    async def set_schedule(self, schedules: list[ChargingSchedule]) -> None:
         """Set the daily charge/discharge schedule on the Solarbank 1.
 
         Sends a schedule write command (CMD 0x405e) to the device.
         The base class ``_send_command`` automatically appends the current
         session timestamp and handles AES-CBC encryption and framing.
-
-        Each schedule entry is a ``dict`` with the following keys:
-
-        =========  =======  =====================================================
-        Key        Type     Description
-        =========  =======  =====================================================
-        ``start``  ``str``  Start time in ``"HH:MM"`` format, e.g. ``"00:00"``
-        ``end``    ``str``  End time   in ``"HH:MM"`` format, e.g. ``"06:00"``
-        ``power``  ``int``  Output wattage; use ``0`` for charge-only mode
-        ``soc``    ``int``  Max battery SOC cap as a percentage (e.g. ``80``)
-        =========  =======  =====================================================
 
         Pass an empty list to clear/delete all schedules.
 
@@ -261,40 +367,22 @@ class Solarbank1(SolixBLEDevice):
 
             # Single schedule: charge-only midnight-06:00, cap at 80 % SOC
             await sb1.set_schedule([
-                {"start": "00:00", "end": "06:00", "power": 0, "soc": 80}
+                ChargingSchedule(start=0, end=360, output_wattage=0, max_soc=80)
             ])
 
             # Two back-to-back schedules
             await sb1.set_schedule([
-                {"start": "00:00", "end": "06:00", "power":   0, "soc": 80},
-                {"start": "06:00", "end": "14:30", "power": 240, "soc": 80},
+                ChargingSchedule(start=0, end=360, output_wattage=0, max_soc=80),
+                ChargingSchedule(start=360, end=870, output_wattage=240, max_soc=80),
             ])
 
             # Clear all schedules
             await sb1.set_schedule([])
 
-        :param schedules: List of schedule dicts. The device-side upper limit
+        :param schedules: List of ChargingSchedule objects. The device-side upper limit
             is unknown but confirmed to be at least 10.
-        :raises ValueError: If a time string is not in ``"HH:MM"`` format, or
-            if ``power``/``soc`` values are out of range.
         :raises ConnectionError: If not connected/negotiated to the device.
         """
-
-        for i, s in enumerate(schedules):
-            if not (0 <= s["power"] <= 800):
-                raise ValueError(
-                    f"Schedule {i}: power must be 0–800 W, got {s['power']}"
-                )
-            if not (1 <= s["soc"] <= 100):
-                raise ValueError(f"Schedule {i}: soc must be 1–100 %, got {s['soc']}")
-
-        def _time_to_minutes(t: str) -> int:
-            """Convert 'HH:MM' string to minutes since midnight."""
-            try:
-                h, m = t.split(":")
-                return int(h) * 60 + int(m)
-            except (ValueError, AttributeError):
-                raise ValueError(f"Time '{t}' is not in HH:MM format")
 
         # ── Build plaintext TLV payload ────────────────────────────────────
         #
@@ -310,13 +398,13 @@ class Solarbank1(SolixBLEDevice):
         # 0xa3 — schedule blocks: type 0x04, then N × 8-byte entries
         #   Each entry: [start_min u16le][end_min u16le][power_W u16le][soc_% u16le]
         schedule_bytes = b""
-        for s in schedules:
+        for schedule in schedules:
             schedule_bytes += struct.pack(
                 "<HHHH",
-                _time_to_minutes(s["start"]),
-                _time_to_minutes(s["end"]),
-                s["power"],
-                s["soc"],
+                schedule.start_time,
+                schedule.end_time,
+                schedule.output_wattage,
+                schedule.max_soc,
             )
 
         # LENGTH = 1 (type byte) + len(schedule_bytes)
