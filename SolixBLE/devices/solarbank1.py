@@ -4,6 +4,7 @@
 
 """
 
+import logging
 import struct
 from dataclasses import dataclass
 
@@ -17,8 +18,14 @@ from ..states import ChargingStatus
 
 CMD_SB_SET_SCHEDULE = "405e"
 
+MIN_WATTAGE, MAX_WATTAGE = 0, 800
+MIN_SOC, MAX_SOC = 10, 100
+
+_LOGGER = logging.getLogger(__name__)
+
+
 @dataclass
-class ChargingSchedule:
+class FamilyLoadSchedule:
     start_time: int
     """
     Start of schedule in minutes since midnight.
@@ -29,7 +36,7 @@ class ChargingSchedule:
     """
     output_wattage: int
 
-    max_soc : int
+    max_soc: int
     """
     Maximum SOC before Solarbank (presumably) goes into passthrough mode.
     """
@@ -38,7 +45,7 @@ class ChargingSchedule:
         """Convert the integer minutes back to HH:MM format for a nice display"""
         start_time_str = f"{self.start_time // 60:02d}:{self.start_time % 60:02d}"
         end_time_str = f"{self.end_time // 60:02d}:{self.end_time % 60:02d}"
-        
+
         return (
             f"Charging Schedule:\n"
             f"   Time:    {start_time_str} - {end_time_str}\n"
@@ -47,33 +54,30 @@ class ChargingSchedule:
         )
 
     def __post_init__(self):
-        MIN_WATTAGE, MAX_WATTAGE = 0, 800 
-        MIN_SOC, MAX_SOC = 0, 100
-        
         if not (MIN_WATTAGE <= self.output_wattage <= MAX_WATTAGE):
             raise ValueError(
                 f"Invalid output_wattage: {self.output_wattage}. "
                 f"Must be between {MIN_WATTAGE} and {MAX_WATTAGE}."
             )
-        
+
         if not (MIN_SOC <= self.max_soc <= MAX_SOC):
             raise ValueError(
                 f"Invalid max_soc: {self.max_soc}. "
                 f"Must be between {MIN_SOC} and {MAX_SOC}."
             )
-        
+
         if not (self.end_time - self.start_time > 0):
             raise ValueError(
                 f"Invalid time frame: Start: {self.start_time}, End: {self.end_time}. "
                 f"Start time must be smaller than end time."
             )
-        
+
         if not (self.start_time >= 0 and self.start_time <= 1440):
             raise ValueError(
                 f"Invalid start time: {self.start_time}. "
                 f"Start time cannot be less than 0 minutes or greater than 1440 minutes (24 hours)"
             )
-        
+
         if not (self.end_time >= 0 and self.end_time <= 1440):
             raise ValueError(
                 f"Invalid start time: {self.end_time}. "
@@ -81,13 +85,15 @@ class ChargingSchedule:
             )
 
     @classmethod
-    def from_time_strings(cls, start: str, end: str, output_wattage: int, max_soc: int) -> "ChargingSchedule":
+    def from_time_strings(
+        cls, start: str, end: str, output_wattage: int, max_soc: int
+    ) -> "FamilyLoadSchedule":
         """Alternative constructor to create a schedule using HH:MM string formats."""
         return cls(
             start_time=cls.time_from_string(start),
             end_time=cls.time_from_string(end),
             output_wattage=output_wattage,
-            max_soc=max_soc
+            max_soc=max_soc,
         )
 
     @staticmethod
@@ -102,15 +108,21 @@ class ChargingSchedule:
         hours_str, minutes_str = time.split(":")
         hours = int(hours_str)
         minutes = int(minutes_str)
-        
-        if hours > 24:
-            raise ValueError(f"Invalid hour value: {hours}. Hour must be between 0 and 24.")
-        
-        if minutes > 59:
-            raise ValueError(f"Invalid minute value: {minutes}. Minute must be between 0 and 59.")
-        
+
+        if hours > 24 or hours < 0:
+            raise ValueError(
+                f"Invalid hour value: {hours}. Hour must be between 0 and 24."
+            )
+
+        if minutes > 59 or minutes < 0:
+            raise ValueError(
+                f"Invalid minute value: {minutes}. Minute must be between 0 and 59."
+            )
+
         if hours == 24 and minutes != 0:
-            raise ValueError(f"Invalid time string: {time}. If hour is set to 24 then minutes may only be 0.")
+            raise ValueError(
+                f"Invalid time string: {time}. If hour is set to 24 then minutes may only be 0."
+            )
 
         return hours * 60 + minutes
 
@@ -131,7 +143,9 @@ class Solarbank1(SolixBLEDevice):
 
     _EXPECTED_TELEMETRY_LENGTH: int = 253
 
-    ChargingSchedule = ChargingSchedule # Added so the user only has to do one import
+    FamilyLoadSchedule = (
+        FamilyLoadSchedule  # Added so the user only has to do one import
+    )
 
     @property
     def serial_number(self) -> str:
@@ -199,7 +213,7 @@ class Solarbank1(SolixBLEDevice):
         if self._data is None:
             return DEFAULT_METADATA_FLOAT
 
-        return self._parse_int("ab", begin=1) / 10.0
+        return self._parse_int("ab", begin=1)
 
     @property
     def output_power(self) -> int:
@@ -217,7 +231,7 @@ class Solarbank1(SolixBLEDevice):
         """Retrieve the current charging status of the device.
         Parses the charging status from the device data. If device data is unavailable
         or does not contain charging status information, returns UNKNOWN.
-        
+
         :returns: ChargingStatus enum member representing the current charging state
                   (e.g., CHARGING, DISCHARGING, IDLE, or UNKNOWN if status cannot be determined).
         """
@@ -226,17 +240,20 @@ class Solarbank1(SolixBLEDevice):
             return ChargingStatus.UNKNOWN
 
         value = self._parse_int("ad", begin=1)
-        
+
         try:
             return ChargingStatus(value)
         except ValueError:
+            _LOGGER.exception(
+                f"Invalid ChargingStatus value {value} received from device; returning ChargingStatus.UNKNOWN."
+            )
             return ChargingStatus.UNKNOWN
 
     @property
-    def current_schedule(self) -> list[ChargingSchedule]:
-        """Parse the active daily schedule block(s).
+    def family_load_schedule(self) -> list[FamilyLoadSchedule]:
+        """Parse the active daily family load schedule block(s).
 
-        :returns: A list of ChargingSchedule objects representing the current schedule,
+        :returns: A list of FamilyLoadSchedule objects representing the current schedule,
                   or an empty list if no schedule is set.
         """
         if self._data is None or "ae" not in self._data:
@@ -247,9 +264,6 @@ class Solarbank1(SolixBLEDevice):
         # Safely extract the raw bytes
         if isinstance(data, bytes):
             raw_bytes = data
-        elif isinstance(data, dict):
-            hex_str = data.get("hex", "")
-            raw_bytes = bytes.fromhex(hex_str)
         else:
             return []
 
@@ -267,7 +281,7 @@ class Solarbank1(SolixBLEDevice):
             limit = int.from_bytes(chunk[6:8], byteorder="little")
 
             schedules.append(
-                ChargingSchedule(
+                FamilyLoadSchedule(
                     start_time=start_min,
                     end_time=end_min,
                     output_wattage=watts,
@@ -354,7 +368,7 @@ class Solarbank1(SolixBLEDevice):
 
         return self._parse_int("b9", begin=1)  # TODO: Check this later
 
-    async def set_schedule(self, schedules: list[ChargingSchedule]) -> None:
+    async def set_schedule(self, schedules: list[FamilyLoadSchedule]) -> None:
         """Set the daily charge/discharge schedule on the Solarbank 1.
 
         Sends a schedule write command (CMD 0x405e) to the device.
@@ -367,19 +381,19 @@ class Solarbank1(SolixBLEDevice):
 
             # Single schedule: charge-only midnight-06:00, cap at 80 % SOC
             await sb1.set_schedule([
-                ChargingSchedule(start=0, end=360, output_wattage=0, max_soc=80)
+                FamilyLoadSchedule(start=0, end=360, output_wattage=0, max_soc=80)
             ])
 
             # Two back-to-back schedules
             await sb1.set_schedule([
-                ChargingSchedule(start=0, end=360, output_wattage=0, max_soc=80),
-                ChargingSchedule(start=360, end=870, output_wattage=240, max_soc=80),
+                FamilyLoadSchedule(start=0, end=360, output_wattage=0, max_soc=80),
+                FamilyLoadSchedule(start=360, end=870, output_wattage=240, max_soc=80),
             ])
 
             # Clear all schedules
             await sb1.set_schedule([])
 
-        :param schedules: List of ChargingSchedule objects. The device-side upper limit
+        :param schedules: List of FamilyLoadSchedule objects. The device-side upper limit
             is unknown but confirmed to be at least 10.
         :raises ConnectionError: If not connected/negotiated to the device.
         """

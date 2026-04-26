@@ -96,7 +96,7 @@ Battery charge power                ✅            ❌           ❌
 Battery percentage                  ✅            ✅           ✅
 Battery percentage aggregate        ❌            ✅           ✅
 Expansion battery percentage        ❌            ❌           ❌
-Charging status                     ✅            ❌           ❌
+Charging status                     ❌            ❌           ❌
 Battery health                      ❌            ❌           ✅
 Expansion battery health            ❌            ❌           ❌
 Schedule                            ✅            ❌           ❌

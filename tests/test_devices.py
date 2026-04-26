@@ -25,6 +25,7 @@ from SolixBLE import (
     PrimeCharger160w,
     PrimeDevice,
     PrimePowerBank20k,
+    Solarbank1,
     Solarbank2,
     SolixBLEDevice,
     TemperatureUnit,
@@ -1491,3 +1492,68 @@ async def test_bad_values(
         assert (
             getattr(device, class_property) == expected_value
         ), f"Mismatch for property '{class_property}'!"
+
+    for error_message in errors:
+        assert error_message in caplog.text
+
+
+def test_sb1_family_load_schedule_valid_creation():
+    """Test that a valid FamilyLoadSchedule can be created without raising errors."""
+    schedule = Solarbank1.FamilyLoadSchedule(
+        start_time=60, end_time=120, output_wattage=110, max_soc=20
+    )
+    assert schedule.start_time == 60
+    assert schedule.end_time == 120
+    assert schedule.output_wattage == 110
+    assert schedule.max_soc == 20
+
+
+def test_sb1_family_load_schedule_from_time_strings_valid():
+    """Test the alternative constructor with valid string times."""
+    schedule = Solarbank1.FamilyLoadSchedule.from_time_strings(
+        start="01:30", end="14:45", output_wattage=360, max_soc=100
+    )
+    assert schedule.start_time == 360
+    assert schedule.end_time == 885
+    assert schedule.output_wattage == 360
+    assert schedule.max_soc == 100
+
+
+@pytest.mark.parametrize(
+    "start, end, wattage, soc, expected_error_msg",
+    [
+        (100, 200, -1, 50, "Invalid output_wattage"),
+        (100, 200, 800 + 1, 50, "Invalid output_wattage"),
+        (100, 200, 100, 10 - 1, "Invalid max_soc"),
+        (100, 200, 100, 100 + 1, "Invalid max_soc"),
+        (200, 100, 100, 50, "Start time must be smaller than end time"),
+        (100, 100, 100, 50, "Start time must be smaller than end time"),
+        (-1, 200, 100, 50, "Invalid start time"),
+        (1441, 1500, 100, 50, "Invalid start time"),
+        (100, 1441, 100, 50, "Invalid start time"),
+    ],
+)
+def test_sb1_family_load_schedule_post_init_errors(
+    start, end, wattage, soc, expected_error_msg
+):
+    """Test that invalid parameters raise ValueErrors."""
+    with pytest.raises(ValueError, match=expected_error_msg):
+        Solarbank1.FamilyLoadSchedule(
+            start_time=start, end_time=end, output_wattage=wattage, max_soc=soc
+        )
+
+
+@pytest.mark.parametrize(
+    "time_str, expected_error_msg",
+    [
+        ("25:00", "Invalid hour value"),
+        ("-1:00", "Invalid hour value"),
+        ("12:60", "Invalid minute value"),
+        ("12:-1", "Invalid minute value"),
+        ("24:01", "If hour is set to 24 then minutes may only be 0"),
+    ],
+)
+def test_sb1_family_load_schedule_time_from_string_errors(time_str, expected_error_msg):
+    """Test that invalid time strings raise ValueErrors"""
+    with pytest.raises(ValueError, match=expected_error_msg):
+        Solarbank1.FamilyLoadSchedule.time_from_string(time_str)
