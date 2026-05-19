@@ -626,7 +626,7 @@ class SolixBLEDevice:
                 match cmd.hex():
 
                     # Telemetry messages
-                    case "c402" | "4300" | "c405":
+                    case "c402" | "4300" | "c405" | "c840":
                         _LOGGER.debug("Received telemetry message!")
                         return await self._process_telemetry_packet(payload, cmd)
 

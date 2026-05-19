@@ -14,7 +14,7 @@ from .f3800 import F3800
 from .generic import Generic
 from .prime_charger_160w import PrimeCharger160w
 from .prime_charger_250w import PrimeCharger250w
-from .solarbank2 import Solarbank2
+from .solarbank2 import Solarbank2, Solarbank2Prime
 from .solarbank3 import Solarbank3
 
 __all__ = [
@@ -26,6 +26,7 @@ __all__ = [
     "F2000",
     "F3800",
     "Solarbank2",
+    "Solarbank2Prime",
     "Solarbank3",
     "PrimeCharger160w",
     "PrimeCharger250w",

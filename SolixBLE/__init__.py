@@ -17,6 +17,7 @@ from .devices import (
     PrimeCharger160w,
     PrimeCharger250w,
     Solarbank2,
+    Solarbank2Prime,
     Solarbank3,
 )
 from .prime_device import PrimeDevice
@@ -42,6 +43,7 @@ __all__ = [
     "F2000",
     "F3800",
     "Solarbank2",
+    "Solarbank2Prime",
     "Solarbank3",
     "PrimeCharger160w",
     "PrimeCharger250w",
