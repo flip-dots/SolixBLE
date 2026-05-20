@@ -253,7 +253,7 @@ class Solarbank2Common(SolixBLEDevice):
             a3 02 01 <state>      0 = ON, 1 = OFF (the "light_off_switch" bit)
 
         .. warning::
-            This function has been added using telemtry captures. It has not 
+            This function has been added using telemetry captures. It has not 
             been tested!
         """
         return bytes.fromhex(f"a10121a2020100a30201{0 if light_on else 1:02x}")
@@ -262,7 +262,7 @@ class Solarbank2Common(SolixBLEDevice):
         """Turn the SB2 status light on or off.
 
         .. warning::
-            This function has been added using telemtry captures. It has not 
+            This function has been added using telemetry captures. It has not 
             been tested!
 
         :param light_on: ``True`` to turn the light on, ``False`` to turn it off.
@@ -281,7 +281,7 @@ class Solarbank2Common(SolixBLEDevice):
         """Build the plaintext payload for cmd 0x4067 (reserved power).
 
         The Anker app's "Reserved power" writes 
-        three independent fields. This is reflected in the telemtry:
+        three independent fields. This is reflected in the telemetry:
         discharge cutoff (b4), low-power-input (b5), and charge cutoff (b6).
         a2 and a4 both equal the reserved-power %; a3 seems to follow an
         uncharacterized mapping.
@@ -294,7 +294,7 @@ class Solarbank2Common(SolixBLEDevice):
             a4 02 01 <pct>     -> c405 telemetry b6 (charge cutoff)
 
         .. warning::
-            This function has been added using telemtry captures. It has not 
+            This function has been added using telemetry captures. It has not 
             been tested!
         """
         if level is SBPowerCutoff.UNKNOWN:
@@ -317,7 +317,7 @@ class Solarbank2Common(SolixBLEDevice):
         input_cutoff_data).
 
         .. warning::
-            This function has been added using telemtry captures. It has not 
+            This function has been added using telemetry captures. It has not 
             been tested!
 
         :param level: Desired reserved-power level
@@ -342,7 +342,7 @@ class Solarbank2Common(SolixBLEDevice):
             a3 03 02 00 00              constant zero (flags/secondary cap?)
 
         .. warning::
-            This function has been added using telemtry captures. It has not 
+            This function has been added using telemetry captures. It has not 
             been tested!
         """
         if load is MaxLoadSB2.UNKNOWN:
@@ -354,7 +354,7 @@ class Solarbank2Common(SolixBLEDevice):
         """Set the AC output power limit (max load) in watts.
 
         .. warning::
-            This function has been added using telemtry captures. It has not 
+            This function has been added using telemetry captures. It has not 
             been tested!
 
         :param load: One of the discrete limits in :class:`MaxLoadSB2`.
