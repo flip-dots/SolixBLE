@@ -119,7 +119,7 @@ Power Schedule control              ✅           ❌
 Light mode                          ✅           ❌
 PV limitations                      ❌           ❌
 PV panel power                      ✅           ❌
-AC limitations                      ❌           ❌
+AC limitations                      ✅           ❌
 Software version                    ✅           ❌  
 Software version controller         ✅           ❌
 Software version expansion          ✅           ❌
