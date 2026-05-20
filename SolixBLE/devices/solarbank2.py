@@ -77,8 +77,35 @@ class MaxLoadSB2(Enum):
     W1000 = 1000
 
 
+class LightSwitchSB2(Enum):
+    """Solarbank 2 status-light switch state (setter input for cmd ``0x4068``).
+
+    Values match the underlying ``light_off_switch`` bit on the wire (which
+    the ``light_on`` telemetry property inverts for a user-friendly bool).
+    """
+
+    #: Unknown state.
+    UNKNOWN = -1
+
+    #: Light is on.
+    ON = 0
+
+    #: Light is off.
+    OFF = 1
+
+
 #: One of the command codes for setting a schedule on an SB2.
 CMD_SB2_SET_SCHEDULE = "405e"
+
+#: Command code for setting the AC output power limit (max load).
+CMD_SB2_SET_MAX_LOAD = "4080"
+
+#: Command code for setting the reserved-power composite (discharge cutoff,
+#: low-power-input parameter, and charge cutoff written together).
+CMD_SB2_SET_RESERVED_POWER = "4067"
+
+#: Command code for turning the status light on or off.
+CMD_SB2_SET_LIGHT = "4068"
 
 #: TLV header introducing a 4-byte LE timestamp (tag ``a1``, length ``04``).
 #: Recurs across handshake stage plaintexts and post-handshake payloads.
@@ -223,6 +250,110 @@ class Solarbank2Common(SolixBLEDevice):
         payload = self._build_set_schedule_payload(power_w)
         await self._send_command(
             cmd=bytes.fromhex(CMD_SB2_SET_SCHEDULE), payload=payload
+        )
+
+    @staticmethod
+    def _build_set_light_payload(state: LightSwitchSB2) -> bytes:
+        """Build the plaintext payload for cmd 0x4068 (status light on/off).
+
+        Plaintext layout (without the ``fe 05 03 <ts>`` trailer added by
+        ``_send_command``)::
+
+            a1 01 21              command marker
+            a2 02 01 00           constant 0x00 flag (purpose unknown)
+            a3 02 01 <state>      0 = ON, 1 = OFF (the "light_off_switch" bit)
+        """
+        if state is LightSwitchSB2.UNKNOWN:
+            raise ValueError("LightSwitchSB2.UNKNOWN is not a valid setter input")
+        return bytes.fromhex(f"a10121a2020100a30201{state.value:02x}")
+
+    async def set_light_switch(self, state: LightSwitchSB2) -> None:
+        """Turn the SB2 status light on or off.
+
+        :param state: Desired light state.
+        :raises ConnectionError: If not connected/negotiated to the device.
+        :raises ValueError: If ``state`` is ``LightSwitchSB2.UNKNOWN``.
+        """
+        payload = self._build_set_light_payload(state)
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_SB2_SET_LIGHT), payload=payload
+        )
+
+    # Mapping for 3rd field reserved power command
+    _RESERVED_POWER_A3_MAP: dict[int, int] = {5: 4, 10: 5}
+
+    @staticmethod
+    def _build_set_reserved_power_payload(level: SBPowerCutoff) -> bytes:
+        """Build the plaintext payload for cmd 0x4067 (reserved power).
+
+        The Anker app's "Reserved power" writes 
+        three independent fields. This is reflected in the telemtry:
+        discharge cutoff (b4), low-power-input (b5), and charge cutoff (b6).
+        a2 and a4 both equal the reserved-power %; a3 seems to follow an
+        uncharacterized mapping.
+
+        Plaintext layout (without the ``fe 05 03 <ts>`` trailer)::
+
+            a1 01 21
+            a2 02 01 <pct>     -> c405 telemetry b4 (discharge cutoff)
+            a3 02 01 <b5>      -> c405 telemetry b5 (low-power-input parameter)
+            a4 02 01 <pct>     -> c405 telemetry b6 (charge cutoff)
+        """
+        if level is SBPowerCutoff.UNKNOWN:
+            raise ValueError("SBPowerCutoff.UNKNOWN is not a valid setter input")
+        pct = level.value
+        a3_value = Solarbank2Common._RESERVED_POWER_A3_MAP.get(pct)
+        if a3_value is None:
+            raise ValueError(
+                f"Reserved-power value {pct}% has no captured a3 mapping."
+            )
+        return bytes.fromhex(
+            f"a10121a20201{pct:02x}a30201{a3_value:02x}a40201{pct:02x}"
+        )
+
+    async def set_reserved_power(self, level: SBPowerCutoff) -> None:
+        """Set the battery reserved-power percentage.
+
+        Mirrors the Anker app's "Reserved power" toggle. Writes three
+        telemetry fields (output_cutoff_data, lowpower_input_data,
+        input_cutoff_data).
+
+        :param level: Desired reserved-power level
+            (:class:`SBPowerCutoff.P5` or :class:`SBPowerCutoff.P10`).
+        :raises ConnectionError: If not connected/negotiated to the device.
+        :raises ValueError: If ``level`` is ``UNKNOWN`` or has no captured
+            a3 mapping.
+        """
+        payload = self._build_set_reserved_power_payload(level)
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_SB2_SET_RESERVED_POWER), payload=payload
+        )
+
+    @staticmethod
+    def _build_set_max_load_payload(load: MaxLoadSB2) -> bytes:
+        """Build the plaintext payload for cmd 0x4080 (AC power limit).
+
+        Plaintext layout (without the ``fe 05 03 <ts>`` trailer)::
+
+            a1 01 21
+            a2 03 02 <u16 LE watts>     output power limit
+            a3 03 02 00 00              constant zero (flags/secondary cap?)
+        """
+        if load is MaxLoadSB2.UNKNOWN:
+            raise ValueError("MaxLoadSB2.UNKNOWN is not a valid setter input")
+        watts_le_hex = load.value.to_bytes(2, "little").hex()
+        return bytes.fromhex(f"a10121a20302{watts_le_hex}a303020000")
+
+    async def set_max_load(self, load: MaxLoadSB2) -> None:
+        """Set the AC output power limit (max load) in watts.
+
+        :param load: One of the discrete limits in :class:`MaxLoadSB2`.
+        :raises ConnectionError: If not connected/negotiated to the device.
+        :raises ValueError: If ``load`` is ``MaxLoadSB2.UNKNOWN``.
+        """
+        payload = self._build_set_max_load_payload(load)
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_SB2_SET_MAX_LOAD), payload=payload
         )
 
     # Telemetry property accessors
