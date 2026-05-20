@@ -77,23 +77,6 @@ class MaxLoadSB2(Enum):
     W1000 = 1000
 
 
-class LightSwitchSB2(Enum):
-    """Solarbank 2 status-light switch state (setter input for cmd ``0x4068``).
-
-    Values match the underlying ``light_off_switch`` bit on the wire (which
-    the ``light_on`` telemetry property inverts for a user-friendly bool).
-    """
-
-    #: Unknown state.
-    UNKNOWN = -1
-
-    #: Light is on.
-    ON = 0
-
-    #: Light is off.
-    OFF = 1
-
-
 #: One of the command codes for setting a schedule on an SB2.
 CMD_SB2_SET_SCHEDULE = "405e"
 
@@ -253,7 +236,7 @@ class Solarbank2Common(SolixBLEDevice):
         )
 
     @staticmethod
-    def _build_set_light_payload(state: LightSwitchSB2) -> bytes:
+    def _build_set_light_payload(light_on: bool) -> bytes:
         """Build the plaintext payload for cmd 0x4068 (status light on/off).
 
         Plaintext layout (without the ``fe 05 03 <ts>`` trailer added by
@@ -263,18 +246,15 @@ class Solarbank2Common(SolixBLEDevice):
             a2 02 01 00           constant 0x00 flag (purpose unknown)
             a3 02 01 <state>      0 = ON, 1 = OFF (the "light_off_switch" bit)
         """
-        if state is LightSwitchSB2.UNKNOWN:
-            raise ValueError("LightSwitchSB2.UNKNOWN is not a valid setter input")
-        return bytes.fromhex(f"a10121a2020100a30201{state.value:02x}")
+        return bytes.fromhex(f"a10121a2020100a30201{0 if light_on else 1:02x}")
 
-    async def set_light_switch(self, state: LightSwitchSB2) -> None:
+    async def set_light_switch(self, light_on: bool) -> None:
         """Turn the SB2 status light on or off.
 
-        :param state: Desired light state.
+        :param light_on: ``True`` to turn the light on, ``False`` to turn it off.
         :raises ConnectionError: If not connected/negotiated to the device.
-        :raises ValueError: If ``state`` is ``LightSwitchSB2.UNKNOWN``.
         """
-        payload = self._build_set_light_payload(state)
+        payload = self._build_set_light_payload(light_on)
         await self._send_command(
             cmd=bytes.fromhex(CMD_SB2_SET_LIGHT), payload=payload
         )
