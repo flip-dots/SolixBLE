@@ -332,20 +332,23 @@ function dartReadObject(tptr) {
         if (cid === DART_CID_GROWABLE_LIST || cid === DART_CID_ARRAY) {
             // length stored at offset 12 (per blutter lenOffset)
             var len = ptr.add(12).readU32() >> 1;
-            // For GrowableList, offset 16 holds a pointer to backing Array.
-            // For Array, offset 16 is start of inline Smi elements.
-            if (cid === DART_CID_GROWABLE_LIST) {
-                try {
-                    var dataPtr = ptr.add(16).readU32();
-                    if (dataPtr & 1) {
-                        var backing = dartDecompress(ptr.add(16).readU64()).sub(1);
-                        var hex = readListInt(backing, len, 512);
-                        return { type: "GrowableList", length: len, value: hex };
-                    }
-                } catch (e) {}
+            if (cid === DART_CID_ARRAY) {
+                // _List (cid 89): elements stored inline at ptr+16. Decoder works.
+                return { type: "List", length: len, value: readListInt(ptr, len, 512) };
             }
-            var hex = readListInt(ptr, len, 512);
-            return { type: cid === DART_CID_ARRAY ? "List" : "GrowableList", length: len, value: hex };
+            // _GrowableList (cid 91): offset 16 holds a tagged pointer to the
+            // backing Array. Follow it if we can; if the indirection fails do
+            // NOT fall back to reading ptr+16 directly — that reads pointer
+            // and header bytes as if they were Smi-encoded data and emits
+            // adjacent-memory garbage that pollutes the log.
+            try {
+                var dataPtr = ptr.add(16).readU32();
+                if (dataPtr & 1) {
+                    var backing = dartDecompress(ptr.add(16).readU64()).sub(1);
+                    return { type: "GrowableList", length: len, value: readListInt(backing, len, 512) };
+                }
+            } catch (e) {}
+            return { type: "GrowableList", length: len, value: null };
         }
         return { type: "cid:" + cid, value: null };
     } catch (e) {
@@ -402,6 +405,9 @@ function installDartCryptoHooks() {
                 return regName + "=Uint8List(" + obj.length + "B):" + obj.value;
             }
             if (obj && (obj.type === "GrowableList" || obj.type === "List")) {
+                if (obj.value === null) {
+                    return regName + "=" + obj.type + "(" + obj.length + "B)<bytes-unreadable>";
+                }
                 return regName + "=" + obj.type + "(" + obj.length + "B):" + obj.value;
             }
             if (obj && obj.type === "String") {
@@ -461,8 +467,12 @@ function installDartCryptoHooks() {
                             cacheKey = "u8:" + obj.value;
                             retLine = "[DART-FN] " + spec.name + "  → Uint8List(" + obj.length + "B): " + obj.value;
                         } else if (obj && (obj.type === "List" || obj.type === "GrowableList")) {
-                            cacheKey = obj.type + ":" + obj.value;
-                            retLine = "[DART-FN] " + spec.name + "  → " + obj.type + "(" + obj.length + "B): " + obj.value;
+                            cacheKey = obj.type + ":" + (obj.value === null ? "<unreadable>:" + obj.length : obj.value);
+                            if (obj.value === null) {
+                                retLine = "[DART-FN] " + spec.name + "  → " + obj.type + "(" + obj.length + "B)<bytes-unreadable>";
+                            } else {
+                                retLine = "[DART-FN] " + spec.name + "  → " + obj.type + "(" + obj.length + "B): " + obj.value;
+                            }
                         } else if (obj && obj.type === "String") {
                             cacheKey = "s:" + obj.value;
                             retLine = "[DART-FN] " + spec.name + '  → String:"' + obj.value + '"';
