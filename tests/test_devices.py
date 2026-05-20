@@ -6,7 +6,9 @@
 
 import asyncio
 import logging
+import os
 from typing import Any
+from unittest import mock
 
 import pytest
 
@@ -26,7 +28,12 @@ from SolixBLE import (
     SolixBLEDevice,
     TemperatureUnit,
 )
-from SolixBLE.devices.solarbank2 import MaxLoadSB2
+from SolixBLE.devices.solarbank2 import (
+    ENV_SB2_ANKER_USER_ID,
+    MaxLoadSB2,
+    Solarbank2Prime,
+    Solarbank2Common,
+)
 from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
 from tests.const import (
     MOCK_BLE_DEVICE,
@@ -1136,3 +1143,105 @@ async def test_bad_values(
         assert (
             getattr(device, class_property) == expected_value
         ), f"Mismatch for property '{class_property}'!"
+
+
+# Solarbank 2 set-schedule payload (0x405e) and Solarbank2Prime construction
+# Synthetic user IDs - never the real Anker cloud userId from any capture.
+_FAKE_SB2_USER_ID_STR = "0" * 40
+_FAKE_SB2_USER_ID_BYTES = b"f" * 40
+_FAKE_SB2_USER_ID_ENV = "1" * 40
+
+
+def test_sb2_build_set_schedule_payload_matches_expected_layout():
+    """A 90 W uniform schedule produces the documented 7-day TLV layout.
+
+    Asserts the per-day-symmetric reading: 7 identical day-blocks
+    (a3, a7, ab, af, b3, b7, bb) each with enable flag, 8-byte struct,
+    per-day flag, 1-byte trailer; then the ``fd 05 03 <4B>`` nonce.
+    """
+    fixed_nonce = bytes.fromhex("00112233")
+    with mock.patch.object(os, "urandom", return_value=fixed_nonce):
+        result = Solarbank2Common._build_set_schedule_payload(90)
+
+    # 8-byte struct for power=90: start=0, end=1440, power=90, const=80.
+    struct_hex = "0000a0055a005000"
+
+    def day_block(base: int) -> str:
+        return (
+            f"{base:02x}020101"
+            f"{base + 1:02x}0904{struct_hex}"
+            f"{base + 2:02x}020100"
+            f"{base + 3:02x}0104"
+        )
+
+    expected_hex = (
+        "a10121"
+        "a2020101"
+        + "".join(day_block(0xa3 + 4 * d) for d in range(7))
+        + "fd050300112233"
+    )
+    assert result.hex() == expected_hex
+
+
+@pytest.mark.parametrize("bad_power", [-1, 801, 1000])
+def test_sb2_build_set_schedule_payload_rejects_out_of_range(bad_power):
+    """Out-of-range wattage raises ValueError."""
+    with pytest.raises(ValueError):
+        Solarbank2Common._build_set_schedule_payload(bad_power)
+
+
+def test_sb2_build_set_schedule_payload_uses_fresh_nonce_per_call():
+    """Each call generates a fresh fd nonce (prevents 'abnormal state').
+
+    The Anker app generates fresh random bytes per write; reusing a value
+    causes the schedule storage to update but the inverter target to stay
+    stuck at the previous value.
+    """
+    a = Solarbank2Common._build_set_schedule_payload(100)
+    b = Solarbank2Common._build_set_schedule_payload(100)
+    assert a[:-4] == b[:-4]
+    # 1-in-2^32 false-fail rate is negligible.
+    assert a[-4:] != b[-4:]
+
+
+def test_sb2_prime_user_id_explicit_str_encoded_as_ascii():
+    dev = Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id=_FAKE_SB2_USER_ID_STR)
+    assert dev._anker_user_id == _FAKE_SB2_USER_ID_STR.encode("ascii")
+
+
+def test_sb2_prime_user_id_explicit_bytes_kept_as_is():
+    dev = Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id=_FAKE_SB2_USER_ID_BYTES)
+    assert dev._anker_user_id == _FAKE_SB2_USER_ID_BYTES
+
+
+def test_sb2_prime_user_id_falls_back_to_env_var(monkeypatch):
+    monkeypatch.setenv(ENV_SB2_ANKER_USER_ID, _FAKE_SB2_USER_ID_ENV)
+    dev = Solarbank2Prime(MOCK_BLE_DEVICE)
+    assert dev._anker_user_id == _FAKE_SB2_USER_ID_ENV.encode("ascii")
+
+
+def test_sb2_prime_user_id_missing_raises(monkeypatch):
+    monkeypatch.delenv(ENV_SB2_ANKER_USER_ID, raising=False)
+    with pytest.raises(ValueError, match="Anker"):
+        Solarbank2Prime(MOCK_BLE_DEVICE)
+
+
+def test_sb2_prime_static_key_encrypt_round_trips(monkeypatch):
+    """``_encrypt_with_static_key`` output is decryptable using the same
+    Prime static GCM parameters.
+
+    The GCM tag verifying on decrypt is what proves key/nonce/AAD are
+    wired correctly. ``_decrypt_payload`` falls back to ``NEGOTIATION_KEY``
+    when ``_shared_secret`` is not yet set, mirroring the path used to
+    read RX 48xx handshake responses.
+    """
+    monkeypatch.setenv(ENV_SB2_ANKER_USER_ID, _FAKE_SB2_USER_ID_ENV)
+    dev = Solarbank2Prime(MOCK_BLE_DEVICE)
+    assert dev._shared_secret is None  # static-key path
+
+    plaintext = bytes.fromhex("a104deadbeefa200")
+    encrypted = dev._encrypt_with_static_key(plaintext)
+
+    # GCM output = ciphertext + 16-byte tag.
+    assert len(encrypted) == len(plaintext) + 16
+    assert dev._decrypt_payload(encrypted) == plaintext

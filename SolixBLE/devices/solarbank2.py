@@ -2,20 +2,21 @@
 
 Two variants live in this module:
 
-* :class:`Solarbank2` — uses the **legacy** base ``SolixBLEDevice`` handshake
-  (00xx/08xx negotiation, AES-CBC for session traffic). Does **not** require
+* :class:`Solarbank2` - uses the legacy base ``SolixBLEDevice`` handshake
+  (00xx/08xx negotiation, AES-CBC for session traffic). Does not require
   a cloud-tied user-id, so it can connect to any SB2 that accepts the
   base handshake.
 
-* :class:`Solarbank2Prime` — uses the **Anker-Prime-style** handshake
+* :class:`Solarbank2Prime` - uses the Anker-Prime-style handshake
   (40xx/48xx negotiation across 8 stages, AES-GCM for session traffic).
   Requires an Anker user-id.
 
 Both variants share telemetry property accessors, the 0x405e schedule write
 builder, and the wall-clock-timestamp ``_send_command`` override via the
-:class:`_Solarbank2Common` base.
+:class:`Solarbank2Common` base.
 
 .. moduleauthor:: Harvey Lelliott (flip-dots) <harveylelliott@duck.com>
+
 """
 
 import logging
@@ -90,12 +91,13 @@ TLV_A2_EMPTY = "a200"
 #: Environment variable for the Anker user ID required by Solarbank2Prime.
 #: Value should be the ASCII-hex string (40 hex chars, no dashes).
 #: The device validates this token against its
-#: account-bound whitelist during the Prime-style handshak.
+#: account-bound whitelist during the Prime-style handshake.
 ENV_SB2_ANKER_USER_ID = "SB2_ANKER_USER_ID"
 
 
-class _Solarbank2Common(SolixBLEDevice):
-    """Shared base for both SB2 handshake variants.
+class Solarbank2Common(SolixBLEDevice):
+    """
+    Shared base for both SB2 handshake variants.
 
     Holds everything that does not depend on the negotiation/crypto variant:
 
@@ -114,9 +116,7 @@ class _Solarbank2Common(SolixBLEDevice):
 
     _EXPECTED_TELEMETRY_LENGTH: int = 253
 
-    # ───────────────────────────────────────────────────────────────────────
     # Post-handshake command path
-    # ───────────────────────────────────────────────────────────────────────
 
     async def _send_command(self, cmd: bytes, payload: bytes) -> None:
         """Send a post-handshake command with a wall-clock ``fe 05 03 <ts>`` trailer.
@@ -149,9 +149,7 @@ class _Solarbank2Common(SolixBLEDevice):
         _LOGGER.debug(f"SB2 _send_command cmd={cmd.hex()} packet={packet.hex()}")
         await self._client.write_gatt_char(UUID_COMMAND, packet)
 
-    # ───────────────────────────────────────────────────────────────────────
     # 0x405e set-schedule
-    # ───────────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _build_set_schedule_payload(power_w: int) -> bytes:
@@ -170,13 +168,13 @@ class _Solarbank2Common(SolixBLEDevice):
             raise ValueError(f"power_w must be 0-800 W, got {power_w}")
 
         # 8-byte schedule struct (byte layout shared with SB1, but the trailing
-        # 2 bytes are an unknown constant on SB2 — SB1 calls that slot SOC but
+        # 2 bytes are an unknown constant on SB2 - SB1 calls that slot SOC but
         # on SB2 we've only ever seen 0x0050 LE regardless of user settings).
         #   bytes [0:2]  start_min u16 LE
         #   bytes [2:4]  end_min   u16 LE
         #   bytes [4:6]  power_W   u16 LE
         #   bytes [6:8]  unknown constant, always 0x0050 LE in captures
-        # 00:00-24:00 → start=0, end=1440.
+        # 00:00-24:00 -> start=0, end=1440.
         sched_struct = (
             (0).to_bytes(2, "little")
             + (1440).to_bytes(2, "little")
@@ -197,7 +195,7 @@ class _Solarbank2Common(SolixBLEDevice):
         #   aX+3   01 04              1-byte trailer (always value 0x04)
         for day in range(7):
             base = 0xa3 + 4 * day
-            pt += bytes([base    ]) + bytes.fromhex("020101")
+            pt += bytes([base]) + bytes.fromhex("020101")
             pt += bytes([base + 1]) + bytes.fromhex("0904") + sched_struct
             pt += bytes([base + 2]) + bytes.fromhex("020100")
             pt += bytes([base + 3]) + bytes.fromhex("0104")
@@ -223,11 +221,11 @@ class _Solarbank2Common(SolixBLEDevice):
         :raises ValueError: For out-of-range power_w.
         """
         payload = self._build_set_schedule_payload(power_w)
-        await self._send_command(cmd=bytes.fromhex(CMD_SB2_SET_SCHEDULE), payload=payload)
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_SB2_SET_SCHEDULE), payload=payload
+        )
 
-    # ───────────────────────────────────────────────────────────────────────
     # Telemetry property accessors
-    # ───────────────────────────────────────────────────────────────────────
 
     @property
     def serial_number(self) -> str:
@@ -619,31 +617,36 @@ class _Solarbank2Common(SolixBLEDevice):
         )
 
 
-class Solarbank2(_Solarbank2Common):
-    """SolarBank 2 power station with the **legacy** base handshake.
+class Solarbank2(Solarbank2Common):
+    """
+    SolarBank 2 power station with the legacy handshake.
 
     Uses the SolixBLEDevice 00xx/08xx negotiation and AES-CBC for session
-    traffic. Does **not** require a user-id.
+    traffic. Does not require an Anker cloud user-id.
 
-    This is the **recommended default** for end users — no cloud-side
+    This is the recommended default for end users - no cloud-side
     user-id capture needed. Use :class:`Solarbank2Prime` only if you need
     to mimic the Anker app's exact handshake (e.g. for protocol research).
+
+    .. note::
+        A pristine, never-paired SB2 may still require a one-time pairing
+        through the Anker app before any BLE client (including SolixBLE)
+        can connect.
     """
 
     async def _initiate_negotiations(self) -> None:
         """Start the legacy base SolixBLEDevice handshake."""
-        _LOGGER.info(
-            "SB2: starting legacy base handshake (00xx/08xx, AES-CBC)"
-        )
+        _LOGGER.info("SB2: starting legacy base handshake (00xx/08xx, AES-CBC)")
         await super()._initiate_negotiations()
 
 
-class Solarbank2Prime(_Solarbank2Common, PrimeDevice):
-    """SolarBank 2 power station with the **Anker-Prime-style** handshake.
+class Solarbank2Prime(Solarbank2Common, PrimeDevice):
+    """
+    SolarBank 2 power station with the Anker-Prime-style handshake.
 
     Uses 40xx/48xx negotiation across 8 stages and AES-GCM for session
-    traffic. Requires an Anker user-id - SB2 firmware whitelists user-ids
-    rejects unknown values with RX 4827 = ``09 a1 02 b4 00``.
+    traffic. Requires an Anker user-id. SB2 firmware whitelists user-ids
+    and rejects unknown values with RX 4827 = ``09 a1 02 b4 00``.
 
     Differences from Anker Prime power stations:
 
@@ -656,13 +659,11 @@ class Solarbank2Prime(_Solarbank2Common, PrimeDevice):
       Prime's ``fe 04 <ts>``.
 
     .. note::
-       The Anker app sends TX 4001 (stage 0) and TX 4040 (stage 8) **twice**
+       The Anker app sends TX 4001 (stage 0) and TX 4040 (stage 8) twice
        each. We send each once because it seems to work.
     """
 
-    # ───────────────────────────────────────────────────────────────────────
     # Per-session state for the SB2 handshake
-    # ───────────────────────────────────────────────────────────────────────
 
     def __init__(
         self,
@@ -687,25 +688,23 @@ class Solarbank2Prime(_Solarbank2Common, PrimeDevice):
         # 4-byte LE int after the a1 tag. Same value across all of stages 0-4.
         self._neg_ts_bytes: bytes | None = None
         # Anker user ID resolution: explicit arg > env var > error.
-        # The SB2 firmware whitelists Anker user IDs.
+        # The SB2 firmware whitelists Anker user ID.
         if anker_user_id is None:
             env_val = os.environ.get(ENV_SB2_ANKER_USER_ID)
             if not env_val:
                 raise ValueError(
-                    f"Solarbank2Prime requires the Anker cloud-side userId. "
-                    f"Either pass anker_user_id=<bytes|str> to the constructor "
+                    "Solarbank2Prime requires the Anker cloud-side userId. "
+                    "Either pass it to the constructor "
                     f"or set the {ENV_SB2_ANKER_USER_ID} environment variable. "
-                    f"Alternatively, use the Solarbank2 (legacy CBC) class — "
-                    f"it does not require an Anker user ID."
+                    "Alternatively, use the Solarbank2 (legacy CBC) class - "
+                    "it does not require an Anker user ID."
                 )
             anker_user_id = env_val
         if isinstance(anker_user_id, str):
             anker_user_id = anker_user_id.encode("ascii")
         self._anker_user_id: bytes = anker_user_id
 
-    # ───────────────────────────────────────────────────────────────────────
     # Encryption helpers
-    # ───────────────────────────────────────────────────────────────────────
 
     def _encrypt_with_static_key(self, plaintext: bytes) -> bytes:
         """AES-GCM encrypt with the static negotiation key (stages 0-4)."""
@@ -734,9 +733,7 @@ class Solarbank2Prime(_Solarbank2Common, PrimeDevice):
             payload=self._encrypt_payload(plaintext),
         )
 
-    # ───────────────────────────────────────────────────────────────────────
     # Handshake
-    # ───────────────────────────────────────────────────────────────────────
 
     async def _initiate_negotiations(self) -> None:
         """SB2 stage 0: send TX 4001 with ``a1 04 <ts> a2 00``."""
@@ -747,7 +744,11 @@ class Solarbank2Prime(_Solarbank2Common, PrimeDevice):
         self._ecdh_private_key = generate_private_key(SECP256R1())
         self._neg_ts_bytes = int(time.time()).to_bytes(4, "little")
 
-        plaintext = bytes.fromhex(TLV_TIMESTAMP_HEADER) + self._neg_ts_bytes + bytes.fromhex(TLV_A2_EMPTY)
+        plaintext = (
+            bytes.fromhex(TLV_TIMESTAMP_HEADER)
+            + self._neg_ts_bytes
+            + bytes.fromhex(TLV_A2_EMPTY)
+        )
         packet = self._build_static_packet("4001", plaintext)
         _LOGGER.debug(f"SB2 stage 0 TX 4001 packet: {packet.hex()}")
         await self._client.write_gatt_char(UUID_COMMAND, packet)
@@ -762,59 +763,66 @@ class Solarbank2Prime(_Solarbank2Common, PrimeDevice):
             _LOGGER.debug(
                 f"SB2 stage cmd={cmd.hex()} decrypted plaintext={decrypted.hex()}"
             )
-        except Exception:
+        except ValueError:
             _LOGGER.exception(f"SB2 failed to decrypt stage cmd={cmd.hex()}")
             decrypted = b""
 
         match cmd.hex():
 
-            # Stage 1 — RX 4801 → TX 4003 (a1 04 <ts> a2 00 a3 01 20 a4 02 00 f0)
+            # Stage 1 - RX 4801 -> TX 4003 (a1 04 <ts> a2 00 a3 01 20 a4 02 00 f0)
             case "4801":
                 pt = (
-                    bytes.fromhex(TLV_TIMESTAMP_HEADER) + self._neg_ts_bytes +
-                    bytes.fromhex(TLV_A2_EMPTY) +
-                    bytes.fromhex("a30120") +
-                    bytes.fromhex("a40200f0")
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + self._neg_ts_bytes
+                    + bytes.fromhex(TLV_A2_EMPTY)
+                    + bytes.fromhex("a30120")
+                    + bytes.fromhex("a40200f0")
                 )
                 packet = self._build_static_packet("4003", pt)
                 _LOGGER.debug(f"SB2 stage 2 TX 4003 packet: {packet.hex()}")
                 return await self._client.write_gatt_char(UUID_COMMAND, packet)
 
-            # Stage 2 — RX 4803 → TX 4029 (a1 04 <ts> a2 <len> <user-id>)
+            # Stage 2 - RX 4803 -> TX 4029 (a1 04 <ts> a2 <len> <user-id>)
             case "4803":
                 pt = (
-                    bytes.fromhex(TLV_TIMESTAMP_HEADER) + self._neg_ts_bytes +
-                    bytes.fromhex("a2") + bytes([len(self._anker_user_id)]) + self._anker_user_id
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + self._neg_ts_bytes
+                    + bytes.fromhex("a2")
+                    + bytes([len(self._anker_user_id)])
+                    + self._anker_user_id
                 )
                 packet = self._build_static_packet("4029", pt)
                 _LOGGER.debug(f"SB2 stage 3 TX 4029 packet: {packet.hex()}")
                 return await self._client.write_gatt_char(UUID_COMMAND, packet)
 
-            # Stage 3 — RX 4829 → TX 4005
+            # Stage 3 - RX 4829 -> TX 4005
             case "4829":
                 pt = (
-                    bytes.fromhex(TLV_TIMESTAMP_HEADER) + self._neg_ts_bytes +
-                    bytes.fromhex(TLV_A2_EMPTY) +
-                    bytes.fromhex("a30120") +
-                    bytes.fromhex("a40200f0") +
-                    bytes.fromhex("a50140") +
-                    bytes.fromhex("a60102")
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + self._neg_ts_bytes
+                    + bytes.fromhex(TLV_A2_EMPTY)
+                    + bytes.fromhex("a30120")
+                    + bytes.fromhex("a40200f0")
+                    + bytes.fromhex("a50140")
+                    + bytes.fromhex("a60102")
                 )
                 packet = self._build_static_packet("4005", pt)
                 _LOGGER.debug(f"SB2 stage 4 TX 4005 packet: {packet.hex()}")
                 return await self._client.write_gatt_char(UUID_COMMAND, packet)
 
-            # Stage 4 — RX 4805 → TX 4021 (phone ECDH pubkey, raw X||Y)
+            # Stage 4 - RX 4805 -> TX 4021 (phone ECDH pubkey, raw X||Y)
             case "4805":
-                phone_pub_xy = self._ecdh_private_key.public_key().public_bytes(
+                # strip 0x04 prefix -> 64 B X||Y
+                phone_pub = self._ecdh_private_key.public_key().public_bytes(
                     Encoding.X962, PublicFormat.UncompressedPoint
-                )[1:]  # strip 0x04 prefix → 64 B X||Y
+                )
+                phone_pub_xy = phone_pub[1:]
                 pt = bytes.fromhex("a140") + phone_pub_xy
                 packet = self._build_static_packet("4021", pt)
                 _LOGGER.debug(f"SB2 stage 5 TX 4021 packet: {packet.hex()}")
                 return await self._client.write_gatt_char(UUID_COMMAND, packet)
 
-            # Stage 5 — RX 4821 → derive shared secret, then TX 4022 (timezone)
+            # Stage 5 - RX 4821 -> derive shared secret, then TX 4022 (timezone)
             case "4821":
                 # Parse plaintext: <status 1B> <TLV a1 40 <device pubkey 64B>>
                 parameters = self._parse_payload(decrypted[1:])
@@ -830,39 +838,45 @@ class Solarbank2Prime(_Solarbank2Common, PrimeDevice):
                     f"SB2 ECDH shared secret derived: {self._shared_secret.hex()}"
                 )
 
-                # TX 4022 — set timezone. Plaintext layout:
+                # TX 4022 - set timezone. Plaintext layout:
                 #   a1 04 <session-ts>  a2 00  a3 04 <tz_offset_seconds_LE>
                 #   a5 <len> <POSIX TZ string>
                 # The tz_offset is signed LE seconds; CEST in capture was -7200
-                # (= -2h). We hardcode that for now — proper localtime detection
+                # (= -2h). We hardcode that for now - proper localtime detection
                 # is a TODO.
                 tz_str = b"CET-1CEST,M3.5.0,M10.5.0/3"
                 tz_offset = (-7200).to_bytes(4, "little", signed=True)
                 pt = (
-                    bytes.fromhex(TLV_TIMESTAMP_HEADER) + int(time.time()).to_bytes(4, "little") +
-                    bytes.fromhex(TLV_A2_EMPTY) +
-                    bytes.fromhex("a304") + tz_offset +
-                    bytes([0xa5, len(tz_str)]) + tz_str
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + int(time.time()).to_bytes(4, "little")
+                    + bytes.fromhex(TLV_A2_EMPTY)
+                    + bytes.fromhex("a304")
+                    + tz_offset
+                    + bytes([0xa5, len(tz_str)])
+                    + tz_str
                 )
                 packet = self._build_session_packet("4022", pt)
                 _LOGGER.debug(f"SB2 stage 6 TX 4022 packet: {packet.hex()}")
                 return await self._client.write_gatt_char(UUID_COMMAND, packet)
 
-            # Stage 6 — RX 4822 → TX 4027 (re-send user-id, session-encrypted)
+            # Stage 6 - RX 4822 -> TX 4027 (re-send user-id, session-encrypted)
             case "4822":
                 pt = (
-                    bytes.fromhex(TLV_TIMESTAMP_HEADER) + int(time.time()).to_bytes(4, "little") +
-                    bytes.fromhex("a2") + bytes([len(self._anker_user_id)]) + self._anker_user_id
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + int(time.time()).to_bytes(4, "little")
+                    + bytes.fromhex("a2")
+                    + bytes([len(self._anker_user_id)])
+                    + self._anker_user_id
                 )
                 packet = self._build_session_packet("4027", pt)
                 _LOGGER.debug(f"SB2 stage 7 TX 4027 packet: {packet.hex()}")
                 return await self._client.write_gatt_char(UUID_COMMAND, packet)
 
-            # Stage 7 — RX 4827 → TX 4040 (start telemetry stream)
+            # Stage 7 - RX 4827 -> TX 4040 (start telemetry stream)
             case "4827":
                 # _send_command handles the fe0503 timestamp trailer + 03000f
                 # pattern.
-                _LOGGER.debug("SB2 stage 8 — sending TX 4040 to start telemetry")
+                _LOGGER.debug("SB2 stage 8 - sending TX 4040 to start telemetry")
                 return await self._send_command(
                     cmd=bytes.fromhex("4040"), payload=bytes.fromhex("a10121")
                 )
@@ -873,9 +887,7 @@ class Solarbank2Prime(_Solarbank2Common, PrimeDevice):
                     f"plaintext={decrypted.hex()}"
                 )
 
-    # ───────────────────────────────────────────────────────────────────────
     # Telemetry
-    # ───────────────────────────────────────────────────────────────────────
 
     async def _process_telemetry_packet(
         self, payload: bytes, cmd: bytes = None

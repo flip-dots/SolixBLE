@@ -20,6 +20,7 @@ from .devices import (
     Solarbank2Prime,
     Solarbank3,
 )
+from .devices.solarbank2 import Solarbank2Common
 from .prime_device import PrimeDevice
 from .states import (
     ChargingStatus,
@@ -34,6 +35,7 @@ from .utilities import discover_devices
 
 __all__ = [
     "SolixBLEDevice",
+    "Solarbank2Common",
     "PrimeDevice",
     "C300",
     "C300DC",

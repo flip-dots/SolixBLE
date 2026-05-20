@@ -230,6 +230,35 @@ Below are example outputs of the patched app with the Frida script.
    Data (Hex): ff095c0003000140210ac647f6ccbed11bae9f95d175e31b768e6fb309f82e4d8776e1999923b2fc7b34ecd8c19dc1923cd3e1370ab601eb2454eebe3f0df91572b04f8c2fddb802cc5e8ac304fe7f9c34f41794528e1fc69e84171a
 
 
+When Java Cipher hooks aren't enough
+------------------------------------
+
+The hooks in ``frida.js`` intercept Java-side ``javax.crypto.Cipher``
+calls, which is sufficient for devices whose Anker-app integration
+performs BLE crypto in Java. Other devices (notably the
+:doc:`Solarbank 2 <solarbank2>`) instead perform their per-session BLE
+AES inside the **Dart AOT** code in ``libapp.so`` using the
+``pointycastle`` library. The Java Cipher hooks never fire for that
+traffic, so the session key cannot be recovered through them.
+
+For these devices the session key and IV are installed via Dart calls
+such as ``BleInfoHelper::setAesKey(mac, key)`` and ``setAesIV(mac, iv)``
+shortly after the ECDH stage completes. Hooking them requires:
+
+1. Extracting the Dart AOT symbol table from ``libapp.so`` to locate the
+   target methods. Use `apktool`` for unpacking the APK in
+   the first place. Afterwards `blutter <https://github.com/worawit/blutter>`_
+   reverses Flutter/Dart AOT snapshots and produces a method table with
+   offsets and class-id (cid) information that is then implemented in the
+   Frida script.
+2. A Frida script that attaches at those offsets via
+   ``Module.findBaseAddress("libapp.so").add(<offset>)`` and decodes
+   the Dart ``List<int>`` argument according to its cid. These scripts
+   will probably only work for a certain app and ABI version. 
+   You will need to update the adresses for every app change. The sample 
+   SB2 capture script ``scripts/frida_3.js`` in the repository works 
+   for Anker App 3.18.0
+
 Scripts
 -------
 

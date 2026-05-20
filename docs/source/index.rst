@@ -115,7 +115,7 @@ Consumed energy                     ✅           ❌
 Error codes                         ✅           ❌
 Max load                            ✅           ❌
 Usage mode                          ✅           ❌
-Presets                             ❌           ❌
+Power Schedule control              ✅           ❌
 Light mode                          ✅           ❌
 PV limitations                      ❌           ❌
 PV panel power                      ✅           ❌
