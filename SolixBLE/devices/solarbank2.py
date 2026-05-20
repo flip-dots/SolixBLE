@@ -235,6 +235,12 @@ class Solarbank2Common(SolixBLEDevice):
             cmd=bytes.fromhex(CMD_SB2_SET_SCHEDULE), payload=payload
         )
 
+    ##############################
+    #          WARNING           #
+    #   Functions below are      #
+    # NOT E2E Tested on Device!! #
+    ##############################
+
     @staticmethod
     def _build_set_light_payload(light_on: bool) -> bytes:
         """Build the plaintext payload for cmd 0x4068 (status light on/off).
@@ -245,11 +251,19 @@ class Solarbank2Common(SolixBLEDevice):
             a1 01 21              command marker
             a2 02 01 00           constant 0x00 flag (purpose unknown)
             a3 02 01 <state>      0 = ON, 1 = OFF (the "light_off_switch" bit)
+
+        .. warning::
+            This function has been added using telemtry captures. It has not 
+            been tested!
         """
         return bytes.fromhex(f"a10121a2020100a30201{0 if light_on else 1:02x}")
 
     async def set_light_switch(self, light_on: bool) -> None:
         """Turn the SB2 status light on or off.
+
+        .. warning::
+            This function has been added using telemtry captures. It has not 
+            been tested!
 
         :param light_on: ``True`` to turn the light on, ``False`` to turn it off.
         :raises ConnectionError: If not connected/negotiated to the device.
@@ -278,6 +292,10 @@ class Solarbank2Common(SolixBLEDevice):
             a2 02 01 <pct>     -> c405 telemetry b4 (discharge cutoff)
             a3 02 01 <b5>      -> c405 telemetry b5 (low-power-input parameter)
             a4 02 01 <pct>     -> c405 telemetry b6 (charge cutoff)
+
+        .. warning::
+            This function has been added using telemtry captures. It has not 
+            been tested!
         """
         if level is SBPowerCutoff.UNKNOWN:
             raise ValueError("SBPowerCutoff.UNKNOWN is not a valid setter input")
@@ -297,6 +315,10 @@ class Solarbank2Common(SolixBLEDevice):
         Mirrors the Anker app's "Reserved power" toggle. Writes three
         telemetry fields (output_cutoff_data, lowpower_input_data,
         input_cutoff_data).
+
+        .. warning::
+            This function has been added using telemtry captures. It has not 
+            been tested!
 
         :param level: Desired reserved-power level
             (:class:`SBPowerCutoff.P5` or :class:`SBPowerCutoff.P10`).
@@ -318,6 +340,10 @@ class Solarbank2Common(SolixBLEDevice):
             a1 01 21
             a2 03 02 <u16 LE watts>     output power limit
             a3 03 02 00 00              constant zero (flags/secondary cap?)
+
+        .. warning::
+            This function has been added using telemtry captures. It has not 
+            been tested!
         """
         if load is MaxLoadSB2.UNKNOWN:
             raise ValueError("MaxLoadSB2.UNKNOWN is not a valid setter input")
@@ -327,6 +353,10 @@ class Solarbank2Common(SolixBLEDevice):
     async def set_max_load(self, load: MaxLoadSB2) -> None:
         """Set the AC output power limit (max load) in watts.
 
+        .. warning::
+            This function has been added using telemtry captures. It has not 
+            been tested!
+
         :param load: One of the discrete limits in :class:`MaxLoadSB2`.
         :raises ConnectionError: If not connected/negotiated to the device.
         :raises ValueError: If ``load`` is ``MaxLoadSB2.UNKNOWN``.
@@ -335,6 +365,11 @@ class Solarbank2Common(SolixBLEDevice):
         await self._send_command(
             cmd=bytes.fromhex(CMD_SB2_SET_MAX_LOAD), payload=payload
         )
+
+    ##############################
+    #        END UNTESTED        #
+    #          FUNCTIONs         #
+    ##############################
 
     # Telemetry property accessors
 
