@@ -176,6 +176,12 @@ class Solarbank2Common(SolixBLEDevice):
         """
         if not (0 <= power_w <= 800):
             raise ValueError(f"power_w must be 0-800 W, got {power_w}")
+        if power_w % 10 != 0:
+            _LOGGER.warning(
+                f"Power_w={power_w} is not a multiple of 10! This seems to work "
+                "and the device accepts it, but the Anker app only ever uses "
+                "10 W increments. Use with caution!"
+            )
 
         # 8-byte schedule struct (byte layout shared with SB1, but the trailing
         # 2 bytes are an unknown constant on SB2 - SB1 calls that slot SOC but
@@ -198,7 +204,7 @@ class Solarbank2Common(SolixBLEDevice):
         pt += bytes.fromhex("a2020101")
 
         # 7 fully-symmetric day blocks (Mon-Sun). Each day uses 4 tags starting
-        # at base = (a3 + 4*day):
+        # at base = a3 + 4*day:
         #   aX     02 01 01           enable/include flag for this day (always 1)
         #   aX+1   09 04 <8B struct>  the schedule struct itself
         #   aX+2   02 01 00           per-day flag (always 0 in captures)
