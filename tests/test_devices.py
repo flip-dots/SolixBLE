@@ -1496,16 +1496,33 @@ async def test_bad_values(
     for error_message in errors:
         assert error_message in caplog.text
 
+@pytest.mark.parametrize(
+    "start_time, end_time, output_wattage, max_soc",
+    [
+        (0, 60, 100, 20),
+        (60, 120, 200, 50),
+        (120, 180, 300, 80),
+        (180, 240, 400, 100),
+        (240, 300, 500, 30),
+        (300, 360, 600, 100),
+    ],
+)
 
-def test_sb1_family_load_schedule_valid_creation():
+def test_sb1_family_load_schedule_valid_creation(
+    start_time, end_time, output_wattage, max_soc
+):
     """Test that a valid FamilyLoadSchedule can be created without raising errors."""
     schedule = Solarbank1.FamilyLoadSchedule(
-        start_time=60, end_time=120, output_wattage=110, max_soc=20
+        start_time=start_time, 
+        end_time=end_time, 
+        output_wattage=output_wattage, 
+        max_soc=max_soc
     )
-    assert schedule.start_time == 60
-    assert schedule.end_time == 120
-    assert schedule.output_wattage == 110
-    assert schedule.max_soc == 20
+
+    assert schedule.start_time == start_time
+    assert schedule.end_time == end_time
+    assert schedule.output_wattage == output_wattage
+    assert schedule.max_soc == max_soc
 
 
 def test_sb1_family_load_schedule_from_time_strings_valid():
@@ -1513,7 +1530,7 @@ def test_sb1_family_load_schedule_from_time_strings_valid():
     schedule = Solarbank1.FamilyLoadSchedule.from_time_strings(
         start="01:30", end="14:45", output_wattage=360, max_soc=100
     )
-    assert schedule.start_time == 360
+    assert schedule.start_time == 90
     assert schedule.end_time == 885
     assert schedule.output_wattage == 360
     assert schedule.max_soc == 100
@@ -1557,3 +1574,97 @@ def test_sb1_family_load_schedule_time_from_string_errors(time_str, expected_err
     """Test that invalid time strings raise ValueErrors"""
     with pytest.raises(ValueError, match=expected_error_msg):
         Solarbank1.FamilyLoadSchedule.time_from_string(time_str)
+
+@pytest.mark.asyncio
+async def test_sb1_set_schedule_bytes() -> None:
+    """set_schedule builds the correct TLV payload byte-wise.
+    .. note::
+       :collapsible: closed
+
+       Payload format:  <ID 1B> <LENGTH 1B> <TYPE 1B> <DATA nB>
+       0xa1: command marker  -> a1 01 21
+       0xa2: schedule count   -> a2 02 01 <count>
+       0xa3: schedule blocks  -> a3 <1+8*N> 04 + N*(start end power soc, all u16le)
+    """
+    device = Solarbank1(MOCK_BLE_DEVICE)
+    device._send_command = mock.AsyncMock()
+
+    # ── Empty list: count 0, block length = 1 (type byte only) ──
+    await device.set_schedule([])
+    device._send_command.assert_awaited_once_with(
+        bytes.fromhex("405e"),
+        bytes.fromhex("a10121" "a2020100" "a30104"),
+    )
+    device._send_command.reset_mock()
+
+    # ── Single schedule: start=0, end=360, wattage=0, soc=80 ──
+    #   0000 6801 0000 5000  (u16le: 0, 360=0x0168, 0, 80=0x50)
+    #   block length = 1 + 8 = 9 = 0x09
+    await device.set_schedule(
+        [device.FamilyLoadSchedule(start_time=0, end_time=360, output_wattage=0, max_soc=80)]
+    )
+    device._send_command.assert_awaited_once_with(
+        bytes.fromhex("405e"),
+        bytes.fromhex(
+            "a10121"
+            "a2020101"
+            "a30904" "0000" "6801" "0000" "5000"
+        ),
+    )
+    device._send_command.reset_mock()
+
+    # ── Two schedules ──
+    #   #1: 0000 6801 0000 5000
+    #   #2: start=360(6801) end=870(0366) wattage=240(00f0) soc=80(0050)
+    #   block length = 1 + 16 = 17 = 0x11
+    await device.set_schedule(
+        [
+            device.FamilyLoadSchedule(start_time=0, end_time=360, output_wattage=0, max_soc=80),
+            device.FamilyLoadSchedule(
+                start_time=360, end_time=870, output_wattage=240, max_soc=80
+            ),
+        ]
+    )
+    device._send_command.assert_awaited_once_with(
+        bytes.fromhex("405e"),
+        bytes.fromhex(
+            "a10121"
+            "a2020102"
+            "a31104"
+            "0000" "6801" "0000" "5000"
+            "6801" "6603" "f000" "5000"
+        ),
+    )
+
+def test_sb1_family_load_schedule_bytes() -> None:
+    """family_load_schedule parses the 'ae' TLV payload into FamilyLoadSchedule objects.
+
+    Read-side counterpart to test_sb1_set_schedule_bytes above
+    """
+    device = Solarbank1(MOCK_BLE_DEVICE)
+
+    # ── No schedule set: 'ae' key absent -> empty list ──
+    assert device.family_load_schedule == []
+
+    # ── Single schedule: start=0, end=360, wattage=0, soc=80 ──
+    device._data = device._parse_payload(
+        bytes.fromhex("ae09" "04" "0000" "6801" "0000" "5000")
+    )
+    assert device.family_load_schedule == [
+        device.FamilyLoadSchedule(start_time=0, end_time=360, output_wattage=0, max_soc=80),
+    ]
+
+    # ── Two schedules ──
+    device._data = device._parse_payload(
+        bytes.fromhex(
+            "ae11" "04"
+            "0000" "6801" "0000" "5000"
+            "6801" "6603" "f000" "5000"
+        )
+    )
+    assert device.family_load_schedule == [
+        device.FamilyLoadSchedule(start_time=0, end_time=360, output_wattage=0, max_soc=80),
+        device.FamilyLoadSchedule(
+            start_time=360, end_time=870, output_wattage=240, max_soc=80
+        ),
+    ]

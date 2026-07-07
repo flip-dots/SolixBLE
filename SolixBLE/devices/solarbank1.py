@@ -357,23 +357,15 @@ class Solarbank1(SolixBLEDevice):
 
         return self._parse_string("b8", begin=1)
 
-    @property
-    def min_load(self) -> int:
-        """Maybe minimum wattage the battery will output?
-
-        :returns: Don't know yet or default str value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_INT
-
-        return self._parse_int("b9", begin=1)  # TODO: Check this later
-
     async def set_schedule(self, schedules: list[FamilyLoadSchedule]) -> None:
         """Set the daily charge/discharge schedule on the Solarbank 1.
 
-        Sends a schedule write command (CMD 0x405e) to the device.
-        The base class ``_send_command`` automatically appends the current
-        session timestamp and handles AES-CBC encryption and framing.
+        .. note::
+           :collapsible: closed
+
+           Sends a schedule write command (CMD 0x405e) to the device.
+           The base class ``_send_command`` automatically appends the current
+           session timestamp and handles AES-CBC encryption and framing.
 
         Pass an empty list to clear/delete all schedules.
 
