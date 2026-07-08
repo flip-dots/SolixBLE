@@ -78,60 +78,60 @@ Polled status updates   ✅        ❌          ✅        ✅        ❌       
 Solar system support
 --------------------
 
-=================================  ============ ============ ============ 
-Parameter                          Solarbank 1  Solarbank 2  Solarbank 3  
-=================================  ============ ============ ============  
-AC power out                        ❌            ✅           ❌
-AC power out (sockets)              ❌            ✅           ❌
-Total power out                     ✅            ✅           ✅
-Total energy out                    ✅            ✅           ✅
-Solar power in                      ✅            ✅           ✅
-Solar energy in                     ✅            ✅           ✅
-Individual solar power in           ❌            ✅           ✅
-Battery power in                    ✅            ✅           ✅
-Battery power out                   ❌            ✅           ✅
-Battery energy in                   ✅            ✅           ✅
-Battery energy out                  ✅            ❌           ✅
-Battery charge power                ✅            ❌           ❌
-Battery percentage                  ✅            ✅           ✅
-Battery percentage aggregate        ❌            ✅           ✅
-Expansion battery percentage        ❌            ❌           ❌
-Charging status                     ❌            ❌           ❌
-Battery health                      ❌            ❌           ✅
-Expansion battery health            ❌            ❌           ❌
-Schedule                            ✅            ❌           ❌
-Control schedule                    ✅            ❌           ❌
-Temperature                         ✅            ✅           ✅
-Temperature unit                    ❌            ❌           ❌
-Expansion battery temperature       ❌            ❌           ❌
-Battery heating                     ❌            ❌           ❌
-Batter heating power                ❌            ❌           ❌
-Grid status                         ❌            ❌           ❌
-Grid power in/out                   ❌            ❌           ✅
-Grid to Home power                  ❌            ✅           ✅
-PV to Grid power                    ❌            ✅           ❌
-Grid import energy                  ❌            ✅           ✅
-Grid export energy                  ❌            ✅           ✅
-Grid export disable/enable          ❌            ❌           ❌
-House demand                        ❌            ✅           ✅
-House consumption                   ❌            ❌           ✅
-Consumed energy                     ❌            ✅           ❌
-Error codes                         ❌            ❌           ❌
-Max load                            ❌            ❌           ❌
-Usage mode                          ❌            ❌           ❌
-Presets                             ❌            ❌           ❌
-Light mode                          ❌            ❌           ❌
-PV limitations                      ❌            ❌           ❌
-AC limitations                      ✅            ❌           ❌
-Software version                    ✅            ✅           ❌  
-Software version controller         ✅            ✅           ❌
-Software version expansion          ❌            ✅           ❌
-Hardware version                    ✅            ❌           ❌
-Serial number                       ✅            ✅           ✅                    
-Expansion battery serial number     ❌            ❌           ❌
-Inverter brand                      ✅            ❌           ❌
-Inverter model                      ✅            ❌           ❌
-=================================  ============ ============ ============ 
+=================================== =========== =========== ===========
+Parameter                           Solarbank 1 Solarbank 2 Solarbank 3
+=================================== =========== =========== ===========
+AC power out                        ❌           ✅           ❌
+AC power out (sockets)              ❌           ✅           ❌
+Total power out                     ✅           ✅           ✅
+Total energy out                    ✅           ✅           ✅
+Solar power in                      ✅           ✅           ✅
+Solar energy in                     ✅           ✅           ✅
+Individual solar power in           ❌           ✅           ✅
+Battery power in/out                ✅           ✅           ✅
+Battery energy in                   ✅           ✅           ✅
+Battery energy out                  ✅           ✅           ✅
+Battery charge power                ✅           ❌           ❌
+Battery percentage                  ✅           ✅           ✅
+Battery percentage aggregate        ❌           ✅           ✅
+Expansion battery percentage        ❌           ❌           ❌
+Charging status                     ❌           ✅           ❌
+Battery health                      ❌           ❌           ✅
+Expansion battery health            ❌           ❌           ❌
+Schedule                            ✅           ❌           ❌
+Control schedule                    ✅           ❌           ❌
+Temperature                         ✅           ✅           ✅
+Temperature unit                    ❌           ✅           ❌
+Expansion battery temperature       ❌           ❌           ❌
+Battery heating                     ❌           ✅           ❌
+Batter heating power                ❌           ❌           ❌
+Grid status                         ❌           ✅           ❌
+Grid power in/out                   ❌           ❔           ✅
+Grid to Home power                  ❌           ✅           ✅
+PV to Grid power                    ❌           ✅           ❌
+Grid import energy                  ❌           ✅           ✅
+Grid export energy                  ❌           ✅           ✅
+Grid export disable/enable          ❌           ❌           ❌
+House demand                        ❌           ✅           ✅
+House consumption                   ❌           ❌           ✅
+Consumed energy                     ❌           ✅           ❌
+Error codes                         ❌           ✅           ❌
+Max load                            ❌           ✅           ❌
+Usage mode                          ❌           ✅           ❌
+Presets                             ❌           ❌           ❌
+Light mode                          ❌           ✅           ❌
+PV limitations                      ❌           ❌           ❌
+PV panel power                      ❔           ✅           ❌
+AC limitations                      ✅           ❌           ❌
+Software version                    ✅           ✅           ❌
+Software version controller         ✅           ✅           ❌
+Software version expansion          ❌           ✅           ❌
+Hardware version                    ✅           ❌           ❌
+Serial number                       ✅           ✅           ✅
+Expansion battery serial number     ❌           ❌           ❌
+Inverter brand                      ✅           ❌           ❌
+Inverter model                      ✅           ❌           ❌
+=================================== =========== =========== ===========
 
 
 Prime charger support
