@@ -25,23 +25,10 @@ from SolixBLE import (
     PrimeCharger160w,
     PrimeDevice,
     PrimePowerBank20k,
-    PrimeCharger160w,
-    PrimeDevice,
-    PrimePowerBank20k,
     Solarbank1,
-    Solarbank2,
     Solarbank2,
     SolixBLEDevice,
     TemperatureUnit,
-)
-from SolixBLE.devices.solarbank2 import MaxLoadSB2
-from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
-from tests.const import (
-    MOCK_BLE_DEVICE,
-    NEGOTIATION_RESPONSES_PRIME,
-    NEGOTIATION_RESPONSES_SOLIX,
-)
-from tests.helpers import MockDevice
 )
 from SolixBLE.devices.solarbank2 import MaxLoadSB2
 from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
@@ -281,71 +268,6 @@ from tests.helpers import MockDevice
                 "min_battery_percentage": 1,
             },
             id="c1000g2",
-        ),
-        # The two cases below are decrypted telemetry frames captured from a real
-        # C1000 Gen 2 (A1763) on 2026-06-21 with the AC output physically off then
-        # on (idle, no load). They are identical except for the "a7" param, which
-        # locks in the AC output decode: ac_output is "a7" byte 1 (00=off, 01=on,
-        # latched) -- the same per-port "04 <status> <watts LE>" shape used by the
-        # DC port (b2) and USB ports. ("a4" byte 22 is NOT the AC state: it stayed
-        # 01 with the port physically off, so an a4-based decode reports a false
-        # OUTPUT.)
-        pytest.param(
-            C1000G2,
-            "a10131a221062011415043444b39363047313631303033393000054131373633030401010100a30e0400000000b0040064cc00580200a41b0400000000580232010000000000f0003c00010000000100500a00a506042400396400a60a04000000000000ab2a39a70704000000000000a80404000000aa0404000000ab0404000000ac0404000000ae0404000000b20404000000d91a04000019500a0000000000000000000000000000000000000000da18040000000000000000000001e00164057f00000000000000dc06040000000000f91d0403040101060005000000000000000000090300010000000006090200fa15040101010100170300000000000000000000000000fd0e0031373832303439353930383637fe050364f4376a",
-            {
-                "serial_number": "APCDK960G16100390",
-                "part_number": "A1763",
-                "temperature": 36,
-                "battery_percentage": 57,
-                "battery_health": 100,
-                "ac_output": PortStatus.NOT_CONNECTED,
-                "ac_power_in": 0,
-                "ac_power_out": 0,
-                "power_out": 0,
-                "solar_port": PortStatus.NOT_CONNECTED,
-                "dc_output": PortStatus.NOT_CONNECTED,
-                "max_battery_percentage": 80,
-                "min_battery_percentage": 10,
-            },
-            id="c1000g2_ac_off",
-        ),
-        pytest.param(
-            C1000G2,
-            "a10131a221062011415043444b39363047313631303033393000054131373633030401010100a30e0400000000b0040064cc00580200a41b0400000000580232010000000000f0003c00010000000100500a00a506042400396400a60a04000000000000ab2a39a70704010000000000a80404000000aa0404000000ab0404000000ac0404000000ae0404000000b20404000000d91a04000019500a0000000000000000000000000000000000000000da18040000000000000000000001e00164057f00000000000000dc06040000000000f91d0403040101060005000000000000000000090300010000000006090200fa15040101010100170300000000000000000000000000fd0e0031373832303439353930383637fe050369f4376a",
-            {
-                "serial_number": "APCDK960G16100390",
-                "part_number": "A1763",
-                "temperature": 36,
-                "battery_percentage": 57,
-                "battery_health": 100,
-                "ac_output": PortStatus.OUTPUT,
-                "ac_power_in": 0,
-                "ac_power_out": 0,
-                "power_out": 0,
-                "solar_port": PortStatus.NOT_CONNECTED,
-                "dc_output": PortStatus.NOT_CONNECTED,
-                "max_battery_percentage": 80,
-                "min_battery_percentage": 10,
-            },
-            id="c1000g2_ac_on",
-        ),
-        # Derived from the idle "c1000g2" frame above with only the "b2" param
-        # changed from 04000000 to 04010600 -- the value observed live on a real
-        # C1000 Gen 2 with the DC output on and a ~6 W 12 V load. This locks in
-        # the DC decode: dc_output is "b2" byte 1 (01 = OUTPUT) and dc_power_out
-        # is "b2" [2:4] little-endian watts (0x0006 = 6 W).
-        pytest.param(
-            C1000G2,
-            "a10134a221062011415043444b39363146333734303032393000054131373633060201010100a30b0400000000b0040058dc00a41b0400000000b0043201000000000000001e00010000000000640103a506041700646400a60a04000000000000ab2a64a70704000000010000a80404000000aa0404000000ab0404000000ac0404000000ae0404000000b20404010600d91a0400001964010000000100000000000000000000000000000000da18040000000000000000000001e00164057f00000000000000dc06040000000000f91d0406020101050005000000000005000500050300010000000000020200fa150401010101001f0300000000000000000000000000fd0e0031373634363538323735393838fe0503638c2e69f0",
-            {
-                "serial_number": "APCDK961F37400290",
-                "battery_percentage": 100,
-                "ac_output": PortStatus.NOT_CONNECTED,
-                "dc_output": PortStatus.OUTPUT,
-                "dc_power_out": 6,
-            },
-            id="c1000g2_dc_on",
         ),
         # The two cases below are decrypted telemetry frames captured from a real
         # C1000 Gen 2 (A1763) on 2026-06-21 with the AC output physically off then
@@ -718,132 +640,6 @@ from tests.helpers import MockDevice
             id="prime_power_bank_20k_discharge_c1_a1_charge_c2",
         ),
         pytest.param(
-            PrimeCharger160w,
-            "a10131a20302e805a303020000a4020100a5080400000000000000a6080400000000000000a7080400000000000000a8020103a9020150aa020100ab090400000f0f0f000000ac0d0401002c0100002c0100000300ad0d0401002c0100002c0100000300ae0d0401002c0100002c0100000300af020100b0020100b1020101b2020101b3020101b40d04fafffbfffafffbfffafffbffb50d04ffffffffffffffffffffffffe0050408000000e10b0480034b53000000000000fe050300000000",
-            {
-                "usb_port_c1": PortStatus.NOT_CONNECTED,
-                "usb_c1_current": 0.0,
-                "usb_c1_power": 0.0,
-                "usb_c1_voltage": 0.0,
-                "usb_port_c2": PortStatus.NOT_CONNECTED,
-                "usb_c2_current": 0.0,
-                "usb_c2_power": 0.0,
-                "usb_c2_voltage": 0.0,
-                "usb_port_c3": PortStatus.NOT_CONNECTED,
-                "usb_c3_current": 0.0,
-                "usb_c3_power": 0.0,
-                "usb_c3_voltage": 0.0,
-            },
-            id="prime_160w_idle",
-        ),
-        pytest.param(
-            PrimeCharger160w,
-            "a10131a20302e805a303020000a4020100a5080401e01374003700a608040108236c030b03a7080401d81364003200a8020103a9020150aa020100ab090400000f0f0f000000ac0d0401002c0100002c0100000000ad0d0401002c0100002c0100000203ae0d0401002c0100002c0100000000af020100b0020100b1020101b2020101b3020101b40d0400000000e804000000000000b50d04ffffffffffffffffffffffffe0050408000000e10b0480034b53000000000000fe050300000000",
-            {
-                "usb_port_c1": PortStatus.OUTPUT,
-                "usb_c1_current": 0.116,
-                "usb_c1_power": 0.55,
-                "usb_c1_voltage": 5.088,
-                "usb_port_c2": PortStatus.OUTPUT,
-                "usb_c2_current": 0.876,
-                "usb_c2_power": 7.79,
-                "usb_c2_voltage": 8.968,
-                "usb_port_c3": PortStatus.OUTPUT,
-                "usb_c3_current": 0.1,
-                "usb_c3_power": 0.5,
-                "usb_c3_voltage": 5.08,
-            },
-            id="prime_160w_all_three_charging",
-        ),
-        pytest.param(
-            PrimePowerBank20k,
-            "a10131a203044d60a30404010000a4020101a50404000000a60404000000a7080400000000000000a80f0400000000009600ff00ffffffff00a90f0400000000000000ff00ffffffff00ac09040000000000000000af02011db002011eb103020900fe050300000000",
-            {
-                "battery_percentage": 77,
-                "temperature": 29,
-                "power_out": 0.0,
-                "usb_port_c1": PortStatus.NOT_CONNECTED,
-                "usb_c1_current": 0.0,
-                "usb_c1_power": 15.0,
-                "usb_c1_voltage": 0.0,
-                "usb_port_c2": PortStatus.NOT_CONNECTED,
-                "usb_c2_current": 0.0,
-                "usb_c2_power": 0.0,
-                "usb_c2_voltage": 0.0,
-                "usb_port_a1": PortStatus.NOT_CONNECTED,
-                "usb_a1_current": 0.0,
-                "usb_a1_power": 0.0,
-                "usb_a1_voltage": 0.0,
-            },
-            id="prime_power_bank_20k_idle",
-        ),
-        pytest.param(
-            PrimePowerBank20k,
-            "a10131a20304515ca30404010000a4020101a50404000000a60404013601a7080400000000000000a80f04019500140036010107ffffffff00a90f0400000000000000ff00ffffffff00ac09040000000000000000af02011ab002011bb103020900fe050300000000",
-            {
-                "battery_percentage": 81,
-                "temperature": 26,
-                "power_out": 31.0,
-                "usb_port_c1": PortStatus.OUTPUT,
-                "usb_c1_current": 2.0,
-                "usb_c1_power": 31.0,
-                "usb_c1_voltage": 14.9,
-                "usb_port_c2": PortStatus.NOT_CONNECTED,
-                "usb_c2_current": 0.0,
-                "usb_c2_power": 0.0,
-                "usb_c2_voltage": 0.0,
-                "usb_port_a1": PortStatus.NOT_CONNECTED,
-                "usb_a1_current": 0.0,
-                "usb_a1_power": 0.0,
-                "usb_a1_voltage": 0.0,
-            },
-            id="prime_power_bank_20k_discharge_c1",
-        ),
-        pytest.param(
-            PrimePowerBank20k,
-            "a10131a20304505ca30404010000a4020101a50404000000a60404013a01a7080400000000000000a80f0400000000003d01ff00ffffffff00a90f0401950014002a010107ffffffff00ac09040133000300100000af02011bb002011cb103020900fe050300000000",
-            {
-                "battery_percentage": 80,
-                "temperature": 27,
-                "power_out": 31.4,
-                "usb_port_c1": PortStatus.NOT_CONNECTED,
-                "usb_c1_current": 0.0,
-                "usb_c1_power": 31.7,
-                "usb_c1_voltage": 0.0,
-                "usb_port_c2": PortStatus.OUTPUT,
-                "usb_c2_current": 2.0,
-                "usb_c2_power": 29.8,
-                "usb_c2_voltage": 14.9,
-                "usb_port_a1": PortStatus.OUTPUT,
-                "usb_a1_current": 0.3,
-                "usb_a1_power": 1.6,
-                "usb_a1_voltage": 5.1,
-            },
-            id="prime_power_bank_20k_discharge_c2_a1",
-        ),
-        pytest.param(
-            PrimePowerBank20k,
-            "a10131a203044b5da30404010018a4020101a50404014102a6040401a300a7080400000000000000a80f04015900100096000107ffffffff00a90f0402c9001c004102ff07ffffffff00ac090401330002000d0000af02011cb002011db103020900fe050300000000",
-            {
-                "battery_percentage": 75,
-                "temperature": 28,
-                "power_out": 16.3,
-                "usb_port_c1": PortStatus.OUTPUT,
-                "usb_c1_current": 1.6,
-                "usb_c1_power": 15.0,
-                "usb_c1_voltage": 8.9,
-                "usb_port_c2": PortStatus.INPUT,
-                "usb_c2_current": 2.8,
-                "usb_c2_power": 57.7,
-                "usb_c2_voltage": 20.1,
-                "usb_port_a1": PortStatus.OUTPUT,
-                "usb_a1_current": 0.2,
-                "usb_a1_power": 1.3,
-                "usb_a1_voltage": 5.1,
-            },
-            id="prime_power_bank_20k_discharge_c1_a1_charge_c2",
-        ),
-        pytest.param(
             C300DC,
             "a10131a2050300000000a303020000a403020000a503020000a603020000a703020000a803020000a903020000aa03020000ab03020000ac03020000ad03020000ae03020000af03020000b003020000b103020000b203020000b303020000b403020000b5020180b6020100b7020100b8020100b9020100ba020100bb020100bc020100bd020100be020100bf020100c0020100c1020100c2020100c3110020202020202020202020202020202020c403020000c503020000c603020000c7020100c8020100c9020100ca020100cb03020000cc020100cd020100f7050300000000f815040000000000000000000000000000000000000000",
             {
@@ -1055,51 +851,6 @@ from tests.helpers import MockDevice
             },
             id="maggo_3in1_phone_higher_power",
         ),
-        pytest.param(
-            Solarbank2,
-            "a10131a2110041504347513830453030303030303030a302013aa4020101a503020000a605030100060aa7050300000631a8050300030306a9020100aa020111ab050300000000ac0503f4010000ad02013aae020100af020100b0050300000000b10503e0bd0200b20503723c0a00b305038d840200b4020105b5020104b6020105b7050388130000b8020101b9020100ba050328000000bb020100bc050300000000bd050300000000be050300000000bf050300000000c0110000000000000000000000000000000000c1020100c203022003c40503f4010000c5020100c6020101c703023200c8050300000000c9050306000000ca050300000000cb050300000000cc050300000000cd050300000000d2020100d30503f4010000d4110000000000000000000000000000000000d503020000d6110000000000000000000000000000000000d703020000d8110000000000000000000000000000000000d903020000da110000000000000000000000000000000000db03020000dc110000000000000000000000000000000000dd03020000de110000000000000000000000000000000000df03020000e0020102e1020101e2020100e3020100e4020100e5020100e6020100e7020100e8020100e9020100ea020101fe05039a46d969fb050300000000fc1604010101010001010101010100000000000000000000",
-            {
-                "serial_number": "APCGQ80E00000000",
-                "battery_percentage": 58,
-                "battery_percentage_aggregate": 58,
-                "error_code": 0,
-                "software_version": "1.6.8.1.6.5.3.7.7",
-                "software_version_controller": "8.2.2.4.7.6.8.0.0",
-                "software_version_expansion": "1.0.0.8.6.0.6.7.2",
-                "temperature_unit": TemperatureUnit.CELSIUS,
-                "temperature": 17,
-                "solar_power_in": 0.0,
-                "solar_pv_1_power_in": 0.0,
-                "solar_pv_2_power_in": 0.0,
-                "solar_pv_3_power_in": 0.0,
-                "solar_pv_4_power_in": 0.0,
-                "ac_power_out": 50.0,
-                "ac_power_out_sockets": 0.0,
-                "battery_charge_power": 0.0,
-                "battery_discharge_power": 50.0,
-                "pv_yield": 17.968,
-                "charged_energy": 6.70834,
-                "output_energy": 16.5005,
-                "grid_to_home_power": 0.0,
-                "pv_to_grid_power": 0.0,
-                "grid_import_energy": 0.0,
-                "grid_export_energy": 0.0,
-                "house_demand": 50.0,
-                "consumed_energy": 0.0006,
-                "power_out": 50.0,
-                "max_load": MaxLoadSB2.W800,
-                "output_cutoff_data": SBPowerCutoff.P5,
-                "lowpower_input_data": 4,
-                "input_cutoff_data": SBPowerCutoff.P5,
-                "usage_mode": SBUsageMode.MANUAL,
-                "home_load_preset": 50,
-                "light_mode": LightMode.NORMAL,
-                "grid_status": GridStatus.OK_AS_WELL_I_GUESS,
-                "light_on": False,
-                "battery_heating": False,
-            },
-            id="solarbank2_telemetry",
-        ),
     ],
 )
 async def test_values(
@@ -1114,7 +865,6 @@ async def test_values(
     """
     device = device_class(MOCK_BLE_DEVICE)
     parameters = device._parse_payload(bytes.fromhex(payload))
-    await device._process_telemetry(parameters)
     await device._process_telemetry(parameters)
 
     for class_property, expected_value in mapping.items():
@@ -1148,44 +898,11 @@ async def test_c1000g2_dc_control() -> None:
 
 
 @pytest.mark.asyncio
-async def test_c1000g2_dc_control() -> None:
-    """C1000 Gen 2 DC output control dispatches command 4102.
-
-    Confirmed on real hardware (the 12 V port physically switched and acked).
-    Here we just lock in that turn_dc_on/off send command 4102 with the same
-    on/off payloads as the AC output, which is the only difference between the
-    two on the Gen 2.
-    """
-    device = C1000G2(MOCK_BLE_DEVICE)
-    device._send_command = mock.AsyncMock()
-
-    await device.turn_dc_on()
-    device._send_command.assert_awaited_once_with(
-        cmd=bytes.fromhex("4102"), payload=bytes.fromhex("a10121a2020101")
-    )
-
-    device._send_command.reset_mock()
-    await device.turn_dc_off()
-    device._send_command.assert_awaited_once_with(
-        cmd=bytes.fromhex("4102"), payload=bytes.fromhex("a10121a2020100")
-    )
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "device_class,packets,secret",
     "device_class,packets,secret",
     [
         pytest.param(
             C300,
-            [
-                "ff090e00030001080100a1010152",
-                "ff091b00030001080300a10102a202fd00a30144a40101a50102ff",
-                "ff093800030001082900a10103a2054553503332a307302e302e302e33a410415a5653424a30453339323030303438a506f49d8a53a95a14",
-                "ff090b00030001080500f2",
-                "ff094d00030001082100a140c2a5a88fab34c1ac0f96a52e1b93354a47fb6c674b5afebacf5a2ed755435f41f0d26e97782e54e268b46d9f8a58a267cd7f7a239771e6289e55d94f7669ed448a",
-                None,
-            ],
             [
                 "ff090e00030001080100a1010152",
                 "ff091b00030001080300a10102a202fd00a30144a40101a50102ff",
@@ -1207,14 +924,6 @@ async def test_c1000g2_dc_control() -> None:
                 "ff094d00030001082100a140a7b5d3824a36cae20bab9fc4d9358191e5351905a782eda157f376cc43f1f761ab772d437f33787188716d1bebd81719d1eb76b94f08499ee93895d5b43e75ef5f",
                 None,
             ],
-            [
-                "ff090e00030001080100a1010152",
-                "ff091b00030001080300a10102a202fd00a30144a40101a50102ff",
-                "ff093800030001082900a10103a2054553503332a307302e302e302e33a410415a5653424a30453339323030303438a506f49d8a53a95a14",
-                "ff090b00030001080500f2",
-                "ff094d00030001082100a140a7b5d3824a36cae20bab9fc4d9358191e5351905a782eda157f376cc43f1f761ab772d437f33787188716d1bebd81719d1eb76b94f08499ee93895d5b43e75ef5f",
-                None,
-            ],
             "f97b0112a955846530c60e4cf95f941df76d86ab9ca106aa4bd00fe1c4fcb14f",
             id="c300_2",
         ),
@@ -1228,27 +937,11 @@ async def test_c1000g2_dc_control() -> None:
                 "ff094d00030001082100a140d3ef70a8faeb9ae7d9be034390108c2c7b177f3d549eb87318bd7a31703fc604664efb0e4600298ca9a905fb5af170955fb76229791dd583478b84d9950bd65420",
                 None,
             ],
-            [
-                "ff090e00030001080100a1010152",
-                "ff091b00030001080300a10102a202fd00a30144a40101a50102ff",
-                "ff093800030001082900a10103a2054553503332a307302e302e302e33a41041504339464530453237333030323735a506f49d8a104e0c9a",
-                "ff090b00030001080500f2",
-                "ff094d00030001082100a140d3ef70a8faeb9ae7d9be034390108c2c7b177f3d549eb87318bd7a31703fc604664efb0e4600298ca9a905fb5af170955fb76229791dd583478b84d9950bd65420",
-                None,
-            ],
             "2bdc8c8bfecf40814f602e6547cf29bf125abcc1a93be0751d8f1065a2bb5570",
             id="c1000_1",
         ),
         pytest.param(
             C1000,
-            [
-                "ff090e00030001080100a1010152",
-                "ff091b00030001080300a10102a202fd00a30144a40101a50102ff",
-                "ff093800030001082900a10103a2054553503332a307302e302e302e33a41041504339464530453237333030323735a506f49d8a104e0c9a",
-                "ff090b00030001080500f2",
-                "ff094d00030001082100a140b2ade5cac4f4a0c1307e44a0e9c5363cb21e4c8485ee324c23be949fa5d5929a75e57da3207c948a0c366ca9ea1ab2cb8e57d2d046a6ebefe5d96adb5d4cb35039",
-                None,
-            ],
             [
                 "ff090e00030001080100a1010152",
                 "ff091b00030001080300a10102a202fd00a30144a40101a50102ff",
@@ -1289,42 +982,9 @@ async def test_c1000g2_dc_control() -> None:
             "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
             id="prime_power_bank_20k",
         ),
-        pytest.param(
-            Solarbank2,
-            [
-                "ff090e00030001080100a1010152",
-                "ff091b00030001080300a10102a202fd00a30144a40101a50102ff",
-                "ff093800030001082900a10103a2054553503332a307302e302e302e33a41041504347513830453030303030303030a50600000000000039",
-                "ff090b00030001080500f2",
-                "ff094d00030001082100a140f809d676751fba1346f21198c8a583b1ef9b9a617fb804455c388d07090e6dc2976c1bb1cf06aee1f30a3286af9dd80f8f0c594010f60755292addedfe41385972",
-                None,
-            ],
-            "6a2c89888de58cce1e15d98eb22669898ec29bcb1519ce19f950439aac9dbcb5",
-            id="solarbank2_1",
-        ),
-        pytest.param(
-            PrimePowerBank20k,
-            [
-                "ff091e000300014801ab273ed3e27270c3f4d676ac7d69a00572793732a6",
-                "ff092b000300014803ab273ed0443800b35db54c6d4a6ec3d48171a04ea7ebce8bf749e5e48c5d991a5e67",
-                "ff0958000300014829ab273ed144326ada9fc66fa02508c5ddf549ade014d1eeb352fea11c0315b70b8aaa8a734ca5830f8d5827acbaa1224f05ad300b38d27bac9862a768d95c29daed0a89e92feb1d09163a094aa700ff",
-                "ff091b000300014805abab709a595a803dd04246b78a927453cf65",
-                "ff095d000300014821ab277f4e77c3b9e1f44367539f64f85d19969d0273c2c0ca93a06f3a010cf636e3b2df75d10791adf1e3c706a3238bcf0a858cd1e2d55d4cf1164a1b7db3b0058c47dfb24c71f11f8a96209d9f0924d420f03120",
-                "ff091b000300014822e520695552c2745a608fd21cf84bc6e3ccb9",
-                "ff091b000300014827e520695552c2745a608fd21cf84bc6e3ccbc",
-                "ff09df000301114a00e5a17fe3ebb89758b89ffb0e7d35a36ffeaeba3e991d79323680049a018c8e719bb706b6d00a142199a6cdc7f05bb5489f1ebb093fe3d134caf7ae5ad7b456867d9a58885cee8479bc10ea2d42d5b94d3b5a929cf4f4fd25f987e5a4922ae6fa744e22289080676583f390c1351a4b68ac5c1dabdcbf8e5e23416e47a0cea7a6062326dd8505464f821ba881f0f6f2c8ea050a7c978962980a539e90879aa1499b5be92fdceb53de533fc2bdd78b7998aec24493fdcfe3d2bc7e95b383744f92a4168819350e89d0d3142d1dbedcb779e45cfad12008",
-                "ff098300030111430044014f704abfd87d1d38fc0d7a35a36efdaf1f9f9f1c799493804dfaa6882d789fb7aeb4d117bd2330cd63c5f13f1e4a089ce80ac2442c66c85fa1f0dcb0d6867d9a58f7a3ee8479ec124724f6d7b84d8a58939c465ffb24e43754a1889be5f8c946d82d93806765835569e75bd67cbd3ac71071159c13a83bb9",
-            ],
-            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
-            id="prime_power_bank_20k",
-        ),
     ],
 )
 async def test_negotiation(
-    fast_sleep,
-    fast_timeouts,
-    device_class: type[SolixBLEDevice],
-    packets: list[str],
     fast_sleep,
     fast_timeouts,
     device_class: type[SolixBLEDevice],
@@ -1336,18 +996,12 @@ async def test_negotiation(
 
     :param device_class: The class of the device being tested.
     :param packets: Packets sent by the mock device in response to our packets.
-    :param packets: Packets sent by the mock device in response to our packets.
     :param secret: The expected shared secret.
     """
     async with MockDevice() as mock_bluetooth:
 
         device = device_class(MOCK_BLE_DEVICE)
 
-        for packet in packets:
-            mock_bluetooth.expect_ordered(
-                None,
-                [bytes.fromhex(packet)] if packet else [],
-            )
         for packet in packets:
             mock_bluetooth.expect_ordered(
                 None,
@@ -1361,18 +1015,14 @@ async def test_negotiation(
         assert (
             bytes.fromhex(secret) == device._shared_secret
         ), "Shared secret does not match expected"
-            bytes.fromhex(secret) == device._shared_secret
-        ), "Shared secret does not match expected"
 
         mock_bluetooth.check_assertions()
 
 
 @pytest.mark.parametrize(
     "device_class,payload,secret,decrypted",
-    "device_class,payload,secret,decrypted",
     [
         pytest.param(
-            C300,
             C300,
             "5bc7c7b05cf74c1ba441a17a5568f4b25bc061d354f498e39ba509e2c7664ce36d6a9ee8280a40736b9b681f10ab6eb7c86bca4b88fe6fc39ca3391d7ede4e1c47b6b5f0e5ccc67c841a0eb0912039323c27f9e819244424914c9fb538e93a23bc9bfd0f4e9df1b59fec44b5236c75c6f45e42a1110152e56491f8381ae07e50113e3746ca9a16182bc8c9102bbb463eb42d27b1e6330feb3f76d21bf751fe4a1d469c64cd8c9bda426943d48fc7c583c665ea21c7ee23fdde9262d47727c9454d88dd30d291f9bc9b0936a66761846c729f898895d97c158c36e703626ea8499fbf2dc8962159f1b7380f5f84038240d5df00ce1a7eecb4f3ea0b7de9aac5b8637d78f0f3fcf6d600227148d5011bd765a99be6d6ab0e83b9ebe8dcb9ce5ba6",
             "23a6446c34efb9f9ab1dbc43ffc8e289fffdfed557f849c4e91bd7baec0c4814",
@@ -1381,7 +1031,6 @@ async def test_negotiation(
         ),
         pytest.param(
             C1000,
-            C1000,
             "403d9e7311afd074672804704798c421db698f11a5a0fc4bd793c127871c6eea7a970666c9b614c494e62b15770b1dba3dc98019e34cf0eb0ebecb5a2c5bc9ae39441d5e5acad73a645112b779312966513b53ba6f78c0f82cda624cce3b08a1a83416bd52fa4caf37e05cfaa9b37ddea75447be949ba10b892c320398fae0191c1290af0e79791c56c0d2217aafb9259b13cd2ccb9e4d520548eb416f4f96b9d852231578d4d516495564215c297fce97549986ef47058168d77afddc8ac5c0b59c9bfaf681a4cd60eca4bfad743731ca81849b83689e452e68f82fcab9fa2404f05f22b557b73705d16bab42b8045ffcc8083f9cb4fa4acda9997de1a40a2eac55b5dfbc70d882874c1db1990b76ae009bb1997ab507d347c84f3fd39d6f6c",
             "0c4d9db9ef376fcfe627b9b73089eda514315d4bf67fb7eb299f2894ef7a059c",
             "a10131a2050300000000a3050300000000a40302d104a503020000a603020000a703020000a803020000a903020000aa03020000ab03020000ac03020000ad03020000ae03020000af03020000b003020300b103020000b203020100b30302a600b403020000b50302ff01b60302ff01b703020000b803029a00b903020000ba0302a600bb03020000bc020100bd020123be020100bf020101c0020100c1020164c2020100c3020164c4020100c5020100c6020100c7020100c8020100c9020100ca020100cb020100cc020100cd020100ce020100cf020100d0110041504339464530453237333030323735e5020100f7050301000000f815040202010100010000000000000000000000000000f9020102fd0b0041313736315f33304168",
@@ -1389,14 +1038,12 @@ async def test_negotiation(
         ),
         pytest.param(
             C1000,
-            C1000,
             "a9fdb7f5f88e0d7ec2c3a36f9cb4f226",
             "cf9b34f93bc679b84c9754a9484a56991cef242c586b23dbef195ba0f2ee02cb",
             "00a10131",
             id="c1000_cmd_ack_ac_on",
         ),
         pytest.param(
-            C1000,
             C1000,
             "2eb0fc833d00ca9e33491eab73ccfda202cfdedb86599ba5d0e3c2c059652818",
             "cf9b34f93bc679b84c9754a9484a56991cef242c586b23dbef195ba0f2ee02cb",
@@ -1425,33 +1072,8 @@ async def test_negotiation(
             "a10131a203044d60a30404010000a4020101a50404000000a60404000000a7080400000000000000a80f0400000000009600ff00ffffffff00a90f0400000000000000ff00ffffffff00ac09040000000000000000af02011db002011eb103020900fe050300000000",
             id="prime_power_bank_telemetry",
         ),
-        pytest.param(
-            PrimeCharger160w,
-            "57e9a883d95e4bc95b5be2baa1c366331abb9292585357de1f59c997254092ef1372bd5a26ef6b51d61dc87082ca8e7985aacad07f64181902c70c0502de2418e366f5f700b13049d9b857e95c85c66a32d64fcf31c8eead9e025ed69c1440170cca149e038501a9544b1baa044a6a65392e154357e137d917fc834e019012a01b9bd18d5ca7dc22bdb0204b0629b3f738f34bafdc26f6bb0781cec80fe547674a6a7a341a018ce3ac81e6eb6b5110d3311db692d174fe363acec5ba606a24b975c2bb2a43ddfe5351f54d9fcd295709",
-            "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
-            "a10131a20302e805a303020000a4020100a508040150235704eb03a6080400000000000000a7080400000000000000a8020103a9020150aa020100ab090400000f0f0f000000ac0d0401002c0100002c0100000203ad0d0401002c0100002c0100000300ae0d0401002c0100002c0100000300af020100b0020100b1020101b2020101b3020101b40d04e8040000fafffbfffafffbffb50d04ffffffffffffffffffffffffe0050408000000e10b0480034b53000000000000fe050300000000",
-            id="prime_160w_telemetry",
-        ),
-        # Different anker prime charger from other tests
-        pytest.param(
-            PrimeCharger160w,
-            "14676a53fc1315457c58163660d5b7bb4a6c83be2f8511d2bc79e2428827907a591b28a709df413e4fa633dc943dd7d2902c46bdcd69ea2bfe4c529f577dfe492d3192aa04f2b2a66fa745b4ed64d34a0a8100d4dd165514edd14499cf1243fbc9d1c216239bc53b756256f4dc04723c470a10434d49e3e38c6d6e1c2054a4890ea244a14964ef6b69eecc3ce8debc0f50537a6be461f3a1b9eb6cc1f1303d8dcf9488a8d4c8bc60729fa669974a4b84a50a0d5f75833c157e5e5c54cf19f944e731932e076b25892c13e0b3979ccd11",
-            "c0779a39bfa7b290ba9cd3d96b6fdc22a1f6a9746d4fc81e942c3d95",
-            "a10131a20302e805a303020000a4020100a5080400000000000000a6080401d84e00000000a7080400000000000000a8020100a9020150aa020100ab090400001c50343b3b3bac0d0401002c0100002c0100000300ad0d0401002c0100002c0100000100ae0d0401002c0100002c0100000300af020101b0020101b1020100b2020101b30201ffb40d04fafffbff00000000fafffbffb50d04ffffffffffffffffffffffffe0050408000000e10b0400000000000000000000fe050300000000",
-            id="prime_160w_telemetry_alt",
-        ),
-        pytest.param(
-            PrimePowerBank20k,
-            "44014f704abfd87d1d38fc0d7a35a36efdaf1f9f9f1c799493804dfaa6882d789fb7aeb4d117bd2330cd63c5f13f1e4a089ce80ac2442c66c85fa1f0dcb0d6867d9a58f7a3ee8479ec124724f6d7b84d8a58939c465ffb24e43754a1889be5f8c946d82d93806765835569e75bd67cbd3ac71071159c13a83b",
-            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
-            "a10131a203044d60a30404010000a4020101a50404000000a60404000000a7080400000000000000a80f0400000000009600ff00ffffffff00a90f0400000000000000ff00ffffffff00ac09040000000000000000af02011db002011eb103020900fe050300000000",
-            id="prime_power_bank_telemetry",
-        ),
     ],
 )
-def test_payload_decryption(
-    device_class: type[SolixBLEDevice], payload: str, secret: str, decrypted: str
-):
 def test_payload_decryption(
     device_class: type[SolixBLEDevice], payload: str, secret: str, decrypted: str
 ):
@@ -1460,15 +1082,11 @@ def test_payload_decryption(
     splitting of a packet.
 
     :param device_class: Class of device under test.
-    :param device_class: Class of device under test.
     :param payload: Payload to be decrypted.
-    :param secret: Shared secret used for AES key and IV.
     :param secret: Shared secret used for AES key and IV.
     :param decrypted: Expected content of decrypted payload.
     """
 
-    device = device_class(MOCK_BLE_DEVICE)
-    device._shared_secret = bytes.fromhex(secret)
     device = device_class(MOCK_BLE_DEVICE)
     device._shared_secret = bytes.fromhex(secret)
 
@@ -1479,11 +1097,9 @@ def test_payload_decryption(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "device_class, packets, secret, parameters",
-    "device_class, packets, secret, parameters",
     [
         # Test that when there are no packets device._ data is None
         pytest.param(
-            SolixBLEDevice,
             SolixBLEDevice,
             [],
             "",
@@ -1493,11 +1109,9 @@ def test_payload_decryption(
         # Test that when there there are 0/2 required packets device._data is None
         pytest.param(
             C1000,
-            C1000,
             [
                 "ff092a0003010f440156ecb95eb746de03d40ee711ce99f42837a9554c6382d3f5298a3b0648d8536936"
             ],
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             None,
             id="irrelevant_packet_only",
@@ -1505,55 +1119,43 @@ def test_payload_decryption(
         # Test that when there there is only 1/2 required packets device._data is None
         pytest.param(
             C1000,
-            C1000,
             [
                 "ff09390003010fc40222788d127d8418b41a81719975719a26b32734ea4e44ce244683e31928bb9a2736f9ede939567cddce6b3fb0de68116c"
             ],
             "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             None,
-            id="solix_packet_1_missing",
             id="solix_packet_1_missing",
         ),
         # Test that when there there is only 1/2 required packets device._data is None
         pytest.param(
             C1000,
-            C1000,
             [
                 "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3a9ea3cb5b222b0152438ccd3b980eda40fbde184fa66c80c3372dad179f11cad8799858ab95696e52c7e729af87c1106343ed5be9c042c8912b14f3a0d94b32afbed432e66616e1895ba0ff5e74a6da9401117070c926631e5d7886a07bec0de35aeb689e8bb289f1d7854143dc413f25d4b57d290ca4378cfb8efc275aa779145f98956e934eaced2d1f51cef7dd21a340318bfc14fb5f90ffd33e0e484175512af33593b1f91eb9801d7c2e1ac6d56e8fe7e8883d62226484ed6f1af711d042c5e3d0c186b3f2222293bc71ccf4a156a544d5171e90ee9b6b9b8f36ae058b96e3b88"
             ],
             "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             None,
-            id="solix_packet_2_missing",
             id="solix_packet_2_missing",
         ),
         # Test that when the 1st packet arrives after the 2nd packet is it ignored
         pytest.param(
             C1000,
-            C1000,
             [
                 "ff09390003010fc40222788d127d8418b41a81719975719a26b32734ea4e44ce244683e31928bb9a2736f9ede939567cddce6b3fb0de68116c",
                 "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3a9ea3cb5b222b0152438ccd3b980eda40fbde184fa66c80c3372dad179f11cad8799858ab95696e52c7e729af87c1106343ed5be9c042c8912b14f3a0d94b32afbed432e66616e1895ba0ff5e74a6da9401117070c926631e5d7886a07bec0de35aeb689e8bb289f1d7854143dc413f25d4b57d290ca4378cfb8efc275aa779145f98956e934eaced2d1f51cef7dd21a340318bfc14fb5f90ffd33e0e484175512af33593b1f91eb9801d7c2e1ac6d56e8fe7e8883d62226484ed6f1af711d042c5e3d0c186b3f2222293bc71ccf4a156a544d5171e90ee9b6b9b8f36ae058b96e3b88",
             ],
             "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             None,
-            id="solix_both_packets_reversed",
             id="solix_both_packets_reversed",
         ),
         # Test that when the packets arrive in order they are parsed and device._data is populated
         pytest.param(
             C1000,
-            C1000,
             [
                 "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3a9ea3cb5b222b0152438ccd3b980eda40fbde184fa66c80c3372dad179f11cad8799858ab95696e52c7e729af87c1106343ed5be9c042c8912b14f3a0d94b32afbed432e66616e1895ba0ff5e74a6da9401117070c926631e5d7886a07bec0de35aeb689e8bb289f1d7854143dc413f25d4b57d290ca4378cfb8efc275aa779145f98956e934eaced2d1f51cef7dd21a340318bfc14fb5f90ffd33e0e484175512af33593b1f91eb9801d7c2e1ac6d56e8fe7e8883d62226484ed6f1af711d042c5e3d0c186b3f2222293bc71ccf4a156a544d5171e90ee9b6b9b8f36ae058b96e3b88",
                 "ff09390003010fc40222788d127d8418b41a81719975719a26b32734ea4e44ce244683e31928bb9a2736f9ede939567cddce6b3fb0de68116c",
             ],
             "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             """{'a1': '31', 'a2': '0300000000', 'a3': '0300000000', 'a4': '02720f', 'a5': '020000', 'a6': '020000', 'a7': '020000', 'a8': '020000', 'a9': '020000', 'aa': '020000', 'ab': '020000', 'ac': '020000', 'ad': '020000', 'ae': '020000', 'af': '020000', 'b0': '020100', 'b1': '020000', 'b2': '020100', 'b3': '02a600', 'b4': '020000', 'b5': '02ff01', 'b6': '02ff01', 'b7': '020000', 'b8': '029a00', 'b9': '020000', 'ba': '02a600', 'bb': '020000', 'bc': '0100', 'bd': '0122', 'be': '0100', 'bf': '0101', 'c0': '0100', 'c1': '0164', 'c2': '0100', 'c3': '0164', 'c4': '0100', 'c5': '0100', 'c6': '0100', 'c7': '0100', 'c8': '0100', 'c9': '0100', 'ca': '0100', 'cb': '0100', 'cc': '0100', 'cd': '0100', 'ce': '0100', 'cf': '0100', 'd0': '0041504339464530453237333030323735', 'e5': '0100', 'f7': '0301000000', 'f8': '040202010100010000000000000000000000000000', 'f9': '0102', 'fd': '0041313736315f33304168'}""",
-            id="solix_both_packets",
             id="solix_both_packets",
         ),
         # Test that when the packets arrive in order they are parsed and device._data is populated
@@ -1561,16 +1163,13 @@ def test_payload_decryption(
         # valid until the next telemetry packet arrives
         pytest.param(
             C1000,
-            C1000,
             [
                 "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3a9ea3cb5b222b0152438ccd3b980eda40fbde184fa66c80c3372dad179f11cad8799858ab95696e52c7e729af87c1106343ed5be9c042c8912b14f3a0d94b32afbed432e66616e1895ba0ff5e74a6da9401117070c926631e5d7886a07bec0de35aeb689e8bb289f1d7854143dc413f25d4b57d290ca4378cfb8efc275aa779145f98956e934eaced2d1f51cef7dd21a340318bfc14fb5f90ffd33e0e484175512af33593b1f91eb9801d7c2e1ac6d56e8fe7e8883d62226484ed6f1af711d042c5e3d0c186b3f2222293bc71ccf4a156a544d5171e90ee9b6b9b8f36ae058b96e3b88",
                 "ff09390003010fc40222788d127d8418b41a81719975719a26b32734ea4e44ce244683e31928bb9a2736f9ede939567cddce6b3fb0de68116c",
                 "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3218e598b95b4b8aa7ff3483fd3cfc72612b49fad1e5e27b50be913da3b73328c0db3e5f58c5a86dce0f36a9c080db786c1b917a8541d43aec30c6cbd2b229876255894ac5269fb9f3d4258450905bbe28781c5544d7eb57553bc5c39418d02fba353983a9b0f318e951d57ccc019cea984f9a64b0cb793bec8c696936b16fac2d72c59c4b95561f5f534c448f911d5e1c9ac30601e04fb2338313498d083cc6f676b0797b587ebc5e2fc32e60562f5e41e44682b5f8f094bcbea33e0926f304366d5df28c4868d00ba37eb754c9921e9b63ebb0bb1fb76f644c0760636df1303362106",
             ],
             "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             """{'a1': '31', 'a2': '0300000000', 'a3': '0300000000', 'a4': '02720f', 'a5': '020000', 'a6': '020000', 'a7': '020000', 'a8': '020000', 'a9': '020000', 'aa': '020000', 'ab': '020000', 'ac': '020000', 'ad': '020000', 'ae': '020000', 'af': '020000', 'b0': '020100', 'b1': '020000', 'b2': '020100', 'b3': '02a600', 'b4': '020000', 'b5': '02ff01', 'b6': '02ff01', 'b7': '020000', 'b8': '029a00', 'b9': '020000', 'ba': '02a600', 'bb': '020000', 'bc': '0100', 'bd': '0122', 'be': '0100', 'bf': '0101', 'c0': '0100', 'c1': '0164', 'c2': '0100', 'c3': '0164', 'c4': '0100', 'c5': '0100', 'c6': '0100', 'c7': '0100', 'c8': '0100', 'c9': '0100', 'ca': '0100', 'cb': '0100', 'cc': '0100', 'cd': '0100', 'ce': '0100', 'cf': '0100', 'd0': '0041504339464530453237333030323735', 'e5': '0100', 'f7': '0301000000', 'f8': '040202010100010000000000000000000000000000', 'f9': '0102', 'fd': '0041313736315f33304168'}""",
-            id="solix_both_packets_later_invalidates",
             id="solix_both_packets_later_invalidates",
         ),
         # Test that when the packets arrive in order they are parsed and device._data is populated
@@ -1578,7 +1177,6 @@ def test_payload_decryption(
         # of order
         pytest.param(
             C1000,
-            C1000,
             [
                 "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3a9ea3cb5b222b0152438ccd3b980eda40fbde184fa66c80c3372dad179f11cad8799858ab95696e52c7e729af87c1106343ed5be9c042c8912b14f3a0d94b32afbed432e66616e1895ba0ff5e74a6da9401117070c926631e5d7886a07bec0de35aeb689e8bb289f1d7854143dc413f25d4b57d290ca4378cfb8efc275aa779145f98956e934eaced2d1f51cef7dd21a340318bfc14fb5f90ffd33e0e484175512af33593b1f91eb9801d7c2e1ac6d56e8fe7e8883d62226484ed6f1af711d042c5e3d0c186b3f2222293bc71ccf4a156a544d5171e90ee9b6b9b8f36ae058b96e3b88",
                 "ff09390003010fc40222788d127d8418b41a81719975719a26b32734ea4e44ce244683e31928bb9a2736f9ede939567cddce6b3fb0de68116c",
@@ -1586,9 +1184,7 @@ def test_payload_decryption(
                 "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3218e598b95b4b8aa7ff3483fd3cfc72612b49fad1e5e27b50be913da3b73328c0db3e5f58c5a86dce0f36a9c080db786c1b917a8541d43aec30c6cbd2b229876255894ac5269fb9f3d4258450905bbe28781c5544d7eb57553bc5c39418d02fba353983a9b0f318e951d57ccc019cea984f9a64b0cb793bec8c696936b16fac2d72c59c4b95561f5f534c448f911d5e1c9ac30601e04fb2338313498d083cc6f676b0797b587ebc5e2fc32e60562f5e41e44682b5f8f094bcbea33e0926f304366d5df28c4868d00ba37eb754c9921e9b63ebb0bb1fb76f644c0760636df1303362106",
             ],
             "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             """{'a1': '31', 'a2': '0300000000', 'a3': '0300000000', 'a4': '02720f', 'a5': '020000', 'a6': '020000', 'a7': '020000', 'a8': '020000', 'a9': '020000', 'aa': '020000', 'ab': '020000', 'ac': '020000', 'ad': '020000', 'ae': '020000', 'af': '020000', 'b0': '020100', 'b1': '020000', 'b2': '020100', 'b3': '02a600', 'b4': '020000', 'b5': '02ff01', 'b6': '02ff01', 'b7': '020000', 'b8': '029a00', 'b9': '020000', 'ba': '02a600', 'bb': '020000', 'bc': '0100', 'bd': '0122', 'be': '0100', 'bf': '0101', 'c0': '0100', 'c1': '0164', 'c2': '0100', 'c3': '0164', 'c4': '0100', 'c5': '0100', 'c6': '0100', 'c7': '0100', 'c8': '0100', 'c9': '0100', 'ca': '0100', 'cb': '0100', 'cc': '0100', 'cd': '0100', 'ce': '0100', 'cf': '0100', 'd0': '0041504339464530453237333030323735', 'e5': '0100', 'f7': '0301000000', 'f8': '040202010100010000000000000000000000000000', 'f9': '0102', 'fd': '0041313736315f33304168'}""",
-            id="solix_both_packets_later_out_of_order",
             id="solix_both_packets_later_out_of_order",
         ),
         # Test that when the packets arrive in order they are parsed and device._data is populated
@@ -1596,22 +1192,18 @@ def test_payload_decryption(
         # not a telemetry packet
         pytest.param(
             C1000,
-            C1000,
             [
                 "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3a9ea3cb5b222b0152438ccd3b980eda40fbde184fa66c80c3372dad179f11cad8799858ab95696e52c7e729af87c1106343ed5be9c042c8912b14f3a0d94b32afbed432e66616e1895ba0ff5e74a6da9401117070c926631e5d7886a07bec0de35aeb689e8bb289f1d7854143dc413f25d4b57d290ca4378cfb8efc275aa779145f98956e934eaced2d1f51cef7dd21a340318bfc14fb5f90ffd33e0e484175512af33593b1f91eb9801d7c2e1ac6d56e8fe7e8883d62226484ed6f1af711d042c5e3d0c186b3f2222293bc71ccf4a156a544d5171e90ee9b6b9b8f36ae058b96e3b88",
                 "ff09390003010fc40222788d127d8418b41a81719975719a26b32734ea4e44ce244683e31928bb9a2736f9ede939567cddce6b3fb0de68116c",
                 "ff091a0003010f484a6e744378c57c16ca8ab3a40bebb6f39807",
             ],
             "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             """{'a1': '31', 'a2': '0300000000', 'a3': '0300000000', 'a4': '02720f', 'a5': '020000', 'a6': '020000', 'a7': '020000', 'a8': '020000', 'a9': '020000', 'aa': '020000', 'ab': '020000', 'ac': '020000', 'ad': '020000', 'ae': '020000', 'af': '020000', 'b0': '020100', 'b1': '020000', 'b2': '020100', 'b3': '02a600', 'b4': '020000', 'b5': '02ff01', 'b6': '02ff01', 'b7': '020000', 'b8': '029a00', 'b9': '020000', 'ba': '02a600', 'bb': '020000', 'bc': '0100', 'bd': '0122', 'be': '0100', 'bf': '0101', 'c0': '0100', 'c1': '0164', 'c2': '0100', 'c3': '0164', 'c4': '0100', 'c5': '0100', 'c6': '0100', 'c7': '0100', 'c8': '0100', 'c9': '0100', 'ca': '0100', 'cb': '0100', 'cc': '0100', 'cd': '0100', 'ce': '0100', 'cf': '0100', 'd0': '0041504339464530453237333030323735', 'e5': '0100', 'f7': '0301000000', 'f8': '040202010100010000000000000000000000000000', 'f9': '0102', 'fd': '0041313736315f33304168'}""",
-            id="solix_both_packets_irrelevant_ignored",
             id="solix_both_packets_irrelevant_ignored",
         ),
         # Test that when the packets arrive in order they are parsed and device._data is populated
         # and that once both of the next packets are received the device._data changes.
         pytest.param(
-            C1000,
             C1000,
             [
                 "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3a9ea3cb5b222b0152438ccd3b980eda40fbde184fa66c80c3372dad179f11cad8799858ab95696e52c7e729af87c1106343ed5be9c042c8912b14f3a0d94b32afbed432e66616e1895ba0ff5e74a6da9401117070c926631e5d7886a07bec0de35aeb689e8bb289f1d7854143dc413f25d4b57d290ca4378cfb8efc275aa779145f98956e934eaced2d1f51cef7dd21a340318bfc14fb5f90ffd33e0e484175512af33593b1f91eb9801d7c2e1ac6d56e8fe7e8883d62226484ed6f1af711d042c5e3d0c186b3f2222293bc71ccf4a156a544d5171e90ee9b6b9b8f36ae058b96e3b88",
@@ -1620,41 +1212,7 @@ def test_payload_decryption(
                 "ff09390003010fc40222922d054e0b6cd682ba63ba7cc0e158113a569150aa95c5a21bc3142c1ba2e95c06a7ce78547448520ae8cc1a2844fa",
             ],
             "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
             """{'a1': '31', 'a2': '0300000000', 'a3': '0300000000', 'a4': '02d80e', 'a5': '020000', 'a6': '020000', 'a7': '020000', 'a8': '020000', 'a9': '020000', 'aa': '020000', 'ab': '020000', 'ac': '020000', 'ad': '020000', 'ae': '020000', 'af': '020000', 'b0': '020100', 'b1': '020000', 'b2': '020100', 'b3': '02a600', 'b4': '020000', 'b5': '02ff01', 'b6': '02ff01', 'b7': '020000', 'b8': '029a00', 'b9': '020000', 'ba': '02a600', 'bb': '020100', 'bc': '0100', 'bd': '0122', 'be': '0100', 'bf': '0101', 'c0': '0100', 'c1': '0164', 'c2': '0100', 'c3': '0164', 'c4': '0100', 'c5': '0100', 'c6': '0100', 'c7': '0100', 'c8': '0100', 'c9': '0100', 'ca': '0100', 'cb': '0100', 'cc': '0100', 'cd': '0100', 'ce': '0100', 'cf': '0100', 'd0': '0041504339464530453237333030323735', 'e5': '0100', 'f7': '0301000000', 'f8': '040202010100010000000000000000000000000000', 'f9': '0102', 'fd': '0041313736315f33304168'}""",
-            id="solix_both_packets_with_update",
-        ),
-        # Test an Anker Prime device (single payload device) with a single telemetry packet.
-        pytest.param(
-            PrimeCharger160w,
-            [
-                "ff09da00030111430057e9a883d95e4bc95b5be2baa1c366331abb929258ab5077108dc197254092ef1372bd5a26ef6b51d61dc87082ca8e7985aacad07f64181902c70c0502de2418e366f5f700b13049d9b857e95c85c66a32d64fcf31c8eead9e025ed69c1440170cca149e038501a9544b1baa044a6a65392e154357e137d917fc834e019012a01b9bd18d5ca7dc22bdb0204b0629b3f738f34bafdc26f6bb0781cec80fe547674a6a7a341a018ce3ac81e6eb6b5110d3311db692d174fe363acec5ba606a24b92dcc95a6cdd8fee1843a26694ddd23ac74"
-            ],
-            "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
-            """{'a1': '31', 'a2': '02e805', 'a3': '020000', 'a4': '0100', 'a5': '0401a824fe0b3f0b', 'a6': '0400000000000000', 'a7': '0400000000000000', 'a8': '0103', 'a9': '0150', 'aa': '0100', 'ab': '0400000f0f0f000000', 'ac': '0401002c0100002c0100000203', 'ad': '0401002c0100002c0100000300', 'ae': '0401002c0100002c0100000300', 'af': '0100', 'b0': '0100', 'b1': '0101', 'b2': '0101', 'b3': '0101', 'b4': '04e8040000fafffbfffafffbff', 'b5': '04ffffffffffffffffffffffff', 'e0': '0408000000', 'e1': '0480034b53000000000000', 'fe': '0300000000'}""",
-            id="prime_telemetry_packet",
-        ),
-        # Test an Anker Prime power bank (single payload device) with a single telemetry packet.
-        pytest.param(
-            PrimePowerBank20k,
-            [
-                "ff098300030111430044014f704abfd87d1d38fc0d7a35a36efdaf1f9f9f1c799493804dfaa6882d789fb7aeb4d117bd2330cd63c5f13f1e4a089ce80ac2442c66c85fa1f0dcb0d6867d9a58f7a3ee8479ec124724f6d7b84d8a58939c465ffb24e43754a1889be5f8c946d82d93806765835569e75bd67cbd3ac71071159c13a83bb9"
-            ],
-            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
-            """{'a1': '31', 'a2': '044d60', 'a3': '04010000', 'a4': '0101', 'a5': '04000000', 'a6': '04000000', 'a7': '0400000000000000', 'a8': '0400000000009600ff00ffffffff00', 'a9': '0400000000000000ff00ffffffff00', 'ac': '040000000000000000', 'af': '011d', 'b0': '011e', 'b1': '020900', 'fe': '0300000000'}""",
-            id="prime_power_bank_telemetry_packet",
-        ),
-        # Test an Anker Prime device (single payload device) with a single telemetry packet
-        # from the logs of someone elses unit which for some reason transmits telemetry
-        # unencrypted
-        pytest.param(
-            PrimeCharger160w,
-            [
-                "ff09ca000301110300a10131a203024606a303020000a4020100a5080401d8459906bb0ba6080401e81300000000a7080400000000000000a8020103a9020150aa020100ab090400000000000b0b0bac0d0401002c0100002c0100000200ad0d0401002c0100002c0100000201ae0d0401002c0100002c0100000300af020100b0020100b1020100b2020101b30201ffb40d0400000000ac051573fafffbffb50d04ffffffffffffffffffffffffe0050448000000e10b0400000000000000000000fe0503000000006b"
-            ],
-            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
-            """{'a1': '31', 'a2': '024606', 'a3': '020000', 'a4': '0100', 'a5': '0401d8459906bb0b', 'a6': '0401e81300000000', 'a7': '0400000000000000', 'a8': '0103', 'a9': '0150', 'aa': '0100', 'ab': '0400000000000b0b0b', 'ac': '0401002c0100002c0100000200', 'ad': '0401002c0100002c0100000201', 'ae': '0401002c0100002c0100000300', 'af': '0100', 'b0': '0100', 'b1': '0100', 'b2': '0101', 'b3': '01ff', 'b4': '0400000000ac051573fafffbff', 'b5': '04ffffffffffffffffffffffff', 'e0': '0448000000', 'e1': '0400000000000000000000', 'fe': '0300000000'}""",
-            id="prime_telemetry_packet_plain_text",
             id="solix_both_packets_with_update",
         ),
         # Test an Anker Prime device (single payload device) with a single telemetry packet.
@@ -1721,32 +1279,17 @@ async def test_telemetry_packet_processing(
     packets: list[str],
     secret: str,
     parameters: str | None,
-    fast_sleep,
-    fast_timeouts,
-    device_class: type[SolixBLEDevice],
-    packets: list[str],
-    secret: str,
-    parameters: str | None,
 ):
     """
     Test the _process_notification function when processing telemetry
     packets end to end.
 
     :param device_class: Class of device under test.
-    :param device_class: Class of device under test.
     :param packets: List of packets to send to device.
-    :param secret: Shared secret used as AES key and IV.
     :param secret: Shared secret used as AES key and IV.
     :param parameters: Expected parameters in string form.
     """
 
-    device = device_class(MOCK_BLE_DEVICE)
-
-    negotiation_responses = (
-        NEGOTIATION_RESPONSES_PRIME
-        if issubclass(device_class, PrimeDevice)
-        else NEGOTIATION_RESPONSES_SOLIX
-    )
     device = device_class(MOCK_BLE_DEVICE)
 
     negotiation_responses = (
@@ -1759,10 +1302,8 @@ async def test_telemetry_packet_processing(
 
         # We first expect a negotiation
         for expected, response in negotiation_responses.items():
-        for expected, response in negotiation_responses.items():
             mock_bluetooth.expect_ordered(
                 bytes.fromhex(expected),
-                [bytes.fromhex(x) for x in response],
                 [bytes.fromhex(x) for x in response],
             )
 
@@ -1774,10 +1315,8 @@ async def test_telemetry_packet_processing(
         mock_bluetooth.check_assertions()
 
         device._shared_secret = bytes.fromhex(secret)
-        device._shared_secret = bytes.fromhex(secret)
 
         for packet in packets:
-            await mock_bluetooth.send_data([bytes.fromhex(packet)])
             await mock_bluetooth.send_data([bytes.fromhex(packet)])
 
     device_parameters = (
@@ -1785,81 +1324,6 @@ async def test_telemetry_packet_processing(
     )
 
     assert parameters == device_parameters, "Parameters do not match expected!"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "device_class, packets, secret, expected_logs",
-    [
-        # Telemetry packet from logs of someone elses Prime 160w charger.
-        # Interestingly this packet is not encrypted at all
-        pytest.param(
-            PrimeCharger160w,
-            [
-                "ff09ca000301110300a10131a203024606a303020000a4020100a5080401e042b105b209a6080401e81300000000a7080400000000000000a8020103a9020150aa020100ab090400000000000b0b0bac0d0401002c0100002c0100000200ad0d0401002c0100002c0100000201ae0d0401002c0100002c0100000300af020100b0020100b1020100b2020101b30201ffb40d0400000000ac051573fafffbffb50d04ffffffffffffffffffffffffe0050448000000e10b0400000000000000000000fe05030000000074"
-            ],
-            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
-            [
-                "Received non-encrypted telemetry message",
-                "Telemetry parameters: {'a1': '31', 'a2': '024606'",
-            ],
-            id="prime_160w_other",
-        ),
-    ],
-)
-async def test_generic_packet_processing(
-    caplog,
-    fast_sleep,
-    fast_timeouts,
-    device_class: type[SolixBLEDevice],
-    packets: list[str],
-    secret: str,
-    expected_logs: list[str],
-):
-    """
-    Test the _process_notification function when processing arbitrary
-    packets and check for expected log entries.
-
-    :param device_class: Class of device under test.
-    :param packets: List of packets to send to device.
-    :param secret: Shared secret used as AES key and IV.
-    :param expected_logs: List of expected entries in the debug log.
-    """
-
-    device = device_class(MOCK_BLE_DEVICE)
-
-    negotiation_responses = (
-        NEGOTIATION_RESPONSES_PRIME
-        if issubclass(device_class, PrimeDevice)
-        else NEGOTIATION_RESPONSES_SOLIX
-    )
-
-    async with MockDevice() as mock_bluetooth:
-        with caplog.at_level(logging.DEBUG):
-
-            # We first expect a negotiation
-            for expected, response in negotiation_responses.items():
-                mock_bluetooth.expect_ordered(
-                    bytes.fromhex(expected),
-                    [bytes.fromhex(x) for x in response],
-                )
-
-            # We expect the negotiations to succeed
-            assert await device.connect(), "Expected connect to return True"
-            await asyncio.sleep(0.5)
-            assert device.connected, "Expected connected to be True"
-            assert device.negotiated, "Expected connected to be True"
-            mock_bluetooth.check_assertions()
-
-            device._shared_secret = bytes.fromhex(secret)
-
-            for packet in packets:
-                await mock_bluetooth.send_data([bytes.fromhex(packet)])
-
-            for expected_log_entry in expected_logs:
-                assert (
-                    expected_log_entry in caplog.text
-                ), f"Expected to find '{expected_log_entry}' in logs but it was not found!"
 
 
 @pytest.mark.asyncio
@@ -1999,7 +1463,6 @@ async def test_generic_packet_processing(
 async def test_bad_values(
     caplog,
     device_class: type[SolixBLEDevice],
-    device_class: type[SolixBLEDevice],
     payload: str,
     mapping: dict[str, Any],
     errors: list[str],
@@ -2023,7 +1486,6 @@ async def test_bad_values(
 
     device = device_class(MOCK_BLE_DEVICE)
     parameters = device._parse_payload(bytes.fromhex(payload))
-    await device._process_telemetry(parameters)
     await device._process_telemetry(parameters)
 
     for class_property, expected_value in mapping.items():
