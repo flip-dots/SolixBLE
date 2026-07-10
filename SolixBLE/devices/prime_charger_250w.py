@@ -4,7 +4,11 @@
 
 """
 
-from ..const import DEFAULT_METADATA_FLOAT
+from ..const import (
+    DEFAULT_METADATA_BOOL,
+    DEFAULT_METADATA_FLOAT,
+    DEFAULT_METADATA_STRING,
+)
 from ..prime_device import PrimeDevice
 from ..states import PortStatus
 
@@ -272,3 +276,89 @@ class PrimeCharger250w(PrimeDevice):
             return DEFAULT_METADATA_FLOAT
 
         return self._parse_int("a9", begin=6, end=8) / 100.0
+
+    @property
+    def serial_number(self) -> str:
+        """Device serial number.
+
+        Read from the negotiation handshake; the telemetry frame does not carry
+        the serial number.
+
+        :returns: Device serial number or default str value.
+        """
+        value = (getattr(self, "_device_info", None) or {}).get("a4", b"")
+        return value.decode("ascii", "ignore") if value else DEFAULT_METADATA_STRING
+
+    @property
+    def total_power_out(self) -> float:
+        """Total output power across all six ports (W).
+
+        :returns: Sum of the per-port powers or default float value.
+        """
+        if self._data is None:
+            return DEFAULT_METADATA_FLOAT
+
+        return round(
+            self.usb_c1_power
+            + self.usb_c2_power
+            + self.usb_c3_power
+            + self.usb_c4_power
+            + self.usb_a1_power
+            + self.usb_a2_power,
+            2,
+        )
+
+    @property
+    def usb_c1_switch(self) -> bool:
+        """USB C1 port on/off switch state.
+
+        :returns: True when the port is switched on or default bool value.
+        """
+        if self._data is None:
+            return DEFAULT_METADATA_BOOL
+
+        return bool(self._parse_int("aa", begin=1, end=2))
+
+    @property
+    def usb_c2_switch(self) -> bool:
+        """USB C2 port on/off switch state.
+
+        :returns: True when the port is switched on or default bool value.
+        """
+        if self._data is None:
+            return DEFAULT_METADATA_BOOL
+
+        return bool(self._parse_int("ab", begin=1, end=2))
+
+    @property
+    def usb_c3_switch(self) -> bool:
+        """USB C3 port on/off switch state.
+
+        :returns: True when the port is switched on or default bool value.
+        """
+        if self._data is None:
+            return DEFAULT_METADATA_BOOL
+
+        return bool(self._parse_int("ac", begin=1, end=2))
+
+    @property
+    def usb_c4_switch(self) -> bool:
+        """USB C4 port on/off switch state.
+
+        :returns: True when the port is switched on or default bool value.
+        """
+        if self._data is None:
+            return DEFAULT_METADATA_BOOL
+
+        return bool(self._parse_int("ad", begin=1, end=2))
+
+    @property
+    def usba_switch(self) -> bool:
+        """USB-A ports on/off switch state (shared by both A ports).
+
+        :returns: True when the USB-A ports are switched on or default bool value.
+        """
+        if self._data is None:
+            return DEFAULT_METADATA_BOOL
+
+        return bool(self._parse_int("ae", begin=1, end=2))

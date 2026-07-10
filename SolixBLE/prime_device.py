@@ -264,6 +264,10 @@ class PrimeDevice(SolixBLEDevice):
                 decrypted_payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
                 parameters = self._parse_payload(decrypted_payload)
+                # Device identity (chip, BLE firmware, serial, MAC) is sent only
+                # in this stage-3 message, never in telemetry, so persist it for
+                # the identity properties to read.
+                self._device_info = parameters
                 _LOGGER.debug(
                     f"Parameters: {self._parameters_to_str(parameters, types=True)}"
                 )
