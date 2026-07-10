@@ -55,17 +55,17 @@ NEGOTIATION_COMMAND_6_CMD = "4027"
 #: The payload to put in the response to receiving 6th negotiation message
 NEGOTIATION_COMMAND_6_PAYLOAD = "a104f079b569a22437396562656433352d646339632d343930342d623430632d373263346538363361613130"
 
-#: The cmd to put in the first response to receiving 7th negotiation message
+#: Stage 7a starts the telemetry stream; its body matches the C1000 Gen 2
+#: subscribe (a10121). Sent via _send_command so the current session timestamp is
+#: appended: the device rejects a stale timestamp as a replay and then never
+#: streams, so this body must NOT carry a hard-coded fe04<timestamp> trailer.
 NEGOTIATION_COMMAND_7_CMD = "4200"
+NEGOTIATION_COMMAND_7_PAYLOAD = "a10121"
 
-#: The payload to put in the first response to receiving 7th negotiation message
-NEGOTIATION_COMMAND_7_PAYLOAD = "a10121fe04f079b569"
-
-#: The cmd to put in the second response to receiving 7th negotiation message
+#: Stage 7b registers the client (region + app UUID). Also sent via _send_command,
+#: so likewise no hard-coded timestamp trailer.
 NEGOTIATION_COMMAND_8_CMD = "420a"
-
-#: The payload to put in the second response to receiving 7th negotiation message
-NEGOTIATION_COMMAND_8_PAYLOAD = "a10121a203044742a3250437396562656433352d646339632d343930342d623430632d373263346538363361613130a5020101fe04f079b569"
+NEGOTIATION_COMMAND_8_PAYLOAD = "a10121a203044742a3250437396562656433352d646339632d343930342d623430632d373263346538363361613130a5020101"
 
 #: Anker Prime devices encrypt the negotiation using a static key
 NEGOTIATION_KEY = "b8ff7422955d4eb6d554a2c470280559"
@@ -421,61 +421,20 @@ class PrimeDevice(SolixBLEDevice):
                 )
                 decrypted_payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
-                parameters = self._parse_payload(decrypted_payload)
-                _LOGGER.debug(
-                    f"Parameters: {self._parameters_to_str(parameters, types=True)}"
-                )
 
-                _LOGGER.debug("Sending stage 7 response messages...")
-
-                # Packet A
-                new_payload_a = self._encrypt_payload(
-                    bytes.fromhex(NEGOTIATION_COMMAND_7_PAYLOAD)
+                # Stage 7 is the telemetry subscribe (7a) plus client registration
+                # (7b). Both MUST go through _send_command so each carries the
+                # current session timestamp: the device rejects a stale timestamp
+                # as a replay and then holds the link but never streams telemetry.
+                _LOGGER.debug("Sending stage 7 subscribe + registration...")
+                await self._send_command(
+                    bytes.fromhex(NEGOTIATION_COMMAND_7_CMD),
+                    bytes.fromhex(NEGOTIATION_COMMAND_7_PAYLOAD),
                 )
-                new_packet_a = self._build_packet(
-                    pattern=bytes.fromhex(TELEMETRY_PATTERN),
-                    cmd=bytes.fromhex(NEGOTIATION_COMMAND_7_CMD),
-                    payload=new_payload_a,
+                await self._send_command(
+                    bytes.fromhex(NEGOTIATION_COMMAND_8_CMD),
+                    bytes.fromhex(NEGOTIATION_COMMAND_8_PAYLOAD),
                 )
-                _LOGGER.debug(f"Built stage 7a response packet: {new_packet_a.hex()}")
-                await self._client.write_gatt_char(
-                    UUID_COMMAND,
-                    new_packet_a,
-                )
-
-                # Log parameters we will send if debugging (makes handshake easier to see in logs)
-                if _LOGGER.isEnabledFor(logging.DEBUG):
-                    new_parameters = self._parse_payload(
-                        bytes.fromhex(NEGOTIATION_COMMAND_7_PAYLOAD)
-                    )
-                    _LOGGER.debug(
-                        f"Stage 7a response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
-                    )
-
-                # Packet B
-                new_payload_b = self._encrypt_payload(
-                    bytes.fromhex(NEGOTIATION_COMMAND_8_PAYLOAD)
-                )
-                new_packet_b = self._build_packet(
-                    pattern=bytes.fromhex(TELEMETRY_PATTERN),
-                    cmd=bytes.fromhex(NEGOTIATION_COMMAND_8_CMD),
-                    payload=new_payload_b,
-                )
-                _LOGGER.debug(f"Built stage 7b response packet: {new_packet_b.hex()}")
-                await self._client.write_gatt_char(
-                    UUID_COMMAND,
-                    new_packet_b,
-                )
-
-                # Log parameters we will send if debugging (makes handshake easier to see in logs)
-                if _LOGGER.isEnabledFor(logging.DEBUG):
-                    new_parameters = self._parse_payload(
-                        bytes.fromhex(NEGOTIATION_COMMAND_8_PAYLOAD)
-                    )
-                    _LOGGER.debug(
-                        f"Stage 7b response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
-                    )
-
                 return
 
             case _:
@@ -486,20 +445,6 @@ class PrimeDevice(SolixBLEDevice):
     #####################
     # Packet processing #
     #####################
-
-    async def _process_telemetry_packet(
-        self, payload: bytes, cmd: bytes = None
-    ) -> None:
-        """
-        Process a telemetry packet from an Anker Prime device.
-
-        Anker Prime devices pack all telemetry data into a single packet
-        requiring no special logic to handle.
-        """
-        decrypted_payload = self._decrypt_payload(payload)
-        _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
-        parameters = self._parse_payload(decrypted_payload)
-        return await self._process_telemetry(parameters)
 
     async def _send_command(self, cmd: bytes, payload: bytes) -> None:
         """Send a command to the device.
