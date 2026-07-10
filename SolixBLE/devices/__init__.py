@@ -15,7 +15,9 @@ from .generic import Generic
 from .maggo_3in1 import MagGo3in1
 from .prime_charger_160w import PrimeCharger160w
 from .prime_charger_250w import PrimeCharger250w
+from .prime_charging_station_240w import PrimeChargingStation240w
 from .prime_power_bank_20k import PrimePowerBank20k
+from .prime_usb_charger import PrimeUsbCharger
 from .solarbank2 import Solarbank2
 from .solarbank3 import Solarbank3
 
@@ -31,7 +33,9 @@ __all__ = [
     "Solarbank3",
     "PrimeCharger160w",
     "PrimeCharger250w",
+    "PrimeChargingStation240w",
     "PrimePowerBank20k",
+    "PrimeUsbCharger",
     "MagGo3in1",
     "Generic",
 ]

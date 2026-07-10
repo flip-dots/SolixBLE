@@ -4,6 +4,7 @@
 
 """
 
+import asyncio
 import logging
 import time
 
@@ -181,7 +182,7 @@ class PrimeDevice(SolixBLEDevice):
             )
 
         await self._client.write_gatt_char(
-            UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_0)
+            UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_0), response=True
         )
 
     async def _process_negotiation(self, cmd: bytes, payload: bytes) -> None:
@@ -190,7 +191,6 @@ class PrimeDevice(SolixBLEDevice):
         """
 
         match cmd.hex():
-
             # There is a "stage 0" in which we automatically send a negotiation
             # request as soon as we establish the initial connection. That
             # should lead to the power station sending a response landing us
@@ -223,8 +223,7 @@ class PrimeDevice(SolixBLEDevice):
 
                 _LOGGER.debug("Sending stage 1 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND,
-                    bytes.fromhex(NEGOTIATION_COMMAND_1),
+                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_1)
                 )
 
             # Negotiation stage 2
@@ -252,8 +251,7 @@ class PrimeDevice(SolixBLEDevice):
 
                 _LOGGER.debug("Sending stage 2 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND,
-                    bytes.fromhex(NEGOTIATION_COMMAND_2),
+                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_2)
                 )
 
             # Negotiation stage 3
@@ -285,8 +283,7 @@ class PrimeDevice(SolixBLEDevice):
 
                 _LOGGER.debug("Sending stage 3 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND,
-                    bytes.fromhex(NEGOTIATION_COMMAND_3),
+                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_3)
                 )
 
             # Negotiation stage 4
@@ -314,8 +311,7 @@ class PrimeDevice(SolixBLEDevice):
 
                 _LOGGER.debug("Sending stage 4 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND,
-                    bytes.fromhex(NEGOTIATION_COMMAND_4),
+                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_4)
                 )
 
             # Negotiation stage 5
@@ -379,72 +375,46 @@ class PrimeDevice(SolixBLEDevice):
                     new_packet,
                 )
 
-            # Negotiations past this point are encrypted using the shared secret
-
-            # Negotiation stage 6
-            case "4822":
+            # The ECDH handshake is complete after stage 5; the device's trailing
+            # "stage 6/7" messages (4822/4827) are just acks. The registration and
+            # telemetry subscribe are post-connect commands, not responses to
+            # these -- they are sent from _post_connect once the handshake settles.
+            case "4822" | "4827":
                 _LOGGER.debug(
-                    "Entered negotiation stage 6 due to response from device!"
-                )
-                decrypted_payload = self._decrypt_payload(payload)
-                _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
-                parameters = self._parse_payload(decrypted_payload)
-                _LOGGER.debug(
-                    f"Parameters: {self._parameters_to_str(parameters, types=True)}"
-                )
-
-                _LOGGER.debug("Sending stage 6 response message...")
-
-                # Log parameters we will send if debugging (makes handshake easier to see in logs)
-                if _LOGGER.isEnabledFor(logging.DEBUG):
-                    new_parameters = self._parse_payload(
-                        bytes.fromhex(NEGOTIATION_COMMAND_6_PAYLOAD)
-                    )
-                    _LOGGER.debug(
-                        f"Stage 6 response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
-                    )
-
-                new_payload = self._encrypt_payload(
-                    bytes.fromhex(NEGOTIATION_COMMAND_6_PAYLOAD)
-                )
-                new_packet = self._build_packet(
-                    pattern=bytes.fromhex(NEGOTIATION_PATTERN),
-                    cmd=bytes.fromhex(NEGOTIATION_COMMAND_6_CMD),
-                    payload=new_payload,
-                )
-                _LOGGER.debug(f"Built stage 6 response packet: {new_packet.hex()}")
-                return await self._client.write_gatt_char(
-                    UUID_COMMAND,
-                    new_packet,
-                )
-
-            # Negotiation stage 7
-            case "4827":
-                _LOGGER.debug(
-                    "Entered negotiation stage 7 due to response from device!"
-                )
-                decrypted_payload = self._decrypt_payload(payload)
-                _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
-
-                # Stage 7 is the telemetry subscribe (7a) plus client registration
-                # (7b). Both MUST go through _send_command so each carries the
-                # current session timestamp: the device rejects a stale timestamp
-                # as a replay and then holds the link but never streams telemetry.
-                _LOGGER.debug("Sending stage 7 subscribe + registration...")
-                await self._send_command(
-                    bytes.fromhex(NEGOTIATION_COMMAND_7_CMD),
-                    bytes.fromhex(NEGOTIATION_COMMAND_7_PAYLOAD),
-                )
-                await self._send_command(
-                    bytes.fromhex(NEGOTIATION_COMMAND_8_CMD),
-                    bytes.fromhex(NEGOTIATION_COMMAND_8_PAYLOAD),
+                    "Received post-ECDH ack %s; registration/subscribe run in "
+                    "_post_connect",
+                    cmd.hex(),
                 )
                 return
 
             case _:
                 _LOGGER.warning(
-                    f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{self._parameters_to_str(parameters, types=True)}'"
+                    "Received unexpected negotiation response from device! cmd: %s",
+                    cmd.hex(),
                 )
+
+    async def _post_connect(self) -> None:
+        """Register the client and subscribe to telemetry after negotiating.
+
+        The registration (command 4027) and the telemetry subscribe (4200) are
+        post-connect commands, not responses to the device's trailing 4822/4827
+        acks. They run here, after a short settle, mirroring how the gen-2 power
+        stations subscribe from _post_connect. The subscribe goes through
+        _send_command so it carries the live session timestamp (a stale one is
+        rejected as a replay, which blocks the stream). Overridden by models whose
+        post-connect sequence differs (e.g. the 240W charging station).
+        """
+        await asyncio.sleep(1)
+        registration = self._build_packet(
+            pattern=bytes.fromhex(NEGOTIATION_PATTERN),
+            cmd=bytes.fromhex(NEGOTIATION_COMMAND_6_CMD),
+            payload=self._encrypt_payload(bytes.fromhex(NEGOTIATION_COMMAND_6_PAYLOAD)),
+        )
+        await self._client.write_gatt_char(UUID_COMMAND, registration)
+        await self._send_command(
+            bytes.fromhex(NEGOTIATION_COMMAND_7_CMD),
+            bytes.fromhex(NEGOTIATION_COMMAND_7_PAYLOAD),
+        )
 
     #####################
     # Packet processing #
