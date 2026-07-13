@@ -24,7 +24,7 @@ class PrimeChargingStation240w(PrimeUsbCharger):
         live capture with an AC load.
     """
 
-    _EXPECTED_TELEMETRY_LENGTH: int = 198
+    _EXPECTED_TELEMETRY_LENGTH: int = 253
 
     async def _post_connect(self) -> None:
         """No post-connect subscribe yet -- the station's enable sequence is unknown.

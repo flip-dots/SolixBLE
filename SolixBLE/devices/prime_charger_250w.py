@@ -21,7 +21,7 @@ class PrimeCharger250w(PrimeUsbCharger):
     switch states (fields ``aa``-``ae``).
     """
 
-    _EXPECTED_TELEMETRY_LENGTH: int = 198
+    _EXPECTED_TELEMETRY_LENGTH: int = 253
 
     @property
     def total_power_out(self) -> float:
