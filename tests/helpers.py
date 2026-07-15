@@ -8,7 +8,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any
 from unittest import mock
 
 from bleak import BleakClient
@@ -29,7 +29,7 @@ class RequestResponse:
     Name of request to produce more useful error messages.
     """
 
-    expected: Union[bytes, None]
+    expected: bytes | None
     """
     The bytes expected by this request. Use none to accept any bytes.
     """
@@ -105,19 +105,22 @@ class MockDevice:
 
             # We give it a name so we can tell the difference between them in logs
             mock_bleak_client = mock.AsyncMock(
-                name=f"bleak_client_{len(self._mock_bleak_clients)}"
+                name=f"bleak_client_{len(self._mock_bleak_clients)}",
             )
 
             # Set functions/properties
             mock_bleak_client.write_gatt_char.side_effect = self.write_gatt_char
             mock_bleak_client.start_notify.side_effect = self.start_notify
+            # Emulate an Anker 256-byte ATT MTU so fragment reassembly (which gates on
+            # the live ``mtu_size - 3`` notification cap) behaves as it does on device.
+            mock_bleak_client.mtu_size = 256
             type(mock_bleak_client).is_connected = mock.PropertyMock(
-                side_effect=lambda: self._is_connected
+                side_effect=lambda: self._is_connected,
             )
 
             # Add it to the list of all bleak clients
             self._mock_bleak_clients.append(
-                (mock_bleak_client, [kwargs["disconnected_callback"]], [])
+                (mock_bleak_client, [kwargs["disconnected_callback"]], []),
             )
 
             # Set this as the most current bleak client and return it
@@ -161,7 +164,9 @@ class MockDevice:
                 callback(bleak_client)
 
     def expect_ordered(
-        self, value: Union[bytes, None] = None, response: list[bytes] = []
+        self,
+        value: bytes | None = None,
+        response: list[bytes] = [],
     ):
         """
         Expect an ordered request to be made to the mock device with
@@ -175,8 +180,10 @@ class MockDevice:
         """
         self._assertions.append(
             RequestResponse(
-                name=f"num {len(self._assertions)}", expected=value, response=response
-            )
+                name=f"num {len(self._assertions)}",
+                expected=value,
+                response=response,
+            ),
         )
 
     def expect_ordered_all(self, requests: list[RequestResponse]):
@@ -215,7 +222,7 @@ class MockDevice:
             for callback in n_callbacks:
                 for packet in data:
                     _LOGGER.debug(
-                        f"Mock device sending '{packet.hex()}' to client '{client}' for callback '{callback}'..."
+                        f"Mock device sending '{packet.hex()}' to client '{client}' for callback '{callback}'...",
                     )
                     # Handle is not used
                     await callback(None, packet)
@@ -224,7 +231,10 @@ class MockDevice:
                 await asyncio.sleep(0.1)
 
     async def write_gatt_char(
-        self, char_specifier: str, data: bytes, response: bool = False
+        self,
+        char_specifier: str,
+        data: bytes,
+        response: bool = False,
     ):
         """
         Patched version of the bleak clients write_gatt_char function
@@ -244,15 +254,15 @@ class MockDevice:
             request_response = self._assertions[self._position]
         except IndexError:
             print(self._assertions)
-            assert (
-                False
-            ), f"Received an unexpected request '{data.hex()}'. Number: {self._position+1}, Num expected: {len(self._assertions)}"
+            assert False, (
+                f"Received an unexpected request '{data.hex()}'. Number: {self._position + 1}, Num expected: {len(self._assertions)}"
+            )
 
         if request_response.expected is not None:
             # Assert it matches
-            assert (
-                request_response.expected == data
-            ), f"Expected bytes {request_response.expected.hex()}' for request '{request_response.name}' ({self._position+1}) but got '{data.hex()}'!"
+            assert request_response.expected == data, (
+                f"Expected bytes {request_response.expected.hex()}' for request '{request_response.name}' ({self._position + 1}) but got '{data.hex()}'!"
+            )
 
         # Increment position
         self._position = self._position + 1
@@ -273,9 +283,9 @@ class MockDevice:
         Check that all specified requests have been made by the module.
         """
         for i, item in enumerate(self._assertions):
-            assert (
-                item.called
-            ), f"Request '{item.name}' ({i}) with expected bytes '{item.expected.hex()}' was not called!"
+            assert item.called, (
+                f"Request '{item.name}' ({i}) with expected bytes '{item.expected.hex()}' was not called!"
+            )
 
     async def __aexit__(self, *exc):
         """
