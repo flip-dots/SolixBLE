@@ -27,16 +27,10 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 from cryptography.hazmat.primitives.padding import PKCS7
 
 from .const import (
-    BASE_TIMESTAMP,
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
     DISCONNECT_TIMEOUT,
-    NEGOTIATION_COMMAND_0,
-    NEGOTIATION_COMMAND_1,
-    NEGOTIATION_COMMAND_2,
-    NEGOTIATION_COMMAND_3,
     NEGOTIATION_COMMAND_4,
-    NEGOTIATION_COMMAND_5,
     NEGOTIATION_RESPONSE_TIMEOUT,
     NEGOTIATION_TIMEOUT,
     PRIVATE_KEY,
@@ -48,6 +42,13 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+#: Packet pattern for the cleartext negotiation stages (the ``0xxx`` commands). Each
+#: stage carries a live ``a1`` timestamp and no client UUID: newer base firmware (e.g.
+#: C1000 G2 FW 1.1.4.6, and the A91B2 station) drops the link on the stale replayed
+#: values older firmware accepted. Verified against the A91B2, which negotiates with
+#: ``a104`` + timestamp alone.
+_NEGOTIATION_PATTERN = bytes.fromhex("030001")
+
 
 class SolixBLEDevice:
     """Solix BLE device object."""
@@ -56,6 +57,13 @@ class SolixBLEDevice:
     #: override this if their model uses different telemetry command codes
     #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
     _TELEMETRY_COMMANDS: tuple[str, ...] = ("c402", "4300", "c405")
+
+    #: Telemetry command codes whose payload is protobuf, not the 1-byte-tag TLV
+    #: format :meth:`_parse_payload` understands (e.g. the C2000 G2's ``c490``
+    #: device-summary post). They are still reassembled and decrypted -- so a
+    #: consumer that understands the frame can decode the cleartext -- but the base
+    #: skips TLV-parsing them, which would misread the protobuf varint tags.
+    _PROTOBUF_TELEMETRY_COMMANDS: tuple[str, ...] = ()
 
     #: Fixed ff09-frame overhead between the on-wire notification value and the
     #: ``payload`` that :meth:`_split_packet` returns: ``ff09`` (2) + length (2) +
@@ -76,6 +84,7 @@ class SolixBLEDevice:
         self._fragment_buffers: dict[bytes, dict[int, bytes]] = {}
         self._fragment_totals: dict[bytes, int] = {}
         self._data: dict[str, bytes] | None = None
+        self._summary: dict[str, object] = {}
         self._last_data_timestamp: datetime | None = None
         self._last_packet_timestamp: datetime | None = None
         self._negotiation_timestamp: float | None = None
@@ -104,11 +113,50 @@ class SolixBLEDevice:
         """
         self._state_changed_callbacks.remove(function)
 
+    @staticmethod
+    def _ts() -> str:
+        """Current unix time as a 4-byte little-endian hex string.
+
+        Used as the live replay-protection timestamp in the negotiation and session
+        commands; newer firmware rejects a stale (frozen) value and drops the link.
+        """
+        return int(time.time()).to_bytes(4, "little").hex()
+
+    @staticmethod
+    def _local_posix_tz() -> str:
+        """Local timezone as a full POSIX TZ string (e.g. ``EST5EDT,M3.2.0,M11.1.0``).
+
+        Sent in the stage-5 confer. The complete rule string, including the DST
+        transition dates, is read from the system zoneinfo file's POSIX footer
+        (TZif v2+ trailer); it falls back to abbreviations + offset without the
+        transition rules only when that file can't be read (e.g. non-Unix hosts).
+        """
+        try:
+            with open("/etc/localtime", "rb") as tzfile:
+                data = tzfile.read()
+            if footer := data[data.rfind(b"\n", 0, -1) + 1 : -1].decode():
+                return footer
+        except OSError:
+            pass
+        std, dst = time.tzname
+        offset = time.timezone // 3600
+        return f"{std}{offset}{dst}" if time.daylight else f"{std}{offset}"
+
+    def _negotiation_packet(self, cmd: str, extra: str = "") -> bytes:
+        """Build a cleartext negotiation frame carrying a live timestamp.
+
+        :param cmd: 2-byte command hex (e.g. ``0001``).
+        :param extra: Optional trailing TLV hex appended after the timestamp.
+        :returns: Full packet; :meth:`_build_packet` adds header/length/checksum.
+        """
+        payload = bytes.fromhex("a104" + self._ts() + extra)
+        return self._build_packet(_NEGOTIATION_PATTERN, bytes.fromhex(cmd), payload)
+
     async def _initiate_negotiations(self) -> None:
-        """Send the negotiation initiation command."""
+        """Send the negotiation initiation command with a live timestamp."""
         await self._client.write_gatt_char(
             UUID_COMMAND,
-            bytes.fromhex(NEGOTIATION_COMMAND_0),
+            self._negotiation_packet("0001"),
             response=True,
         )
 
@@ -306,6 +354,18 @@ class SolixBLEDevice:
         :returns: Timestamp of last update or None.
         """
         return self._last_data_timestamp
+
+    @property
+    def summary(self) -> dict[str, object]:
+        """Fields from the latest protobuf device-summary frame, if any.
+
+        Populated from a ``_PROTOBUF_TELEMETRY_COMMANDS`` frame (e.g. the C2000 G2's
+        ``c490``) by :func:`SolixBLE.parsing.walk_protobuf`, keyed by protobuf
+        ``.path``. Empty until such a frame is received.
+
+        :returns: Mapping of ``.path`` to value.
+        """
+        return self._summary
 
     def _parse_int(
         self,
@@ -631,6 +691,14 @@ class SolixBLEDevice:
             )
             return None
         _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
+        # Protobuf telemetry (e.g. the C2000 G2's c490 device summary) is not the
+        # 1-byte-tag TLV format _parse_payload understands. Walk it into a `.path`
+        # field map (see :mod:`SolixBLE.parsing`), exposed via :attr:`summary`, rather
+        # than TLV-parsing it -- which would misread the varint tags.
+        if cmd is not None and cmd.hex() in self._PROTOBUF_TELEMETRY_COMMANDS:
+            self._summary = walk_protobuf(decrypted_payload)
+            _LOGGER.debug(f"Protobuf summary ({len(self._summary)} fields)")
+            return None
         parameters = self._parse_payload(decrypted_payload)
         return await self._process_telemetry(parameters)
 
@@ -746,10 +814,11 @@ class SolixBLEDevice:
                     _LOGGER.debug(
                         f"Decrypted payload: {decrypted_payload.hex()}",
                     )
-                    parameters = self._parse_payload(decrypted_payload)
-                    _LOGGER.debug(
-                        f"Parameters: {self._parameters_to_str(parameters, types=True)}",
-                    )
+                    # Do NOT TLV-parse unknown frames: some (e.g. the C2000's c490
+                    # device summary) are protobuf, not the 1-byte-tag TLV format, so
+                    # _parse_payload would misread the varint tags and log an error
+                    # per frame. The decrypted cleartext above is the useful output;
+                    # a consumer that understands the frame decodes it.
                 except Exception:
                     _LOGGER.exception(
                         "Exception decrypting unknown message type",
@@ -779,7 +848,7 @@ class SolixBLEDevice:
                 _LOGGER.debug("Sending stage 1 response message...")
                 return await self._client.write_gatt_char(
                     UUID_COMMAND,
-                    bytes.fromhex(NEGOTIATION_COMMAND_1),
+                    self._negotiation_packet("0003", "a30120a40200f0"),
                 )
 
             # Negotiation stage 2
@@ -792,7 +861,7 @@ class SolixBLEDevice:
                 _LOGGER.debug("Sending stage 2 response message...")
                 return await self._client.write_gatt_char(
                     UUID_COMMAND,
-                    bytes.fromhex(NEGOTIATION_COMMAND_2),
+                    self._negotiation_packet("0029"),
                 )
 
             # Negotiation stage 3
@@ -806,7 +875,7 @@ class SolixBLEDevice:
                 _LOGGER.debug("Sending stage 3 response message...")
                 return await self._client.write_gatt_char(
                     UUID_COMMAND,
-                    bytes.fromhex(NEGOTIATION_COMMAND_3),
+                    self._negotiation_packet("0005", "a30120a40200f0a50140"),
                 )
 
             # Negotiation stage 4
@@ -849,10 +918,24 @@ class SolixBLEDevice:
                 self._shared_secret = private_key.exchange(ECDH(), device_public_key)
                 _LOGGER.debug(f"Shared secret: {self._shared_secret.hex()}")
 
-                _LOGGER.debug("Sending stage 5 response message...")
+                # Send the 4022 confer built live (CBC-encrypted with the negotiated
+                # secret) instead of replaying the frozen NEGOTIATION_COMMAND_5: newer
+                # firmware rejects the stale timestamp. Structure mirrors the A91B2
+                # station's CBC confer -- a1 timestamp, a3/a5 flags, local timezone.
+                _LOGGER.debug("Sending stage 5 (confer) response message...")
+                confer = bytes.fromhex(
+                    "a104"
+                    + self._ts()
+                    + "a30440380000a516"
+                    + self._local_posix_tz().encode().hex(),
+                )
                 return await self._client.write_gatt_char(
                     UUID_COMMAND,
-                    bytes.fromhex(NEGOTIATION_COMMAND_5),
+                    self._build_packet(
+                        _NEGOTIATION_PATTERN,
+                        bytes.fromhex("4022"),
+                        self._encrypt_payload(confer),
+                    ),
                 )
 
             # Negotiation stage 6 (Optional)
@@ -889,18 +972,9 @@ class SolixBLEDevice:
         if not self.negotiated:
             raise ConnectionError("Not connected to device")
 
-        # Commands include a timestamp in the payload to prevent replay attacks
-        # and that timestamp is set during negotiations
-        time_passed = int(time.time() - self._negotiation_timestamp)
-        base_timestamp = int.from_bytes(
-            bytes.fromhex(BASE_TIMESTAMP),
-            byteorder="little",
-        )
-        new_timestamp = (base_timestamp + time_passed).to_bytes(
-            length=4,
-            byteorder="little",
-        )
-        new_payload = payload + bytes.fromhex("fe0503") + new_timestamp
+        # Commands carry a live timestamp in the payload to prevent replay attacks;
+        # newer firmware rejects a stale one, which blocks the telemetry stream.
+        new_payload = payload + bytes.fromhex("fe0503") + bytes.fromhex(self._ts())
         await self._send_encrypted_packet(cmd, new_payload)
 
     def _build_packet(self, pattern: bytes, cmd: bytes, payload: bytes) -> bytes:
@@ -1146,6 +1220,7 @@ class SolixBLEDevice:
 
         if reset_data:
             self._data = None
+            self._summary = {}
             self._last_data_timestamp = None
 
         self._fragment_buffers = {}

@@ -124,6 +124,7 @@ class DisplayTimeout(Enum):
     #: 1800 seconds (30m).
     S1800 = 1800
 
+
 class TemperatureUnit(Enum):
     """The status of the temperature unit of the device."""
 
@@ -135,6 +136,7 @@ class TemperatureUnit(Enum):
 
     #: Display unit is Fahrenheit.
     FAHRENHEIT = 1
+
 
 class GridStatus(Enum):
     """The grid connection status."""

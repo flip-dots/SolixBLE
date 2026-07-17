@@ -26,7 +26,11 @@ from tests.helpers import MockDevice
     ],
 )
 async def test_automatic_retry(
-    fast_sleep, fast_timeouts, device_class: type[SolixBLEDevice], negotiation: dict
+    fast_sleep,
+    fast_timeouts,
+    frozen_time,
+    device_class: type[SolixBLEDevice],
+    negotiation: dict,
 ):
     """
     Test the automatic retrying of a lost connection when the
@@ -41,7 +45,6 @@ async def test_automatic_retry(
     """
 
     async with MockDevice() as mock_bluetooth:
-
         device = device_class(MOCK_BLE_DEVICE)
 
         def my_callback(*args, **kwargs):
@@ -100,6 +103,7 @@ async def test_automatic_retry(
 async def test_automatic_retry_timeout(
     fast_sleep,
     fast_timeouts,
+    frozen_time,
     device_class: type[SolixBLEDevice],
     negotiation: dict,
 ):
@@ -119,7 +123,6 @@ async def test_automatic_retry_timeout(
     """
 
     async with MockDevice() as mock_bluetooth:
-
         device = device_class(MOCK_BLE_DEVICE)
 
         num_calls = 0
@@ -190,6 +193,7 @@ async def test_automatic_retry_timeout(
 async def test_disconnect(
     fast_timeouts,
     fast_sleep,
+    frozen_time,
     device_class: type[SolixBLEDevice],
     negotiation: dict,
 ):
@@ -205,22 +209,21 @@ async def test_disconnect(
     """
 
     async with MockDevice() as mock_bluetooth:
-
         device = device_class(MOCK_BLE_DEVICE)
 
         async def assert_still_disconnected():
             """Assert that device is still disconnected."""
-            for i in range(0, 100):
+            for i in range(100):
                 await asyncio.sleep(1)
-                assert (
-                    not device.connected
-                ), f"Expected connected to be False after {i} seconds"
-                assert (
-                    not device.negotiated
-                ), f"Expected negotiated to be False after {i} seconds"
-                assert (
-                    device._client is None
-                ), f"Expected client to be None after {i} seconds"
+                assert not device.connected, (
+                    f"Expected connected to be False after {i} seconds"
+                )
+                assert not device.negotiated, (
+                    f"Expected negotiated to be False after {i} seconds"
+                )
+                assert device._client is None, (
+                    f"Expected client to be None after {i} seconds"
+                )
 
         def my_callback(*args, **kwargs):
             """We expect this to not be called."""
