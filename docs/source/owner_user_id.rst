@@ -47,13 +47,13 @@ which is why either can be used to recover it.
 Method 1: anker-solix-api (recommended)
 ---------------------------------------
 
-`anker-solix-api <https://github.com/thomluther/anker-solix-api>`_ is a Python client for
+`anker-solix-api <https://github.com/thomluther/anker-solix-api>`__ is a Python client for
 the Anker cloud. Logging in once returns your ``user_id``. This needs only your Anker
 account credentials -- no phone, no rooted device.
 
 Requirements:
 
-- `anker-solix-api <https://pypi.org/project/anker-solix-api/>`_ (``pip install anker-solix-api``)
+- `anker-solix-api <https://pypi.org/project/anker-solix-api/>`__ (``pip install anker-solix-api``)
 - Your Anker account email and password
 
 .. code-block:: python
