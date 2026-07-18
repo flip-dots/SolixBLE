@@ -61,20 +61,26 @@ def _is_protobuf_message(sub: bytes) -> bool:
 
 
 def walk_protobuf(
-    buf: bytes, prefix: str = "", out: dict[str, object] | None = None
+    buf: bytes,
+    prefix: str = "",
+    out: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Flatten a protobuf(-like) blob to a ``.field.subfield`` -> value map.
 
     Repeated tags keep wire order (occurrence index appended as ``#n``) and every field
     is addressed by its ``.path``, so byte offsets never matter -- a leaf value crossing
     a varint byte boundary grows in place without shifting anything after it.
-    Length-delimited fields that themselves parse cleanly as a sub-message are recursed
-    into; otherwise they are kept as an ASCII string (if fully printable) or hex.
+    Length-delimited fields that themselves parse cleanly as a sub-message are recorded
+    as their byte length **and** recursed into (so the container and its leaves both
+    appear); otherwise they are kept as an ASCII string (if fully printable) or hex. A
+    wire-type 3/4 group marker is recorded as ``None`` and stops the walk. Every field
+    is recorded -- silently dropping containers under-counts the message, which is a
+    wrong decode.
 
     :param buf: The (decrypted, reassembled) protobuf payload.
     :param prefix: Path prefix used during recursion.
     :param out: Accumulator dict used during recursion.
-    :returns: Mapping of ``.path`` to value (int, str or hex str).
+    :returns: Mapping of ``.path`` to value (int, str, hex str or None).
     """
     if out is None:
         out = {}
@@ -96,6 +102,7 @@ def walk_protobuf(
             sub = buf[pos : pos + length]
             pos += length
             if length and _is_protobuf_message(sub) and any(sub):
+                out[path] = length  # container: record its length, then its fields
                 walk_protobuf(sub, path, out)
             elif sub and all(32 <= b < 127 for b in sub):
                 out[path] = sub.decode("ascii")
@@ -108,6 +115,7 @@ def walk_protobuf(
             out[path] = int.from_bytes(buf[pos : pos + 8], "little")
             pos += 8
         else:
+            out[path] = None  # group marker (wire type 3/4): record and stop
             break
     return out
 

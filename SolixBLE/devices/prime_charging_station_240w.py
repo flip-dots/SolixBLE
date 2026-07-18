@@ -59,10 +59,6 @@ class PrimeChargingStation240w(PrimeUsbCharger):
     ``a4``). Verified on hardware -- the station streams with no owner user_id.
     """
 
-    #: The station streams the full snapshot on ``4a00`` and the ~1/s port stream on
-    #: ``4303``; ``4302`` is the switch-change ack (only after a ``4207``, never sent).
-    _TELEMETRY_COMMANDS: tuple[str, ...] = ("4a00", "4303", "4302")
-
     #: Local timezone string the app sends in the ``4022`` confer.
     _TIMEZONE = "EST5EDT,M3.2.0,M11.1.0"
 
@@ -70,30 +66,6 @@ class PrimeChargingStation240w(PrimeUsbCharger):
     #: :class:`PrimeDevice`'s AES-GCM.
     _encrypt_payload = SolixBLEDevice._encrypt_payload
     _decrypt_payload = SolixBLEDevice._decrypt_payload
-
-    #: Where each port lives in the ``4a00`` full snapshot (msgtype ``0a00``); the
-    #: inherited ``usb_c*``/``usb_a*`` properties read these tags from :attr:`_data`.
-    _SNAPSHOT_PORT_TAGS = {
-        "usb_c1": "a4",
-        "usb_c2": "a5",
-        "usb_c3": "a6",
-        "usb_c4": "a7",
-        "usb_a1": "a8",
-        "usb_a2": "a9",
-    }
-    #: Where the same ports live in the ``4303`` stream (msgtype ``0303``) -- one tag
-    #: earlier; remapped onto the snapshot tags so both frames feed one property set.
-    _STREAM_PORT_TAGS = {
-        "usb_c1": "a2",
-        "usb_c2": "a3",
-        "usb_c3": "a4",
-        "usb_c4": "a5",
-        "usb_a1": "a6",
-        "usb_a2": "a7",
-    }
-
-    #: Command of the telemetry frame currently being processed (routing hint).
-    _routing_cmd: str | None = None
 
     # ------------------------------------------------------------------ helpers
 
@@ -233,44 +205,6 @@ class PrimeChargingStation240w(PrimeUsbCharger):
             "420b",
             bytes.fromhex("a10121fe0503" + self._ts()),
         )
-
-    # --------------------------------------------------------------- telemetry
-
-    async def _process_telemetry_packet(
-        self,
-        payload: bytes,
-        cmd: bytes = None,
-    ) -> None:
-        """Tag the frame so :meth:`_process_telemetry` can tell ``4a00`` from ``4303``.
-
-        The base reassembles and length-gates every session frame (SolixBLE #42) --
-        including the station's frag-byte-less single ``4a00``/``4303`` notifications
-        -- so this only records which telemetry command produced the payload. The two
-        frames carry the six ports at different tags, and :meth:`_process_telemetry`
-        uses this hint to remap them onto one property set.
-        """
-        self._routing_cmd = bytes(cmd).hex() if cmd else None
-        return await super()._process_telemetry_packet(payload, cmd)
-
-    async def _process_telemetry(self, parameters: dict[str, bytes]) -> None:
-        """Normalise both telemetry frames onto the one (snapshot) port view.
-
-        The two frames tag the same six ports differently (``4a00`` at ``a4``-``a9``,
-        ``4303`` at ``a2``-``a7``). Rather than expose that as two property families,
-        the ``4303`` stream is remapped onto the snapshot tags and merged into
-        :attr:`_data`, so the inherited ``usb_c*``/``usb_a*`` properties always read
-        the freshest of either frame. The merge preserves the ``4a00``-only fields
-        (``aa``/``ab`` AC switches) between snapshots. ``4302`` (switch ack) is ignored.
-        """
-        if self._routing_cmd == "4303":
-            merged = dict(self._data or {})
-            for port, snapshot_tag in self._SNAPSHOT_PORT_TAGS.items():
-                stream_tag = self._STREAM_PORT_TAGS[port]
-                if stream_tag in parameters:
-                    merged[snapshot_tag] = parameters[stream_tag]
-            await super()._process_telemetry(merged)
-        elif self._routing_cmd == "4a00":
-            await super()._process_telemetry(parameters)
 
     # ------------------------------------------------- 4a00 snapshot additions
 

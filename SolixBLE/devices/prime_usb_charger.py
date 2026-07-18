@@ -18,8 +18,69 @@ class PrimeUsbCharger(PrimeDevice):
     AC-outlet switches on the 240W station).
     """
 
-    #: Prime chargers stream telemetry on command ``ca00`` (msgtype ``0a00``).
-    _TELEMETRY_COMMANDS: tuple[str, ...] = ("ca00",)
+    #: Prime chargers report per-port telemetry on two frame families: a ``0a00``
+    #: snapshot (``ca00`` on the A2345 charger, ``4a00`` on the A91B2 station) with the
+    #: ports at ``a4``-``a9``, and a ~1/s ``0303`` stream (``4303``) with the same ports
+    #: one tag earlier (``a2``-``a7``). ``4302`` is the switch-change ack.
+    _TELEMETRY_COMMANDS: tuple[str, ...] = ("ca00", "4a00", "4303", "4302")
+
+    #: Command of the telemetry frame currently being processed -- a routing hint set
+    #: by :meth:`_process_telemetry_packet`, read by :meth:`_process_telemetry`.
+    _routing_cmd: str | None = None
+
+    #: Where each port lives in the ``0a00`` snapshot (``ca00``/``4a00``) -- the layout
+    #: the inherited ``usb_c*``/``usb_a*`` properties read from :attr:`_data`.
+    _SNAPSHOT_PORT_TAGS = {
+        "usb_c1": "a4",
+        "usb_c2": "a5",
+        "usb_c3": "a6",
+        "usb_c4": "a7",
+        "usb_a1": "a8",
+        "usb_a2": "a9",
+    }
+    #: Where the same ports live in the ``0303`` stream (``4303``) -- one tag earlier;
+    #: remapped onto the snapshot tags so both frames feed one property set.
+    _STREAM_PORT_TAGS = {
+        "usb_c1": "a2",
+        "usb_c2": "a3",
+        "usb_c3": "a4",
+        "usb_c4": "a5",
+        "usb_a1": "a6",
+        "usb_a2": "a7",
+    }
+
+    async def _process_telemetry_packet(
+        self,
+        payload: bytes,
+        cmd: bytes = None,
+    ) -> None:
+        """Record which telemetry command produced the payload, then decode it.
+
+        The ``0303`` stream and the ``0a00`` snapshot carry the six ports at
+        different tags; :meth:`_process_telemetry` uses this hint to remap them onto
+        the one snapshot layout the port properties read.
+        """
+        self._routing_cmd = bytes(cmd).hex() if cmd else None
+        return await super()._process_telemetry_packet(payload, cmd)
+
+    async def _process_telemetry(self, parameters: dict[str, bytes]) -> None:
+        """Normalise the stream and snapshot frames onto one port view.
+
+        The ``0303`` stream (``a2``-``a7``) is remapped onto the snapshot tags
+        (``a4``-``a9``) and merged into :attr:`_data`, so the ``usb_c*``/``usb_a*``
+        properties always read the freshest of either frame while snapshot-only fields
+        (the port switches) persist between streamed updates. ``4302`` (the bare
+        switch-change ack) carries no port data and is ignored.
+        """
+        if self._routing_cmd == "4303":
+            merged = dict(self._data or {})
+            for port, snapshot_tag in self._SNAPSHOT_PORT_TAGS.items():
+                stream_tag = self._STREAM_PORT_TAGS[port]
+                if stream_tag in parameters:
+                    merged[snapshot_tag] = parameters[stream_tag]
+            await super()._process_telemetry(merged)
+        elif self._routing_cmd in ("ca00", "4a00"):
+            await super()._process_telemetry(parameters)
 
     @property
     def serial_number(self) -> str:
