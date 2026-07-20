@@ -4,20 +4,47 @@
 
 """
 
-from ..const import DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_STRING
-from ..device import SolixBLEDevice
+import logging
+import struct
+import time
+
+from bleak.backends.device import BLEDevice
+from cryptography.hazmat.primitives.asymmetric import ec
+
+from ..const import DEFAULT_METADATA_FLOAT, UUID_COMMAND
+from ..prime_device import PrimeDevice
+from ..sb3_protocol import (
+    SB3_4001,
+    SB3_4003,
+    SB3_4005,
+    SB3_4029,
+    SB3_4822_SUCCESS_PLAINTEXT,
+    SB3_SET_MAX_LOAD_COMMAND,
+    SB3_SET_SCHEDULE_COMMAND,
+    aes_gcm_decrypt,
+    build_account_auth_packet,
+    build_max_load_plaintext,
+    build_public_key_packet,
+    build_schedule_plaintext,
+    build_security_auth_packet,
+    build_telemetry_request_packet,
+    decode_public_key,
+    validate_account_id,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 
-class Solarbank3(SolixBLEDevice):
+class Solarbank3(PrimeDevice):
     """
     SolarBank 3 Power Station.
 
     Use this class to connect and monitor a Solarbank 3 power station.
     This model is also known as the A17C5.
 
-    .. note::
-        This model was added using data from anker-solix-api. It has not been
-        tested!
+    The implementation has been tested against an Anker Solarbank 3 E2700 Pro
+    (A17C5) running firmware 1.0.7.1.  The account identifier is passed to the
+    constructor because the device validates it during local BLE authentication.
 
     .. note::
         It should be possible to add more sensors. I think devices with lots of
@@ -28,7 +55,144 @@ class Solarbank3(SolixBLEDevice):
 
     """
 
+    _TELEMETRY_COMMANDS: tuple[str, ...] = ("c405", "c840")
     _EXPECTED_TELEMETRY_LENGTH: int = 253
+
+    def __init__(self, ble_device: BLEDevice, anker_user_id: str) -> None:
+        """Initialise an A17C5 device with its Anker account identifier."""
+        super().__init__(ble_device)
+        self._anker_user_id = validate_account_id(anker_user_id)
+        self._sb3_session_ready = False
+        self._sb3_private_key = ec.generate_private_key(ec.SECP256R1())
+
+    @property
+    def negotiated(self) -> bool:
+        """Return True only after the SB3 authentication sequence is complete."""
+        return self.connected and self._sb3_session_ready
+
+    def _reset_session(self, reset_data: bool = True) -> None:
+        """Reset the inherited session and the SB3-specific authentication state."""
+        super()._reset_session(reset_data)
+        self._sb3_session_ready = False
+
+    def _decrypt_payload(self, payload: bytes) -> bytes:
+        """Authenticate and decrypt an A17C5 session payload without fallback."""
+        if self._shared_secret is None:
+            raise ConnectionError("Solarbank 3 session key is not available")
+        return aes_gcm_decrypt(
+            self._shared_secret[:16],
+            self._shared_secret[16:28],
+            payload,
+        )
+
+    async def _initiate_negotiations(self) -> None:
+        """Start the A17C5 secure-conference handshake."""
+        self._sb3_private_key = ec.generate_private_key(ec.SECP256R1())
+        await self._client.write_gatt_char(UUID_COMMAND, SB3_4001, response=False)
+
+    async def _process_negotiation(self, cmd: bytes, payload: bytes) -> None:
+        """Advance the A17C5 handshake and start encrypted telemetry."""
+        command = cmd.hex()
+        if command == "4801":
+            reply = SB3_4003
+        elif command == "4803":
+            reply = SB3_4029
+        elif command == "4829":
+            reply = SB3_4005
+        elif command == "4805":
+            reply = build_public_key_packet(self._sb3_private_key.public_key())
+        elif command == "4821":
+            encrypted = aes_gcm_decrypt(
+                bytes.fromhex("b8ff7422955d4eb6d554a2c470280559"),
+                bytes.fromhex("6ba3e3f2f3a60f2971ce5d1f"),
+                payload,
+            )
+            if not encrypted.startswith(b"\x00\xa1\x40"):
+                raise ValueError("unexpected Solarbank 3 4821 public-key payload")
+            device_public_key = decode_public_key(encrypted[3:])
+            self._shared_secret = self._sb3_private_key.exchange(
+                ec.ECDH(), device_public_key
+            )
+            self._negotiation_timestamp = time.time()
+            reply = build_account_auth_packet(
+                self._anker_user_id,
+                self._shared_secret[:16],
+                self._shared_secret[16:28],
+            )
+        elif command == "4822":
+            plaintext = self._decrypt_payload(payload)
+            if plaintext != SB3_4822_SUCCESS_PLAINTEXT:
+                raise ValueError(
+                    f"Solarbank 3 identity authentication failed: {plaintext.hex()}"
+                )
+            reply = build_security_auth_packet(
+                self._anker_user_id,
+                self._shared_secret[:16],
+                self._shared_secret[16:28],
+            )
+        elif command == "4827":
+            # Authentication is bound to the GCM tag; the acknowledgement body
+            # is not otherwise used by the device implementation.
+            self._decrypt_payload(payload)
+            self._sb3_session_ready = True
+            reply = build_telemetry_request_packet(
+                self._shared_secret[:16],
+                self._shared_secret[16:28],
+                int.from_bytes(bytes.fromhex("ef79b569"), "little")
+                + int(time.time() - self._negotiation_timestamp),
+            )
+        else:
+            _LOGGER.warning("Unexpected Solarbank 3 negotiation command: %s", command)
+            return
+
+        await self._client.write_gatt_char(UUID_COMMAND, reply, response=False)
+
+    async def _post_connect(self) -> None:
+        """Re-arm the status request after connect for firmware compatibility."""
+        if self._sb3_session_ready:
+            await self._client.write_gatt_char(
+                UUID_COMMAND,
+                build_telemetry_request_packet(
+                    self._shared_secret[:16],
+                    self._shared_secret[16:28],
+                    int.from_bytes(bytes.fromhex("ef79b569"), "little")
+                    + int(time.time() - self._negotiation_timestamp),
+                ),
+                response=False,
+            )
+
+    async def set_schedule(
+        self,
+        power_w: int,
+        *,
+        start_minutes: int = 0,
+        end_minutes: int = 1440,
+    ) -> None:
+        """Set a uniform seven-day output schedule using command 405e."""
+        await self._send_command(
+            SB3_SET_SCHEDULE_COMMAND,
+            build_schedule_plaintext(
+                power_w,
+                start_minutes=start_minutes,
+                end_minutes=end_minutes,
+            ),
+        )
+
+    async def set_max_load(self, max_load_w: int) -> None:
+        """Set the device maximum output/load limit using command 4080."""
+        await self._send_command(
+            SB3_SET_MAX_LOAD_COMMAND,
+            build_max_load_plaintext(max_load_w),
+        )
+
+    def _parse_sb3_float(self, key: str) -> float:
+        """Parse an A17C5 typed float, retaining compatibility with integer data."""
+        if self._data is None or key not in self._data:
+            return DEFAULT_METADATA_FLOAT
+        value = self._data[key]
+        if value and value[0] == 0x05 and len(value) >= 5:
+            return struct.unpack("<f", value[1:5])[0]
+        return float(self._parse_int(key, begin=1))
 
     @property
     def serial_number(self) -> str:
@@ -47,7 +211,7 @@ class Solarbank3(SolixBLEDevice):
         if self._data is None:
             return DEFAULT_METADATA_FLOAT
 
-        return self._parse_int("a5", begin=1) / 10.0
+        return float(self._parse_int("a3", begin=1))
 
     @property
     def battery_health(self) -> float:
@@ -58,7 +222,7 @@ class Solarbank3(SolixBLEDevice):
         if self._data is None:
             return DEFAULT_METADATA_FLOAT
 
-        return self._parse_int("a6", begin=1) / 10.0
+        return float(self._parse_int("a6", begin=1))
 
     @property
     def battery_percentage(self) -> int:
@@ -66,7 +230,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Percentage charge of battery or default int value.
         """
-        return self._parse_int("a7", begin=1)
+        return self._parse_int("a3", begin=1)
 
     @property
     def solar_power_in(self) -> int:
@@ -74,7 +238,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Total solar power in or default int value.
         """
-        return self._parse_int("ab", begin=1)
+        return round(self._parse_sb3_float("ab"))
 
     @property
     def pv_yield(self) -> int:
@@ -82,7 +246,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Total solar power generated or default int value.
         """
-        return self._parse_int("ac", begin=1)
+        return max(0.0, self._parse_sb3_float("ac"))
 
     @property
     def house_demand(self) -> int:
@@ -90,7 +254,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Power used by house or default int value.
         """
-        return self._parse_int("b1", begin=1)
+        return round(self._parse_sb3_float("b1"))
 
     @property
     def house_consumption(self) -> int:
@@ -100,7 +264,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Power used by house or default int value.
         """
-        return self._parse_int("b2", begin=1)
+        return round(self._parse_sb3_float("b2"))
 
     @property
     def battery_power(self) -> int:
@@ -111,6 +275,11 @@ class Solarbank3(SolixBLEDevice):
         :returns: Power in/out of battery or default int value.
         """
         return self._parse_int("b6", begin=1, signed=True)
+
+    @property
+    def schedule_power(self) -> int:
+        """Return the active schedule output target reported in field b9."""
+        return self._parse_int("b9", begin=1)
 
     @property
     def charged_energy(self) -> int:
@@ -136,7 +305,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Power in/out of grid or default int value.
         """
-        return self._parse_int("bd", begin=1, signed=True)
+        return round(self._parse_sb3_float("bd"))
 
     @property
     def grid_import_energy(self) -> int:
@@ -152,7 +321,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Total energy exported to grid or default int value.
         """
-        return self._parse_int("bf", begin=1)
+        return round(self._parse_sb3_float("bf"))
 
     @property
     def solar_pv_1_power_in(self) -> int:
@@ -160,7 +329,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Solar power in or default int value.
         """
-        return self._parse_int("c7", begin=1)
+        return round(self._parse_sb3_float("c7"))
 
     @property
     def solar_pv_2_power_in(self) -> int:
@@ -168,7 +337,19 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Solar power in or default int value.
         """
-        return self._parse_int("c8", begin=1)
+        value = self._parse_sb3_float("c8")
+        total = self._parse_sb3_float("ab")
+        other_ports = (
+            self._parse_sb3_float("c7")
+            + self._parse_sb3_float("c9")
+            + self._parse_sb3_float("ca")
+        )
+        # Firmware 1.0.7.1 occasionally reports a stale port-2 value.  The
+        # total and the other three MPPT values provide a safe narrow fallback.
+        residual = total - other_ports
+        if residual > value + 5 and residual > 0:
+            return round(residual)
+        return round(value)
 
     @property
     def solar_pv_3_power_in(self) -> int:
@@ -176,7 +357,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Solar power in or default int value.
         """
-        return self._parse_int("c9", begin=1)
+        return round(self._parse_sb3_float("c9"))
 
     @property
     def solar_pv_4_power_in(self) -> int:
@@ -184,7 +365,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Solar power in or default int value.
         """
-        return self._parse_int("ca", begin=1)
+        return round(self._parse_sb3_float("ca"))
 
     @property
     def temperature(self) -> int:
@@ -192,7 +373,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Temperature of the unit in degrees C.
         """
-        return self._parse_int("cc", begin=1, signed=True)
+        return self._parse_int("a5", begin=1, signed=True)
 
     @property
     def power_out(self) -> int:
@@ -200,7 +381,7 @@ class Solarbank3(SolixBLEDevice):
 
         :returns: Total power out or default int value.
         """
-        return self._parse_int("d3", begin=1)
+        return round(self._parse_sb3_float("ad"))
 
     @property
     def grid_to_home_power(self) -> int:
