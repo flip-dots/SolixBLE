@@ -17,12 +17,15 @@ from SolixBLE import (
     C800,
     C1000,
     C1000G2,
+    C2000G2,
     ChargingStatus,
     LightStatus,
     MagGo3in1,
     PortOverload,
     PortStatus,
     PrimeCharger160w,
+    PrimeCharger250w,
+    PrimeChargingStation240w,
     PrimeDevice,
     PrimePowerBank20k,
     Solarbank2,
@@ -1497,6 +1500,218 @@ async def test_bad_values(
     device = device_class(MOCK_BLE_DEVICE)
     parameters = device._parse_payload(bytes.fromhex(payload))
     await device._process_telemetry(parameters)
+
+    for class_property, expected_value in mapping.items():
+        assert getattr(device, class_property) == expected_value, (
+            f"Mismatch for property '{class_property}'!"
+        )
+
+
+#: A real, full C2000 G2 (A1783) ``c421`` telemetry frame (decrypted cleartext),
+#: captured from hardware with no expansion battery combined (the ``ce`` tag's
+#: combination-device ID is all-zero).
+A1783_C421_FRAME = "a10131a221062011415043444b4b453046333936303030313100054131373833010102010001a30e040000000008070064cc00580200a41b0400000000f4013c000000000000a0052c01020001000001640500a506042100640000a60a04000000000000d80e64a70704000000010000a80404000000aa0404010000ab0404000000ac0404000000ae0404010000b20404000000c0230410000000000000000000000000000000000100000000ef0000000100000000022020ce2c0410000000000000000000000000000000000111000000000000000000000000000000000000000000000000d91a0400001464050000000000000000000000000000000000000000da18040100000000000000000000e00138047f0101003804e001dc06040000000000f91d0401010201060201000000000006020100020209010000000006000300fa150401010101001f0700000000000000000000000000fd0e0031373833303232303033333233fe050324d2466a"  # noqa: E501
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "device_class,payload,mapping",
+    [
+        pytest.param(
+            C2000G2,
+            A1783_C421_FRAME,
+            {
+                # inherited C1000 G2 flat-TLV fields, confirmed on the A1783
+                "serial_number": "APCDKKE0F39600011",
+                "part_number": "A1783",
+                "temperature": 33,
+                "battery_percentage": 100,
+                "battery_health": 0,
+                "max_battery_percentage": 100,
+                "min_battery_percentage": 5,
+                # the a3/a6 charge fields added on C1000 G2
+                "max_input_power": 1800,
+                "dc_input_power": 0,
+                "remaining_time_hours": 380.0,
+                "main_battery_soc": 100,
+                # the C2000-only expansion decode (no BP2000 combined -> ce all-zero)
+                "expansion_present": False,
+            },
+            id="c2000g2_a1783_c421",
+        ),
+    ],
+)
+async def test_c2000g2_c421_values(
+    device_class: type[SolixBLEDevice],
+    payload: str,
+    mapping: dict[str, Any],
+) -> None:
+    """A real A1783 c421 frame parses into the inherited and C2000-specific fields."""
+    device = device_class(MOCK_BLE_DEVICE)
+    parameters = device._parse_payload(bytes.fromhex(payload))
+    await device._process_telemetry(parameters)
+
+    for class_property, expected_value in mapping.items():
+        assert getattr(device, class_property) == expected_value, (
+            f"Mismatch for property '{class_property}'!"
+        )
+
+
+@pytest.mark.parametrize(
+    "data,expected",
+    [
+        # data present but no ce tag at all -> no expansion
+        ({"a5": b"\x04\x00"}, False),
+        # ce present, combination-device ID all-zero -> no unit combined
+        ({"ce": bytes.fromhex("0410" + "00" * 16 + "0111" + "00" * 12)}, False),
+        # ce present, non-zero combination-device ID -> a unit is combined
+        ({"ce": bytes.fromhex("0410" + bytes(range(1, 17)).hex() + "0111")}, True),
+    ],
+)
+def test_c2000g2_expansion_present(data: dict, expected: bool) -> None:
+    """expansion_present reflects the ce combination-device ID (all-zero == none)."""
+    device = C2000G2(MOCK_BLE_DEVICE)
+    device._data = data
+    assert device.expansion_present is expected
+
+
+def _port(status: int, mv: int, ma: int, cw: int) -> str:
+    """Build a Prime per-port block: ``04 <status> <mV><mA><cW>`` (u16 LE each)."""
+    return (
+        bytes([0x04, status])
+        + mv.to_bytes(2, "little")
+        + ma.to_bytes(2, "little")
+        + cw.to_bytes(2, "little")
+    ).hex()
+
+
+_ZERO_PORT = _port(0, 0, 0, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "device_class,routing_cmd,params,mapping",
+    [
+        # A2345 charger: the ca00 snapshot carries the ports at a4-a9 and the per-port
+        # on/off switches at aa-ae; it passes straight through to the properties.
+        pytest.param(
+            PrimeCharger250w,
+            "ca00",
+            {
+                "a4": _port(1, 20000, 3000, 6000),
+                "a5": _port(2, 9000, 1000, 900),
+                "a6": _ZERO_PORT,
+                "a7": _ZERO_PORT,
+                "a8": _port(1, 5000, 500, 250),
+                "a9": _ZERO_PORT,
+                "aa": "0401",
+                "ab": "0400",
+                "ac": "0400",
+                "ad": "0400",
+                "ae": "0401",
+            },
+            {
+                "usb_c1_voltage": 20.0,
+                "usb_c1_current": 3.0,
+                "usb_c1_power": 60.0,
+                "usb_port_c1": PortStatus.OUTPUT,
+                "usb_port_c2": PortStatus.INPUT,
+                "usb_c2_power": 9.0,
+                "usb_a1_voltage": 5.0,
+                "usb_a1_power": 2.5,
+                "total_power_out": 71.5,
+                "usb_c1_switch": True,
+                "usb_c2_switch": False,
+                "usba_switch": True,
+            },
+            id="prime_250w_ca00_snapshot",
+        ),
+        # A2345 charger: the ~1/s 4303 stream carries the same ports one tag earlier
+        # (a2-a7); they are remapped onto the a4-a9 property view.
+        pytest.param(
+            PrimeCharger250w,
+            "4303",
+            {
+                "a2": _port(1, 19824, 3000, 5900),
+                "a3": _ZERO_PORT,
+                "a4": _ZERO_PORT,
+                "a5": _ZERO_PORT,
+                "a6": _port(1, 5100, 200, 100),
+                "a7": _ZERO_PORT,
+            },
+            {
+                "usb_c1_voltage": 19.824,
+                "usb_c1_current": 3.0,
+                "usb_c1_power": 59.0,
+                "usb_a1_voltage": 5.1,
+                "usb_a1_power": 1.0,
+            },
+            id="prime_250w_4303_stream_remap",
+        ),
+        # A91B2 station: the 4a00 snapshot carries the ports at a4-a9 and the two AC
+        # outlet switches at aa/ab.
+        pytest.param(
+            PrimeChargingStation240w,
+            "4a00",
+            {
+                "a4": _port(1, 20000, 2000, 4000),
+                "a5": _ZERO_PORT,
+                "a6": _ZERO_PORT,
+                "a7": _ZERO_PORT,
+                "a8": _port(1, 5000, 500, 300),
+                "a9": _ZERO_PORT,
+                "aa": "0401",
+                "ab": "0400",
+            },
+            {
+                "usb_c1_voltage": 20.0,
+                "usb_c1_power": 40.0,
+                "usb_a1_power": 3.0,
+                "usb_total_power_out": 43.0,
+                "ac_1_switch": True,
+                "ac_2_switch": False,
+            },
+            id="prime_station_4a00_snapshot",
+        ),
+        # A91B2 station: the 4303 stream remaps the same way as the charger's.
+        pytest.param(
+            PrimeChargingStation240w,
+            "4303",
+            {
+                "a2": _port(1, 12000, 1000, 1200),
+                "a3": _ZERO_PORT,
+                "a4": _ZERO_PORT,
+                "a5": _ZERO_PORT,
+                "a6": _ZERO_PORT,
+                "a7": _ZERO_PORT,
+            },
+            {
+                "usb_c1_voltage": 12.0,
+                "usb_c1_power": 12.0,
+                "usb_total_power_out": 12.0,
+            },
+            id="prime_station_4303_stream_remap",
+        ),
+    ],
+)
+async def test_prime_usb_charger_telemetry(
+    device_class: type[SolixBLEDevice],
+    routing_cmd: str,
+    params: dict[str, str],
+    mapping: dict[str, Any],
+) -> None:
+    """Prime chargers decode the 0a00 snapshot straight through and remap the 0303 stream.
+
+    Both the A2345 charger and the A91B2 station inherit the shared decode from
+    :class:`~SolixBLE.devices.prime_usb_charger.PrimeUsbCharger`: the ``4303`` stream's
+    a2-a7 ports are remapped onto the a4-a9 snapshot tags, while ``ca00``/``4a00``
+    snapshots pass straight through -- so one property set serves either frame.
+    """
+    device = device_class(MOCK_BLE_DEVICE)
+    device._routing_cmd = routing_cmd
+    await device._process_telemetry(
+        {tag: bytes.fromhex(value) for tag, value in params.items()},
+    )
 
     for class_property, expected_value in mapping.items():
         assert getattr(device, class_property) == expected_value, (
