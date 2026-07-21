@@ -17,12 +17,14 @@ the list of properties for that class.
    c800
    c1000
    c1000g2
+   c2000g2
    f2000
    f3800
    solarbank2
    solarbank3
    prime_charger_160w
    prime_charger_250w
+   prime_charging_station_240w
    prime_maggo_3in1
    prime_power_bank_20k
    generic
