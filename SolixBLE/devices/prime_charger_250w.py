@@ -4,275 +4,95 @@
 
 """
 
-from ..const import DEFAULT_METADATA_FLOAT
-from ..prime_device import PrimeDevice
-from ..states import PortStatus
+from ..const import DEFAULT_METADATA_BOOL, DEFAULT_METADATA_FLOAT
+from .prime_usb_charger import PrimeUsbCharger
 
 
-class PrimeCharger250w(PrimeDevice):
+class PrimeCharger250w(PrimeUsbCharger):
     """
     Anker Prime Charger (250W) model.
 
     Use this class to connect and monitor the 250w charger.
     This model is also known as the A2345.
 
-    .. note::
-        This model was added using data from anker-solix-api. It has not been
-        tested!
-
-    .. note::
-        It should be possible to add more sensors. I think devices with lots of
-        telemetry values split them up into multiple messages but I have not
-        played around with this yet. That and I am being a bit conservative with
-        these initial implementations, if you want more sensors and are willing
-        to help with testing feel free to raise a GitHub issue.
-
+    Telemetry has been confirmed on real hardware and cross-checked against the
+    Anker cloud values. The per-port voltage/current/power/status live in the
+    base class; this model adds the total output power and per-port on/off
+    switch states (fields ``aa``-``ae``).
     """
 
-    _EXPECTED_TELEMETRY_LENGTH: int = 198
+    _EXPECTED_TELEMETRY_LENGTH: int = 253
 
     @property
-    def usb_port_c1(self) -> PortStatus:
-        """USB C1 Port Status.
+    def total_power_out(self) -> float:
+        """Total output power across all six ports (W).
 
-        :returns: Status of the USB C1 port.
-        """
-        return PortStatus(self._parse_int("a2", begin=1, end=2))
-
-    @property
-    def usb_c1_voltage(self) -> float:
-        """USB C1 Port voltage (V).
-
-        :returns: Voltage of the USB C1 port or default float value.
+        :returns: Sum of the per-port powers or default float value.
         """
         if self._data is None:
             return DEFAULT_METADATA_FLOAT
 
-        return self._parse_int("a2", begin=2, end=4) / 1000.0
+        return round(
+            self.usb_c1_power
+            + self.usb_c2_power
+            + self.usb_c3_power
+            + self.usb_c4_power
+            + self.usb_a1_power
+            + self.usb_a2_power,
+            2,
+        )
 
     @property
-    def usb_c1_current(self) -> float:
-        """USB C1 Port current (A).
+    def usb_c1_switch(self) -> bool:
+        """USB C1 port on/off switch state.
 
-        :returns: Current of the USB C1 port or default float value.
+        :returns: True when the port is switched on or default bool value.
         """
         if self._data is None:
-            return DEFAULT_METADATA_FLOAT
+            return DEFAULT_METADATA_BOOL
 
-        return self._parse_int("a2", begin=4, end=6) / 1000.0
+        return bool(self._parse_int("aa", begin=1, end=2))
 
     @property
-    def usb_c1_power(self) -> float:
-        """USB C1 Port power (W).
+    def usb_c2_switch(self) -> bool:
+        """USB C2 port on/off switch state.
 
-        :returns: Power of the USB C1 port or default float value.
+        :returns: True when the port is switched on or default bool value.
         """
         if self._data is None:
-            return DEFAULT_METADATA_FLOAT
+            return DEFAULT_METADATA_BOOL
 
-        return self._parse_int("a2", begin=6, end=8) / 100.0
-
-    @property
-    def usb_port_c2(self) -> PortStatus:
-        """USB C2 Port Status.
-
-        :returns: Status of the USB C2 port.
-        """
-        return PortStatus(self._parse_int("a3", begin=1, end=2))
+        return bool(self._parse_int("ab", begin=1, end=2))
 
     @property
-    def usb_c2_voltage(self) -> float:
-        """USB C2 Port voltage (V).
+    def usb_c3_switch(self) -> bool:
+        """USB C3 port on/off switch state.
 
-        :returns: Voltage of the USB C2 port or default float value.
+        :returns: True when the port is switched on or default bool value.
         """
         if self._data is None:
-            return DEFAULT_METADATA_FLOAT
+            return DEFAULT_METADATA_BOOL
 
-        return self._parse_int("a3", begin=2, end=4) / 1000.0
+        return bool(self._parse_int("ac", begin=1, end=2))
 
     @property
-    def usb_c2_current(self) -> float:
-        """USB C2 Port current (A).
+    def usb_c4_switch(self) -> bool:
+        """USB C4 port on/off switch state.
 
-        :returns: Current of the USB C2 port or default float value.
+        :returns: True when the port is switched on or default bool value.
         """
         if self._data is None:
-            return DEFAULT_METADATA_FLOAT
+            return DEFAULT_METADATA_BOOL
 
-        return self._parse_int("a3", begin=4, end=6) / 1000.0
+        return bool(self._parse_int("ad", begin=1, end=2))
 
     @property
-    def usb_c2_power(self) -> float:
-        """USB C2 Port power (W).
+    def usba_switch(self) -> bool:
+        """USB-A ports on/off switch state (shared by both A ports).
 
-        :returns: Power of the USB C2 port or default float value.
+        :returns: True when the USB-A ports are switched on or default bool value.
         """
         if self._data is None:
-            return DEFAULT_METADATA_FLOAT
+            return DEFAULT_METADATA_BOOL
 
-        return self._parse_int("a3", begin=6, end=8) / 100.0
-
-    @property
-    def usb_port_c3(self) -> PortStatus:
-        """USB C3 Port Status.
-
-        :returns: Status of the USB C3 port.
-        """
-        return PortStatus(self._parse_int("a4", begin=1, end=2))
-
-    @property
-    def usb_c3_voltage(self) -> float:
-        """USB C3 Port voltage (V).
-
-        :returns: Voltage of the USB C3 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a4", begin=2, end=4) / 1000.0
-
-    @property
-    def usb_c3_current(self) -> float:
-        """USB C3 Port current (A).
-
-        :returns: Current of the USB C3 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a4", begin=4, end=6) / 1000.0
-
-    @property
-    def usb_c3_power(self) -> float:
-        """USB C3 Port power (W).
-
-        :returns: Power of the USB C3 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a4", begin=6, end=8) / 100.0
-
-    @property
-    def usb_port_c4(self) -> PortStatus:
-        """USB C4 Port Status.
-
-        :returns: Status of the USB C4 port.
-        """
-        return PortStatus(self._parse_int("a5", begin=1, end=2))
-
-    @property
-    def usb_c4_voltage(self) -> float:
-        """USB C4 Port voltage (V).
-
-        :returns: Voltage of the USB C4 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a5", begin=2, end=4) / 1000.0
-
-    @property
-    def usb_c4_current(self) -> float:
-        """USB C3 Port current (A).
-
-        :returns: Current of the USB C4 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a5", begin=4, end=6) / 1000.0
-
-    @property
-    def usb_c4_power(self) -> float:
-        """USB C4 Port power (W).
-
-        :returns: Power of the USB C4 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a5", begin=6, end=8) / 100.0
-
-    @property
-    def usb_port_a1(self) -> PortStatus:
-        """USB A1 Port Status.
-
-        :returns: Status of the USB A1 port.
-        """
-        return PortStatus(self._parse_int("a6", begin=1, end=2))
-
-    @property
-    def usb_a1_voltage(self) -> float:
-        """USB A1 Port voltage (V).
-
-        :returns: Voltage of the USB A1 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a6", begin=2, end=4) / 1000.0
-
-    @property
-    def usb_a1_current(self) -> float:
-        """USB A1 Port current (A).
-
-        :returns: Current of the USB A1 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a6", begin=4, end=6) / 1000.0
-
-    @property
-    def usb_a1_power(self) -> float:
-        """USB A1 Port power (W).
-
-        :returns: Power of the USB A1 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a6", begin=6, end=8) / 100.0
-
-    @property
-    def usb_port_a2(self) -> PortStatus:
-        """USB A2 Port Status.
-
-        :returns: Status of the USB A2 port.
-        """
-        return PortStatus(self._parse_int("a7", begin=1, end=2))
-
-    @property
-    def usb_a2_voltage(self) -> float:
-        """USB A2 Port voltage (V).
-
-        :returns: Voltage of the USB A2 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a7", begin=2, end=4) / 1000.0
-
-    @property
-    def usb_a2_current(self) -> float:
-        """USB A2 Port current (A).
-
-        :returns: Current of the USB A2 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a7", begin=4, end=6) / 1000.0
-
-    @property
-    def usb_a2_power(self) -> float:
-        """USB A2 Port power (W).
-
-        :returns: Power of the USB A2 port or default float value.
-        """
-        if self._data is None:
-            return DEFAULT_METADATA_FLOAT
-
-        return self._parse_int("a7", begin=6, end=8) / 100.0
+        return bool(self._parse_int("ae", begin=1, end=2))
