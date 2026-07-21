@@ -4,6 +4,7 @@
 
 """
 
+from ..const import DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_INT
 from ..device import SolixBLEDevice
 from ..states import PortStatus
 
@@ -37,7 +38,14 @@ class C1000G2(SolixBLEDevice):
     _EXPECTED_TELEMETRY_LENGTH: int = 253
 
     #: The Gen 2 pushes telemetry on different command codes to the gen-1 models.
-    _TELEMETRY_COMMANDS: tuple[str, ...] = ("c421", "c900")
+    #: ``c490`` is the device-summary the C2000 G2 (A1783) posts unsolicited every
+    #: ~9 min: routed here (not the dropped unknown-frame branch) so it's reassembled
+    #: and decrypted, but its payload is protobuf, so it's flagged below to skip the
+    #: TLV parse -- a protobuf-aware consumer decodes the delivered cleartext.
+    _TELEMETRY_COMMANDS: tuple[str, ...] = ("c421", "c900", "c490")
+
+    #: ``c490`` carries a protobuf device summary, not the TLV format the base parses.
+    _PROTOBUF_TELEMETRY_COMMANDS: tuple[str, ...] = ("c490",)
 
     async def _post_connect(self) -> None:
         """Subscribe to telemetry once connected.
@@ -57,7 +65,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
+            cmd=bytes.fromhex(CMD_AC_OUTPUT),
+            payload=bytes.fromhex(PAYLOAD_ON),
         )
 
     async def turn_ac_off(self) -> None:
@@ -67,7 +76,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
+            cmd=bytes.fromhex(CMD_AC_OUTPUT),
+            payload=bytes.fromhex(PAYLOAD_OFF),
         )
 
     async def turn_dc_on(self) -> None:
@@ -81,7 +91,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
+            cmd=bytes.fromhex(CMD_DC_OUTPUT),
+            payload=bytes.fromhex(PAYLOAD_ON),
         )
 
     async def turn_dc_off(self) -> None:
@@ -91,7 +102,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
+            cmd=bytes.fromhex(CMD_DC_OUTPUT),
+            payload=bytes.fromhex(PAYLOAD_OFF),
         )
 
     @property
@@ -299,3 +311,131 @@ class C1000G2(SolixBLEDevice):
         :returns: Battery charge percentage lower limit or default int value.
         """
         return self._parse_int("d9", begin=5, end=6)
+
+    @property
+    def max_input_power(self) -> int:
+        """Maximum charge-input limit in watts (tag ``a3``).
+
+        :returns: Maximum input limit in watts or default int value.
+        """
+        return self._parse_int("a3", begin=5, end=7)
+
+    @property
+    def dc_input_power(self) -> int:
+        """DC/solar input power in watts (tag ``a6``).
+
+        :returns: DC input power in watts or default int value.
+        """
+        return self._parse_int("a6", begin=5, end=7)
+
+    @property
+    def remaining_time_hours(self) -> float:
+        """Remaining time in hours (tag ``a6``, deci-hours ``x0.1``).
+
+        Direction-aware: time until full when charging, time until empty when
+        discharging.
+
+        :returns: Remaining time in hours or default float value.
+        """
+        raw = self._parse_int("a6", begin=7, end=9)
+        return raw / 10 if raw != DEFAULT_METADATA_INT else DEFAULT_METADATA_FLOAT
+
+    @property
+    def main_battery_soc(self) -> int:
+        """Main-battery state of charge in percent, excluding expansion (tag ``a6``).
+
+        :returns: Main battery SOC percent or default int value.
+        """
+        return self._parse_int("a6", begin=9, end=10)
+
+    # -- c490 device-summary fields (walker output; see :attr:`summary`) ----------
+    # ``c490`` is a ~9-minute rollup, armed by a cloud session, so these read their
+    # defaults until a frame arrives. Fields that also exist in the per-second
+    # ``0421`` stream are exposed namespaced ``c490_*`` so a stale summary value
+    # never masks the live one.
+
+    def _summary_int(self, path: str) -> int:
+        """Read an int leaf from the latest c490 summary, or the default."""
+        value = self._summary.get(path)
+        return value if isinstance(value, int) else DEFAULT_METADATA_INT
+
+    @property
+    def battery_voltage(self) -> float:
+        """Battery pack voltage in volts, from the c490 summary (``.15.3``, ``x0.1``).
+
+        :returns: Pack voltage in volts or default float value.
+        """
+        raw = self._summary_int(".15.3")
+        return raw / 10 if raw != DEFAULT_METADATA_INT else DEFAULT_METADATA_FLOAT
+
+    @property
+    def flow_state(self) -> int:
+        """Power-flow state from the c490 summary (``.23.7``).
+
+        ``0`` = idle/balanced, ``1`` = net discharge, ``2`` = charge.
+
+        :returns: Flow state or default int value.
+        """
+        return self._summary_int(".23.7")
+
+    @property
+    def charge_presence(self) -> int:
+        """Charge-presence indicator from the c490 summary (``.23.6``); units uncalibrated.
+
+        :returns: Charge presence value or default int value.
+        """
+        return self._summary_int(".23.6")
+
+    @property
+    def cumulative_discharge_energy(self) -> int:
+        """Cumulative discharge energy in watt-hours, from the c490 summary (``.19.8``).
+
+        :returns: Cumulative discharge energy in Wh or default int value.
+        """
+        return self._summary_int(".19.8")
+
+    @property
+    def c490_battery_soc(self) -> int:
+        """Battery SOC percent from the ~9-min c490 summary (``.23.1``).
+
+        See :attr:`battery_percentage` for the live per-second value.
+
+        :returns: SOC percent or default int value.
+        """
+        return self._summary_int(".23.1")
+
+    @property
+    def c490_output_power_total(self) -> int:
+        """Total output power in watts from the c490 summary (``.23.2``).
+
+        :returns: Total output power in watts or default int value.
+        """
+        return self._summary_int(".23.2")
+
+    @property
+    def c490_ac_output_power(self) -> int:
+        """AC output power in watts from the c490 summary (``.23.3``).
+
+        DC/USB output = :attr:`c490_output_power_total` minus this.
+
+        :returns: AC output power in watts or default int value.
+        """
+        return self._summary_int(".23.3")
+
+    @property
+    def c490_input_power_total(self) -> int:
+        """Total input power in watts from the c490 summary (``.23.4``).
+
+        :returns: Total input power in watts or default int value.
+        """
+        return self._summary_int(".23.4")
+
+    @property
+    def c490_dc_input_power(self) -> int:
+        """DC/solar input power in watts from the c490 summary (``.23.5``).
+
+        AC input = :attr:`c490_input_power_total` minus this.
+
+        :returns: DC input power in watts or default int value.
+        """
+        return self._summary_int(".23.5")

@@ -9,6 +9,7 @@ from .c300dc import C300DC
 from .c800 import C800
 from .c1000 import C1000
 from .c1000g2 import C1000G2
+from .c2000g2 import C2000G2
 from .f2000 import F2000
 from .f2600 import F2600
 from .f3800 import F3800
@@ -26,14 +27,15 @@ __all__ = [
     "C800",
     "C1000",
     "C1000G2",
+    "C2000G2",
     "F2000",
     "F2600",
     "F3800",
-    "Solarbank2",
-    "Solarbank3",
+    "Generic",
+    "MagGo3in1",
     "PrimeCharger160w",
     "PrimeCharger250w",
     "PrimePowerBank20k",
-    "MagGo3in1",
-    "Generic",
+    "Solarbank2",
+    "Solarbank3",
 ]

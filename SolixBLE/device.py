@@ -45,6 +45,7 @@ from .const import (
     UUID_COMMAND,
     UUID_TELEMETRY,
 )
+from .parsing import walk_protobuf
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +57,13 @@ class SolixBLEDevice:
     #: override this if their model uses different telemetry command codes
     #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
     _TELEMETRY_COMMANDS: tuple[str, ...] = ("c402", "4300", "c405")
+
+    #: Telemetry command codes whose payload is protobuf, not the 1-byte-tag TLV
+    #: format :meth:`_parse_payload` understands (e.g. the C2000 G2's ``c490``
+    #: device-summary post). They are still reassembled and decrypted -- so a
+    #: consumer that understands the frame can decode the cleartext -- but the base
+    #: skips TLV-parsing them, which would misread the protobuf varint tags.
+    _PROTOBUF_TELEMETRY_COMMANDS: tuple[str, ...] = ()
 
     #: Fixed ff09-frame overhead between the on-wire notification value and the
     #: ``payload`` that :meth:`_split_packet` returns: ``ff09`` (2) + length (2) +
@@ -76,6 +84,7 @@ class SolixBLEDevice:
         self._fragment_buffers: dict[bytes, dict[int, bytes]] = {}
         self._fragment_totals: dict[bytes, int] = {}
         self._data: dict[str, bytes] | None = None
+        self._summary: dict[str, object] = {}
         self._last_data_timestamp: datetime | None = None
         self._last_packet_timestamp: datetime | None = None
         self._negotiation_timestamp: float | None = None
@@ -335,6 +344,18 @@ class SolixBLEDevice:
         :returns: Timestamp of last update or None.
         """
         return self._last_data_timestamp
+
+    @property
+    def summary(self) -> dict[str, object]:
+        """Fields from the latest protobuf device-summary frame, if any.
+
+        Populated from a ``_PROTOBUF_TELEMETRY_COMMANDS`` frame (e.g. the C2000 G2's
+        ``c490``) by :func:`SolixBLE.parsing.walk_protobuf`, keyed by protobuf
+        ``.path``. Empty until such a frame is received.
+
+        :returns: Mapping of ``.path`` to value.
+        """
+        return self._summary
 
     def _parse_int(
         self,
@@ -636,6 +657,36 @@ class SolixBLEDevice:
         _LOGGER.debug(f"Reassembled payload: {len(payload)} bytes")
         return payload
 
+    @staticmethod
+    def _protobuf_body(payload: bytes) -> bytes:
+        """Return the protobuf blob carried in a device-post's outer ``a2`` field.
+
+        A protobuf device post (e.g. the C2000 G2's ``c490``) is a multi-field outer
+        TLV: ``a1`` -- a one-byte command echo -- then ``a2``, whose value *is* the
+        protobuf blob, then a trailing ``a3`` string. Unlike the flat telemetry
+        frames, ``a2`` is a ``bin`` field with a **2-byte** little-endian length and
+        an ``04`` type byte (the payload is ~340 bytes, past the 1-byte length
+        :meth:`_parse_payload` handles), so the header is ``a1 <len8> <val> a2
+        <len16> 04`` -- 7 bytes for the usual ``a1 01 31 a2 <len16> 04``. Walking the
+        whole frame instead would misread those header bytes as protobuf tags and
+        yield almost nothing; running past ``a2`` into the ``a3`` trailer would append
+        a spurious field. The slice is bounded to ``a2``'s declared length so the walk
+        sees exactly the protobuf and nothing else.
+
+        :param payload: The decrypted device-post frame.
+        :returns: The protobuf blob (``a2``'s value), or the whole payload if it is
+            too short to carry the wrapper.
+        """
+        if len(payload) <= 6:
+            return payload
+        # Skip the a1 TLV (tag + 1-byte length + value) to reach the a2 field.
+        a2_start = 2 + payload[1]
+        # a2's 2-byte length counts its 04 type byte + the protobuf value, so the
+        # blob is that length minus the type byte, starting after tag+len+type.
+        a2_length = int.from_bytes(payload[a2_start + 1 : a2_start + 3], "little")
+        blob_start = a2_start + 4
+        return payload[blob_start : blob_start + a2_length - 1]
+
     async def _process_telemetry_packet(
         self,
         payload: bytes,
@@ -660,6 +711,15 @@ class SolixBLEDevice:
             )
             return None
         _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
+        # Protobuf telemetry (e.g. the C2000 G2's c490 device summary) is not the
+        # 1-byte-tag TLV format _parse_payload understands. Walk the protobuf blob
+        # into a `.path` field map (see :mod:`SolixBLE.parsing`), exposed via
+        # :attr:`summary`, rather than TLV-parsing it -- which would misread the
+        # varint tags.
+        if cmd is not None and cmd.hex() in self._PROTOBUF_TELEMETRY_COMMANDS:
+            self._summary = walk_protobuf(self._protobuf_body(decrypted_payload))
+            _LOGGER.debug(f"Protobuf summary ({len(self._summary)} fields)")
+            return None
         parameters = self._parse_payload(decrypted_payload)
         return await self._process_telemetry(parameters)
 
@@ -1208,6 +1268,7 @@ class SolixBLEDevice:
 
         if reset_data:
             self._data = None
+            self._summary = {}
             self._last_data_timestamp = None
 
         self._fragment_buffers = {}
