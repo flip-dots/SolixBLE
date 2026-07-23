@@ -66,6 +66,17 @@ class SolixBLEDevice:
     #: skips TLV-parsing them, which would misread the protobuf varint tags.
     _PROTOBUF_TELEMETRY_COMMANDS: tuple[str, ...] = ()
 
+    #: Realtime re-trigger command (hex), or ``None`` to disable. Some devices only
+    #: emit telemetry in response to a periodic client command -- either a push
+    #: stream that lapses (the Prime's ~10s window, re-armed with ``420b``) or a
+    #: poll that returns a single frame (the C1000 Gen 2's ``4103``). When set,
+    #: :meth:`connect` runs a background task re-sending this command every
+    #: ``_KEEPALIVE_INTERVAL`` seconds. ``_KEEPALIVE_PAYLOAD`` is sent via
+    #: :meth:`_send_command`, so the live session timestamp is appended.
+    _KEEPALIVE_CMD: str | None = None
+    _KEEPALIVE_PAYLOAD: str = "a10121"
+    _KEEPALIVE_INTERVAL: float = 8.0
+
     #: Fixed ff09-frame overhead between the on-wire notification value and the
     #: ``payload`` that :meth:`_split_packet` returns: ``ff09`` (2) + length (2) +
     #: pattern (3) + cmd (2) + checksum (1). Added back so the fragmentation gate can
@@ -92,6 +103,7 @@ class SolixBLEDevice:
         self._state_changed_callbacks: list[Callable[[], None]] = []
         self._packet_futures: dict[bytes, list[asyncio.Future]] = {}
         self._auto_reconnect_task: asyncio.Task | None = None
+        self._keepalive_task: asyncio.Task | None = None
         self._disconnect_event: asyncio.Event = asyncio.Event()
         self._connection_attempts: int = 0
         self._shared_secret: bytes | None = None
@@ -261,6 +273,14 @@ class SolixBLEDevice:
         except Exception:
             _LOGGER.exception(f"Error running post-connect setup for '{self.name}'!")
 
+        # Start the realtime re-trigger task if this device declares one (some
+        # devices only stream/return telemetry in response to a periodic command;
+        # see _keepalive_loop). Runs on every (re)connection, so cancel a stale one.
+        if self._KEEPALIVE_CMD is not None:
+            if self._keepalive_task is not None:
+                self._keepalive_task.cancel()
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
         # Start an automatic reconnect task if its not running already
         if self._auto_reconnect_task is None:
             self._auto_reconnect_task = asyncio.create_task(self._auto_reconnect())
@@ -281,6 +301,30 @@ class SolixBLEDevice:
         :class:`~SolixBLE.devices.c1000g2.C1000G2`).
         """
 
+    async def _keepalive_loop(self) -> None:
+        """Periodically re-send ``_KEEPALIVE_CMD`` to keep telemetry flowing.
+
+        Started by :meth:`connect` only when the subclass sets ``_KEEPALIVE_CMD``.
+        Some devices stop emitting telemetry unless the client keeps poking them --
+        either a push stream that lapses (re-armed) or a poll returning one frame
+        per request. ``_KEEPALIVE_PAYLOAD`` is sent via :meth:`_send_command` so it
+        carries the live session timestamp (a stale one is rejected as a replay).
+        Cancelled in :meth:`disconnect`.
+        """
+        try:
+            while True:
+                await asyncio.sleep(self._KEEPALIVE_INTERVAL)
+                await self._send_command(
+                    bytes.fromhex(self._KEEPALIVE_CMD),
+                    bytes.fromhex(self._KEEPALIVE_PAYLOAD),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.debug(
+                "Realtime keep-alive for '%s' stopped", self.name, exc_info=True
+            )
+
     async def disconnect(self) -> None:
         """Disconnect from device and reset internal state.
 
@@ -292,6 +336,11 @@ class SolixBLEDevice:
         # Cancel the automatic reconnection task
         if self._auto_reconnect_task is not None:
             self._auto_reconnect_task.cancel()
+
+        # Cancel the realtime re-trigger task
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
 
         # If there is a client disconnect and throw it away
         if self._client is not None:

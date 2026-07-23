@@ -206,6 +206,31 @@ class PrimeChargingStation240w(PrimeUsbCharger):
             bytes.fromhex("a10121fe0503" + self._ts()),
         )
 
+    async def _keepalive_loop(self) -> None:
+        """Re-arm the realtime stream on a timer -- the app's ~9s 420b heartbeat.
+
+        Overrides the base loop, which sends via ``_send_command`` (``fe04`` timestamp,
+        write-without-response). This CBC station's realtime trigger is ``420b`` with
+        ``a10121fe0503<ts>`` at ``response=True`` (the same framing its ``_post_connect``
+        uses), so it must go through :meth:`_send_packet`. Started by base ``connect()``
+        via the inherited ``_KEEPALIVE_CMD``; the interval (``_KEEPALIVE_INTERVAL``, 1s
+        under the device's ~10s realtime window) and disconnect-cancel come from the base.
+        """
+        try:
+            while True:
+                await asyncio.sleep(self._KEEPALIVE_INTERVAL)
+                await self._send_packet(
+                    _SESSION_PATTERN,
+                    "420b",
+                    bytes.fromhex("a10121fe0503" + self._ts()),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.debug(
+                "A91B2 '%s' realtime keep-alive stopped", self.name, exc_info=True
+            )
+
     # ------------------------------------------------- 4a00 snapshot additions
 
     @property
