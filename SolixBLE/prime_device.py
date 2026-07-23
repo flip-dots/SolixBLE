@@ -119,6 +119,11 @@ class PrimeDevice(SolixBLEDevice):
     specific implementations, e.g 160w, 250w, etc.
     """
 
+    #: Prime devices stream ~1/s after a 420b trigger, but the realtime window
+    #: lapses after ~10s -- so re-arm 420b (with the default bare a10121 payload +
+    #: live session timestamp) a little under that. See SolixBLEDevice._keepalive_loop.
+    _KEEPALIVE_CMD = "420b"
+
     ###########################
     # Encryption / Decryption #
     ###########################
