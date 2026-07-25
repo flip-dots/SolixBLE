@@ -895,11 +895,13 @@ class SolixBLEDevice:
                 # firmware rejects the stale timestamp. Structure mirrors the A91B2
                 # station's CBC confer -- a1 timestamp, a3/a5 flags, local timezone.
                 _LOGGER.debug("Sending stage 5 (confer) response message...")
+                tz = self._local_posix_tz().encode()
                 confer = bytes.fromhex(
                     "a104"
                     + self._ts()
-                    + "a30440380000a516"
-                    + self._local_posix_tz().encode().hex(),
+                    + "a30440380000a5"
+                    + f"{len(tz):02x}"
+                    + tz.hex(),
                 )
                 return await self._client.write_gatt_char(
                     UUID_COMMAND,
