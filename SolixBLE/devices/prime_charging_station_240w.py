@@ -59,9 +59,6 @@ class PrimeChargingStation240w(PrimeUsbCharger):
     ``a4``). Verified on hardware -- the station streams with no owner user_id.
     """
 
-    #: Local timezone string the app sends in the ``4022`` confer.
-    _TIMEZONE = "EST5EDT,M3.2.0,M11.1.0"
-
     #: The station is a base/CBC device -- use the base session crypto, not
     #: :class:`PrimeDevice`'s AES-GCM.
     _encrypt_payload = SolixBLEDevice._encrypt_payload
@@ -178,13 +175,19 @@ class PrimeChargingStation240w(PrimeUsbCharger):
         and ``4a00``/``4303`` responses flow through the telemetry path.
         """
         serial = (self._device_info or {}).get("a4", b"")
-        timezone = self._TIMEZONE.encode().hex()
+        timezone = self._local_posix_tz().encode()
 
         # 4022 -- timezone; 4023 -- bind device serial (both AES-CBC, 030001).
         await self._send_packet(
             _NEGOTIATION_PATTERN,
             "4022",
-            bytes.fromhex("a104" + self._ts() + "a30440380000a516" + timezone),
+            bytes.fromhex(
+                "a104"
+                + self._ts()
+                + "a30440380000a5"
+                + f"{len(timezone):02x}"
+                + timezone.hex()
+            ),
         )
         await asyncio.sleep(0.4)
         await self._send_packet(
