@@ -104,6 +104,9 @@ TLV_A2_EMPTY = "a200"
 #: account-bound whitelist during the Prime-style handshake.
 ENV_SB2_ANKER_USER_ID = "SB2_ANKER_USER_ID"
 
+#: Expected length of the Anker user ID.
+_ANKER_USER_ID_LEN = 40
+
 
 class Solarbank2Common(SolixBLEDevice):
     """
@@ -165,6 +168,11 @@ class Solarbank2Common(SolixBLEDevice):
     def _build_set_schedule_payload(power_w: int) -> bytes:
         """Build the plaintext payload for cmd 0x405e (set schedule).
 
+        .. warning::
+            There may be a legal & safe power limit below the limit enforced by this software
+            depending on your country of operation.
+            Make sure to comply with all local regulation!
+
         Produces a uniform 7-day schedule (Mon-Sun, all identical) with the
         same time range (00:00-24:00) and the requested output power.
 
@@ -174,8 +182,8 @@ class Solarbank2Common(SolixBLEDevice):
 
         :param power_w: Output wattage (0 = charge-only).
         """
-        if not (0 <= power_w <= 800):
-            raise ValueError(f"power_w must be 0-800 W, got {power_w}")
+        if not (0 <= power_w <= 1000):
+            raise ValueError(f"power_w must be 0-1000 W, got {power_w}")
         if power_w % 10 != 0:
             _LOGGER.warning(
                 f"Power_w={power_w} is not a multiple of 10! This seems to work "
@@ -272,7 +280,7 @@ class Solarbank2Common(SolixBLEDevice):
     def _build_set_reserved_power_payload(level: SBPowerCutoff) -> bytes:
         """Build the plaintext payload for cmd 0x4067 (reserved power).
 
-        The Anker app's "Reserved power" writes 
+        The Anker app's "Reserved power" writes
         three independent fields. This is reflected in the telemetry:
         discharge cutoff (b4), low-power-input (b5), and charge cutoff (b6).
         a2 and a4 both equal the reserved-power %; a3 seems to follow an
@@ -765,9 +773,9 @@ class Solarbank2Prime(Solarbank2Common, PrimeDevice):
     traffic. Requires an Anker user-id. SB2 firmware whitelists user-ids
     and rejects unknown values with RX 4827 = ``09 a1 02 b4 00``.
 
-    Differences from Anker Prime power stations:
+    Differences from default Anker Prime flow:
 
-    * Per-session random ECDH private key (Prime uses a hardcoded one).
+    * Per-session random ECDH private key.
     * Different stage-0 through stage-4 plaintexts (live timestamps, extra
       TLVs).
     * Stage-6 sets the timezone (TX 4022); stage-7 re-sends the user-id
@@ -793,13 +801,14 @@ class Solarbank2Prime(Solarbank2Common, PrimeDevice):
         :param anker_user_id: Cloud-registered Anker user ID for the user's
             Anker account. If ``None``, reads from the
             ``SB2_ANKER_USER_ID`` environment variable. If neither is set,
-            raises ``ValueError``.
+            raises ``ValueError``. A value that is not 40 characters long
+            logs a warning but is still used.
         :raises ValueError: If no Anker user ID is available via either
             source.
         """
         super().__init__(ble_device)
         # Per-session random ECDH private key (regenerated on each connect via
-        # ``_initiate_negotiations``). SB2 does NOT use Prime's hardcoded key.
+        # ``_initiate_negotiations``).
         self._ecdh_private_key = generate_private_key(SECP256R1())
         # Negotiation-stage timestamp baked into stage-0..4 TX plaintexts as the
         # 4-byte LE int after the a1 tag. Same value across all of stages 0-4.
@@ -819,6 +828,14 @@ class Solarbank2Prime(Solarbank2Common, PrimeDevice):
             anker_user_id = env_val
         if isinstance(anker_user_id, str):
             anker_user_id = anker_user_id.encode("ascii")
+        # Basic sanity check for known Anker cloud userId lengths
+        if len(anker_user_id) != _ANKER_USER_ID_LEN:
+            _LOGGER.warning(
+                f"Anker user ID is {len(anker_user_id)} characters, expected "
+                f"{_ANKER_USER_ID_LEN}. Continuing anyway, but "
+                "this could be wrong - make sure you are not using an email "
+                "address or account name."
+            )
         self._anker_user_id: bytes = anker_user_id
 
     # Encryption helpers

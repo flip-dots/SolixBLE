@@ -1152,8 +1152,17 @@ _FAKE_SB2_USER_ID_BYTES = b"f" * 40
 _FAKE_SB2_USER_ID_ENV = "1" * 40
 
 
-def test_sb2_build_set_schedule_payload_matches_expected_layout():
-    """A 90 W uniform schedule produces the documented 7-day TLV layout.
+@pytest.mark.parametrize(
+    "power_w",
+    [
+        pytest.param(0, id="charge_only"),
+        pytest.param(90, id="ninety_watts"),
+        pytest.param(320, id="mid_range"),
+        pytest.param(800, id="max_output"),
+    ],
+)
+def test_sb2_build_set_schedule_payload_matches_expected_layout(power_w):
+    """A uniform schedule produces the documented 7-day TLV layout.
 
     Asserts the per-day-symmetric reading: 7 identical day-blocks
     (a3, a7, ab, af, b3, b7, bb) each with enable flag, 8-byte struct,
@@ -1161,10 +1170,11 @@ def test_sb2_build_set_schedule_payload_matches_expected_layout():
     """
     fixed_nonce = bytes.fromhex("00112233")
     with mock.patch.object(os, "urandom", return_value=fixed_nonce):
-        result = Solarbank2Common._build_set_schedule_payload(90)
+        result = Solarbank2Common._build_set_schedule_payload(power_w)
 
-    # 8-byte struct for power=90: start=0, end=1440, power=90, const=80.
-    struct_hex = "0000a0055a005000"
+    # 8-byte struct: start=0, end=1440 (0x05a0 LE), power (u16 LE),
+    # const=0x0050 LE.
+    struct_hex = "0000a005" + power_w.to_bytes(2, "little").hex() + "5000"
 
     def day_block(base: int) -> str:
         return (
@@ -1183,50 +1193,144 @@ def test_sb2_build_set_schedule_payload_matches_expected_layout():
     assert result.hex() == expected_hex
 
 
-@pytest.mark.parametrize("bad_power", [-1, 801, 1000])
+@pytest.mark.parametrize(
+    "bad_power",
+    [
+        pytest.param(-1, id="negative"),
+        pytest.param(-1000, id="very_negative"),
+        pytest.param(1001, id="one_over"),
+        pytest.param(2000, id="super_massive"),
+    ],
+)
 def test_sb2_build_set_schedule_payload_rejects_out_of_range(bad_power):
     """Out-of-range wattage raises ValueError."""
     with pytest.raises(ValueError):
         Solarbank2Common._build_set_schedule_payload(bad_power)
 
 
-def test_sb2_build_set_schedule_payload_uses_fresh_nonce_per_call():
+@pytest.mark.parametrize(
+    "power_w",
+    [
+        pytest.param(0, id="charge_only"),
+        pytest.param(100, id="hundred_watts"),
+        pytest.param(1000, id="max_output"),
+    ],
+)
+def test_sb2_build_set_schedule_payload_uses_fresh_nonce_per_call(power_w):
     """Each call generates a fresh fd nonce (prevents 'abnormal state').
 
     The Anker app generates fresh random bytes per write; reusing a value
     causes the schedule storage to update but the inverter target to stay
     stuck at the previous value.
     """
-    a = Solarbank2Common._build_set_schedule_payload(100)
-    b = Solarbank2Common._build_set_schedule_payload(100)
+    a = Solarbank2Common._build_set_schedule_payload(power_w)
+    b = Solarbank2Common._build_set_schedule_payload(power_w)
     assert a[:-4] == b[:-4]
     # 1-in-2^32 false-fail rate is negligible.
     assert a[-4:] != b[-4:]
 
 
-def test_sb2_prime_user_id_explicit_str_encoded_as_ascii():
-    dev = Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id=_FAKE_SB2_USER_ID_STR)
-    assert dev._anker_user_id == _FAKE_SB2_USER_ID_STR.encode("ascii")
+@pytest.mark.parametrize(
+    "anker_user_id,expected",
+    [
+        pytest.param(
+            _FAKE_SB2_USER_ID_STR,
+            _FAKE_SB2_USER_ID_STR.encode("ascii"),
+            id="str_encoded_as_ascii",
+        ),
+        pytest.param(
+            _FAKE_SB2_USER_ID_BYTES,
+            _FAKE_SB2_USER_ID_BYTES,
+            id="bytes_kept_as_is",
+        ),
+        # 40-char/byte values so no length warning fires.
+        pytest.param("abcdef01" * 5, b"abcdef01" * 5, id="hex_like_str"),
+        pytest.param(b"9" * 40, b"9" * 40, id="raw_bytes"),
+    ],
+)
+def test_sb2_prime_user_id_explicit(caplog, anker_user_id, expected):
+    """An explicit 40-char user ID is stored as bytes (``str`` ASCII-encoded,
+    ``bytes`` verbatim) and logs no length warning."""
+    with caplog.at_level(logging.WARNING):
+        dev = Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id=anker_user_id)
+    assert dev._anker_user_id == expected
+    assert "Anker user ID" not in caplog.text
 
 
-def test_sb2_prime_user_id_explicit_bytes_kept_as_is():
-    dev = Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id=_FAKE_SB2_USER_ID_BYTES)
-    assert dev._anker_user_id == _FAKE_SB2_USER_ID_BYTES
+@pytest.mark.parametrize(
+    "bad_id,expected",
+    [
+        pytest.param(
+            "not-a-user-id@example.com",
+            b"not-a-user-id@example.com",
+            id="email",
+        ),
+        pytest.param("0" * 39, b"0" * 39, id="one_short"),
+        pytest.param("0" * 41, b"0" * 41, id="one_long"),
+        pytest.param("", b"", id="empty"),
+        # The hex-*decoded* form is 20 bytes; passing that is a mistake.
+        pytest.param(b"f" * 20, b"f" * 20, id="decoded_length_bytes"),
+    ],
+)
+def test_sb2_prime_user_id_wrong_length_warns(caplog, bad_id, expected):
+    """A user ID that isn't 40 characters logs a warning but is still used.
+
+    We only have two userId samples, so a length mismatch (likely an
+    email address, account name, or truncated value) is a soft signal rather
+    than a hard error - the value is stored and used regardless.
+    """
+    with caplog.at_level(logging.WARNING):
+        dev = Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id=bad_id)
+    assert dev._anker_user_id == expected
+    assert any(
+        r.levelno == logging.WARNING and "Anker user ID" in r.getMessage()
+        for r in caplog.records
+    )
 
 
-def test_sb2_prime_user_id_falls_back_to_env_var(monkeypatch):
-    monkeypatch.setenv(ENV_SB2_ANKER_USER_ID, _FAKE_SB2_USER_ID_ENV)
+@pytest.mark.parametrize(
+    "env_value",
+    [
+        pytest.param(_FAKE_SB2_USER_ID_ENV, id="forty_ones"),
+        pytest.param("b" * 40, id="forty_bees"),
+        pytest.param("0123456789" * 4, id="forty_numeric"),
+    ],
+)
+def test_sb2_prime_user_id_falls_back_to_env_var(monkeypatch, env_value):
+    """With no explicit arg, the user ID is read from the environment and
+    ASCII-encoded."""
+    monkeypatch.setenv(ENV_SB2_ANKER_USER_ID, env_value)
     dev = Solarbank2Prime(MOCK_BLE_DEVICE)
-    assert dev._anker_user_id == _FAKE_SB2_USER_ID_ENV.encode("ascii")
+    assert dev._anker_user_id == env_value.encode("ascii")
 
 
-def test_sb2_prime_user_id_missing_raises(monkeypatch):
-    monkeypatch.delenv(ENV_SB2_ANKER_USER_ID, raising=False)
+@pytest.mark.parametrize(
+    "env_value",
+    [
+        pytest.param(None, id="unset"),
+        pytest.param("", id="empty_string"),
+    ],
+)
+def test_sb2_prime_user_id_missing_raises(monkeypatch, env_value):
+    """No explicit arg and no usable env var raises ValueError."""
+    if env_value is None:
+        monkeypatch.delenv(ENV_SB2_ANKER_USER_ID, raising=False)
+    else:
+        monkeypatch.setenv(ENV_SB2_ANKER_USER_ID, env_value)
     with pytest.raises(ValueError, match="Anker"):
         Solarbank2Prime(MOCK_BLE_DEVICE)
 
 
-def test_sb2_prime_static_key_encrypt_round_trips(monkeypatch):
+@pytest.mark.parametrize(
+    "plaintext",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param(bytes.fromhex("a104deadbeefa200"), id="tlv_like"),
+        pytest.param(b"\x00" * 32, id="all_zeros"),
+        pytest.param(bytes(range(64)), id="sequential_64"),
+    ],
+)
+def test_sb2_prime_static_key_encrypt_round_trips(monkeypatch, plaintext):
     """``_encrypt_with_static_key`` output is decryptable using the same
     Prime static GCM parameters.
 
@@ -1239,7 +1343,6 @@ def test_sb2_prime_static_key_encrypt_round_trips(monkeypatch):
     dev = Solarbank2Prime(MOCK_BLE_DEVICE)
     assert dev._shared_secret is None  # static-key path
 
-    plaintext = bytes.fromhex("a104deadbeefa200")
     encrypted = dev._encrypt_with_static_key(plaintext)
 
     # GCM output = ciphertext + 16-byte tag.
