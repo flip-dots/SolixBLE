@@ -256,7 +256,7 @@ shortly after the ECDH stage completes. Hooking them requires:
    the Dart ``List<int>`` argument according to its cid. These scripts
    will probably only work for a certain app and ABI version. 
    You will need to update the adresses for every app change. The sample 
-   SB2 capture script ``scripts/frida_3.js`` in the repository works 
+   SB2 capture script ``scripts/frida_sb2_dart.js`` in the repository works 
    for Anker App 3.18.0
 
 Scripts
