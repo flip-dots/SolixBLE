@@ -53,15 +53,20 @@ account credentials -- no phone, no rooted device.
 
 Requirements:
 
-- `anker-solix-api <https://pypi.org/project/anker-solix-api/>`_ (``pip install anker-solix-api``)
+- `anker-solix-api <https://github.com/thomluther/anker-solix-api>`_ -- **not published on
+  PyPI**, so install it from the repository. It is a Poetry project, and a plain
+  ``pip install git+https://…`` does not pull all of its dependencies; the reliable options are
+  to clone it and run ``poetry install``, or to let a runner resolve the declared dependencies
+  for you (see the ``uv`` recipe below).
 - Your Anker account email and password
+- Your account's country code -- see :ref:`countryid` below
 
 .. code-block:: python
 
     import asyncio
 
     from aiohttp import ClientSession
-    from api.api import AnkerSolixApi  # anker-solix-api
+    from anker_solix_api.api import AnkerSolixApi
 
 
     async def main() -> None:
@@ -72,6 +77,51 @@ Requirements:
 
 
     asyncio.run(main())
+
+Because the dependency is not on PyPI, the least invasive way to run this once is a
+`uv <https://github.com/astral-sh/uv>`_ inline-metadata script -- ``uv`` builds a throwaway
+environment from the declared dependencies, so nothing lands in your system or HA Python:
+
+.. code-block:: python
+
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = ["anker-solix-api @ git+https://github.com/thomluther/anker-solix-api"]
+    # ///
+    import asyncio
+    from getpass import getpass
+
+    from aiohttp import ClientSession
+    from anker_solix_api.api import AnkerSolixApi
+
+
+    async def main() -> None:
+        email = input("Anker account email: ")
+        password = getpass("Anker password: ")
+        country = input("Country code [US]: ") or "US"
+        async with ClientSession() as session:
+            api = AnkerSolixApi(email, password, country, session)
+            await api.async_authenticate()
+            print(api.apisession.get_login_info("user_id"))
+
+
+    asyncio.run(main())
+
+Run it with ``uv run owner_user_id.py``. Prompting for the credentials keeps them out of your
+shell history and out of the file.
+
+.. _countryid:
+
+Country code
+~~~~~~~~~~~~
+
+The third constructor argument is the account's country, and it is **not** cosmetic -- it
+selects the Anker API server region, so the wrong value fails the login rather than returning
+a different result. Use the ISO 3166-1 alpha-2 code your Anker account was registered with
+(``US``, ``DE``, ``GB``, ``AU``, …). anker-solix-api maps each code to its regional endpoint in
+``API_COUNTRIES`` (`apitypes.py
+<https://github.com/thomluther/anker-solix-api/blob/main/src/anker_solix_api/apitypes.py>`_);
+if your login fails with the country you expect, check that the code appears there.
 
 .. note::
     The exact accessor has moved across anker-solix-api versions. If
