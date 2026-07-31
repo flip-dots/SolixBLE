@@ -1052,6 +1052,123 @@ async def test_telemetry_packet_processing(
     assert parameters == device_parameters, "Parameters do not match expected!"
 
 
+# Solarbank 2 telemetry packet processing (0x03010f fragments).
+#
+# Unlike the connect()-driven test_telemetry_packet_processing above, these
+# drive _process_notification directly. Solarbank2Prime's handshake uses a
+# fresh random ECDH key per session, so it can't be replayed from fixed
+# negotiation fixtures; we set the session secret manually and feed raw
+# notification packets instead, exercising the same
+# _process_notification -> _process_telemetry_packet -> decrypt -> parse path.
+#
+# The packets are synthesized (encrypted made-up SB2 telemetry
+# TLV with the given secret, then frame it as one or more 03010f fragments).
+# The legacy Solarbank2 decrypts with AES-CBC; Solarbank2Prime with AES-GCM.
+_SB2_TELEMETRY_SECRET_CBC = (
+    "1122334455667788990011223344556677889900112233445566778899001122"
+)
+_SB2_TELEMETRY_SECRET_GCM = (
+    "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+)
+# Same TLV, decoded through either crypto path -> identical parsed parameters.
+_SB2_TELEMETRY_EXPECTED = (
+    "{'a1': '31', 'a2': '00415a563530453132333435', 'a3': '005a', "
+    "'a6': '000a', 'a7': '0005', 'a8': '0000', 'aa': '0019', "
+    "'ab': '00c800', 'ac': '000000', 'e5': '00'}"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "device_factory, packets, secret, parameters",
+    [
+        # Legacy Solarbank2 (AES-CBC), one 03010f fragment.
+        pytest.param(
+            lambda: Solarbank2(MOCK_BLE_DEVICE),
+            [
+                "ff094b0003010fc4051174c042283b2a419f1c221970d54659cc5098c4c21a1db14b9472c1f44418793eae17012661a7125619685bd2f226ac93da8bea558769e2cfd947778f94efcee1cb"
+            ],
+            _SB2_TELEMETRY_SECRET_CBC,
+            _SB2_TELEMETRY_EXPECTED,
+            id="legacy_cbc_single_fragment",
+        ),
+        # Legacy Solarbank2 (AES-CBC), split across two fragments (reassembly).
+        pytest.param(
+            lambda: Solarbank2(MOCK_BLE_DEVICE),
+            [
+                "ff092b0003010fc4051274c042283b2a419f1c221970d54659cc5098c4c21a1db14b9472c1f44418793eb8",
+                "ff092b0003010fc40522ae17012661a7125619685bd2f226ac93da8bea558769e2cfd947778f94efcee123",
+            ],
+            _SB2_TELEMETRY_SECRET_CBC,
+            _SB2_TELEMETRY_EXPECTED,
+            id="legacy_cbc_two_fragments",
+        ),
+        # Solarbank2Prime (AES-GCM), one 03010f fragment.
+        pytest.param(
+            lambda: Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id="e" * 40),
+            [
+                "ff094d0003010fc840114253291829c663bc3e6a78862c401c90977efe2b283efb46c5b20020955a8551f306ca45f7ebd09dd0aaf4d1a3271c4deed5d505ad1af6d21479cd107cdf4bfce27f4e"
+            ],
+            _SB2_TELEMETRY_SECRET_GCM,
+            _SB2_TELEMETRY_EXPECTED,
+            id="prime_gcm_single_fragment",
+        ),
+        # Solarbank2Prime (AES-GCM), split across two fragments (reassembly).
+        pytest.param(
+            lambda: Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id="e" * 40),
+            [
+                "ff092c0003010fc840124253291829c663bc3e6a78862c401c90977efe2b283efb46c5b20020955a8551f33f",
+                "ff092c0003010fc8402206ca45f7ebd09dd0aaf4d1a3271c4deed5d505ad1af6d21479cd107cdf4bfce27f6e",
+            ],
+            _SB2_TELEMETRY_SECRET_GCM,
+            _SB2_TELEMETRY_EXPECTED,
+            id="prime_gcm_two_fragments",
+        ),
+        # Only the first of two fragments arrives -> nothing is parsed yet.
+        pytest.param(
+            lambda: Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id="e" * 40),
+            [
+                "ff092c0003010fc840124253291829c663bc3e6a78862c401c90977efe2b283efb46c5b20020955a8551f33f",
+            ],
+            _SB2_TELEMETRY_SECRET_GCM,
+            None,
+            id="prime_gcm_incomplete_fragments",
+        ),
+    ],
+)
+async def test_sb2_telemetry_packet_processing(
+    device_factory, packets, secret, parameters
+):
+    """Solarbank 2 telemetry packets parse end-to-end into ``device._data``.
+
+    Feeds raw 03010f notification packets straight into
+    ``_process_notification`` (bypassing the handshake), covering both the
+    legacy AES-CBC path (:class:`Solarbank2`) and the Prime-style AES-GCM path
+    (:class:`Solarbank2Prime`), and both single- and multi-fragment reassembly.
+
+    :param device_factory: Callable returning the device under test.
+    :param packets: Raw notification packets to feed, in order.
+    :param secret: Session shared secret (AES key + IV/nonce material).
+    :param parameters: Expected parsed parameters string, or None if the
+        packets are insufficient to complete a telemetry payload.
+    """
+    device = device_factory()
+    # _process_notification only accepts packets from the current client;
+    # use one sentinel object as both the stored client and the sender.
+    device._client = mock.sentinel.mock_client
+    device._shared_secret = bytes.fromhex(secret)
+
+    for packet in packets:
+        await device._process_notification(
+            device._client, 0, bytearray.fromhex(packet)
+        )
+
+    device_parameters = (
+        device._parameters_to_str(device._data) if device._data else None
+    )
+    assert parameters == device_parameters, "Parameters do not match expected values!"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "device_class,payload,mapping,errors",
