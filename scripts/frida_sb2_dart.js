@@ -27,8 +27,21 @@
 
 // Utilities
 
+// Custom logger to automatically prepend timestamps.
+// Implementation adapted from frida.js by Harvey Lelliott (@flip-dots).
 function log(msg) {
-    console.log(msg);
+    var t = new Date();
+    var timestamp = t.getHours().toString().padStart(2, '0') + ':' +
+                    t.getMinutes().toString().padStart(2, '0') + ':' +
+                    t.getSeconds().toString().padStart(2, '0') + '.' +
+                    t.getMilliseconds().toString().padStart(3, '0');
+
+    // Handle formatting for messages that start with a newline
+    if (typeof msg === 'string' && msg.startsWith('\n')) {
+        console.log('\n[' + timestamp + '] ' + msg.substring(1));
+    } else {
+        console.log('[' + timestamp + '] ' + msg);
+    }
 }
 
 function toHex(byteArray) {
