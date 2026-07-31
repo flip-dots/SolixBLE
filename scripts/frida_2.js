@@ -4,7 +4,7 @@
  * Author        : Harvey Lelliott (@flip-dots) / Enhanced
  * Date          : 23/03/26
  * * License       : MIT
- * Revision      : 1.1.0
+ * Revision      : 1.1.1
  */
 
 // --- UTILITY FUNCTIONS ---
@@ -176,13 +176,26 @@ setImmediate(function() {
                     const key = arguments[1];
                     const iv = this.getIV();
                     const modeName = (opmode === 1) ? "ENCRYPT" : (opmode === 2) ? "DECRYPT" : opmode;
-
+                    
                     cipherStates[this.hashCode()] = {
                         mode: modeName,
                         algo: this.getAlgorithm(),
                         key: key ? toHex(key.getEncoded()) : "null",
                         iv: (iv && iv.length > 0) ? toHex(iv) : "null"
                     };
+
+                    console.log("\n[+] --- Cipher.init() ---");
+                    console.log("State: " + cipherStates[this.hashCode()]);
+                    console.log("Mode: " + modeName);
+                    console.log("Algorithm: " + this.getAlgorithm());
+
+                    if (key) {
+                        console.log("Key (Hex): " + toHex(key.getEncoded()));
+                    }
+                    if (iv) {
+                        console.log("IV/Nonce (Hex): " + toHex(iv));
+                    }
+
                     return result;
                 };
             });
@@ -200,6 +213,8 @@ setImmediate(function() {
                         log("Algorithm : " + state.algo + " (" + state.mode + ")");
                         if (input && input.length > 0) log("Input     : " + toHex(input));
                         if (result && result.length > 0) log("Output    : " + toHex(result));
+                    } else {
+                        log("Missing state for encryption .update() hook!");
                     }
                     return result;
                 };
@@ -222,6 +237,8 @@ setImmediate(function() {
                         if (input) log("Input     : " + toHex(input));
                         if (result) log("Output    : " + toHex(result));
                         log("-----------------------------------");
+                    } else {
+                        log("Missing state for encryption .doFinal() hook!");
                     }
                     return result;
                 };
@@ -250,6 +267,8 @@ setImmediate(function() {
                     if (data !== null && typeof data === 'object') {
                         log("Data (Hex): " + toHex(data));
                         printStackTrace("BLE Write Trace");
+                    } else {
+                        log("BLE write data not safe!");
                     }
                     return overload.apply(this, arguments);
                 };
@@ -264,6 +283,8 @@ setImmediate(function() {
                     log("\n[BLE NOTIFY] UUID: " + uuid);
                     if (value !== null && typeof value === 'object') {
                          log("Data (Hex): " + toHex(value));
+                    } else {
+                        log("BLE notify data not safe!");
                     }
                     return overload.apply(this, arguments);
                 };

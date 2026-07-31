@@ -129,6 +129,8 @@ class Solarbank2Common(SolixBLEDevice):
 
     _EXPECTED_TELEMETRY_LENGTH: int = 253
 
+    _TELEMETRY_COMMANDS: tuple[str, ...] = (*SolixBLEDevice._TELEMETRY_COMMANDS, "c840")
+
     # Post-handshake command path
 
     async def _send_command(self, cmd: bytes, payload: bytes) -> None:

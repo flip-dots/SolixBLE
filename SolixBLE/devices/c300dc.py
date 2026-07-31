@@ -13,8 +13,25 @@ from ..const import (
     DEFAULT_METADATA_STRING,
 )
 from ..device import SolixBLEDevice
-from ..states import ChargingStatus, LightStatus, PortStatus, TemperatureUnit, PortOverload
+from ..states import (
+    ChargingStatus,
+    DisplayTimeout,
+    LightStatus,
+    PortOverload,
+    PortStatus,
+    TemperatureUnit,
+)
 
+CMD_DC_OUTPUT = "404b"
+CMD_DISPLAY_ON_OFF = "4052"
+CMD_LIGHT_MODE = "404f"
+CMD_DISPLAY_TIMEOUT = "4046"
+CMD_DISPLAY_MODE = "404c"
+
+PAYLOAD_ON = "a10121a2020101"
+PAYLOAD_OFF = "a10121a2020100"
+PAYLOAD_LIGHT_MODE = "a10121a20201"
+PAYLOAD_TIMEOUT_TIME = "a10121a20302"
 
 class C300DC(SolixBLEDevice):
     """
@@ -380,4 +397,93 @@ class C300DC(SolixBLEDevice):
             bool(self._parse_int("f7", begin=1))
             if self._data is not None
             else DEFAULT_METADATA_BOOL
+        )
+
+    async def turn_dc_on(self) -> None:
+        """Turn the DC output on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
+        )
+
+    async def turn_dc_off(self) -> None:
+        """Turn the DC output off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
+        )
+
+    async def turn_display_on(self) -> None:
+        """Turn the display on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_ON)
+        )
+
+    async def turn_display_off(self) -> None:
+        """Turn the display off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_OFF)
+        )
+
+    async def set_light_mode(self, mode: LightStatus) -> None:
+        """Set the light mode of the LED bar.
+
+        :param mode: Mode to set light bar to.
+        :raises ValueError: If requested mode is invalid.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        if mode is LightStatus.UNKNOWN:
+            raise ValueError("You cannot set the light status to unknown")
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_LIGHT_MODE),
+            payload=bytes.fromhex(PAYLOAD_LIGHT_MODE) + mode.value.to_bytes(),
+        )
+
+    async def set_display_timeout(self, timeout: DisplayTimeout) -> None:
+        """Set the status/mode of the LCD display.
+
+        :param mode: Mode/timeout to set display to (30s, 5m, 30m, etc).
+        :raises ValueError: If requested mode is invalid.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+
+        if timeout is DisplayTimeout.UNKNOWN:
+            raise ValueError("You cannot set the display timeout to unknown")
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_DISPLAY_TIMEOUT),
+            payload=bytes.fromhex(PAYLOAD_TIMEOUT_TIME)
+            + timeout.value.to_bytes(length=2, byteorder="little", signed=False),
+        )
+
+    async def set_display_mode(self, mode: LightStatus) -> None:
+        """Set the status/mode of the LCD display.
+
+        :param mode: Mode/status to set display to (off/low/med/high).
+        :raises ValueError: If requested mode is invalid.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        if mode is LightStatus.UNKNOWN:
+            raise ValueError("You cannot set the display brightness status to unknown")
+        if mode is LightStatus.SOS:
+            raise ValueError("You cannot set the display brightness status to SOS")
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_DISPLAY_MODE),
+            payload=bytes.fromhex(PAYLOAD_LIGHT_MODE) + mode.value.to_bytes(),
         )

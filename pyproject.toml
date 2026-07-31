@@ -1,6 +1,6 @@
 [project]
 name = "SolixBLE"
-version = "3.7.0"
+version = "3.8.0"
 dependencies = [
   "bleak>=0.19.0",
   "cryptography",
@@ -26,6 +26,13 @@ classifiers = [
     "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3.11"
 ]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D202", "D212", "D213", "G004"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
 
 [project.urls]
 Homepage = "https://github.com/flip-dots/SolixBLE"

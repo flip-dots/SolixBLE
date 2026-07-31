@@ -20,10 +20,12 @@ from SolixBLE import (
     C1000G2,
     ChargingStatus,
     LightStatus,
+    MagGo3in1,
     PortOverload,
     PortStatus,
     PrimeCharger160w,
     PrimeDevice,
+    PrimePowerBank20k,
     Solarbank2,
     SolixBLEDevice,
     TemperatureUnit,
@@ -272,6 +274,71 @@ from tests.helpers import MockDevice
             },
             id="c1000g2",
         ),
+        # The two cases below are decrypted telemetry frames captured from a real
+        # C1000 Gen 2 (A1763) on 2026-06-21 with the AC output physically off then
+        # on (idle, no load). They are identical except for the "a7" param, which
+        # locks in the AC output decode: ac_output is "a7" byte 1 (00=off, 01=on,
+        # latched) -- the same per-port "04 <status> <watts LE>" shape used by the
+        # DC port (b2) and USB ports. ("a4" byte 22 is NOT the AC state: it stayed
+        # 01 with the port physically off, so an a4-based decode reports a false
+        # OUTPUT.)
+        pytest.param(
+            C1000G2,
+            "a10131a221062011415043444b39363047313631303033393000054131373633030401010100a30e0400000000b0040064cc00580200a41b0400000000580232010000000000f0003c00010000000100500a00a506042400396400a60a04000000000000ab2a39a70704000000000000a80404000000aa0404000000ab0404000000ac0404000000ae0404000000b20404000000d91a04000019500a0000000000000000000000000000000000000000da18040000000000000000000001e00164057f00000000000000dc06040000000000f91d0403040101060005000000000000000000090300010000000006090200fa15040101010100170300000000000000000000000000fd0e0031373832303439353930383637fe050364f4376a",
+            {
+                "serial_number": "APCDK960G16100390",
+                "part_number": "A1763",
+                "temperature": 36,
+                "battery_percentage": 57,
+                "battery_health": 100,
+                "ac_output": PortStatus.NOT_CONNECTED,
+                "ac_power_in": 0,
+                "ac_power_out": 0,
+                "power_out": 0,
+                "solar_port": PortStatus.NOT_CONNECTED,
+                "dc_output": PortStatus.NOT_CONNECTED,
+                "max_battery_percentage": 80,
+                "min_battery_percentage": 10,
+            },
+            id="c1000g2_ac_off",
+        ),
+        pytest.param(
+            C1000G2,
+            "a10131a221062011415043444b39363047313631303033393000054131373633030401010100a30e0400000000b0040064cc00580200a41b0400000000580232010000000000f0003c00010000000100500a00a506042400396400a60a04000000000000ab2a39a70704010000000000a80404000000aa0404000000ab0404000000ac0404000000ae0404000000b20404000000d91a04000019500a0000000000000000000000000000000000000000da18040000000000000000000001e00164057f00000000000000dc06040000000000f91d0403040101060005000000000000000000090300010000000006090200fa15040101010100170300000000000000000000000000fd0e0031373832303439353930383637fe050369f4376a",
+            {
+                "serial_number": "APCDK960G16100390",
+                "part_number": "A1763",
+                "temperature": 36,
+                "battery_percentage": 57,
+                "battery_health": 100,
+                "ac_output": PortStatus.OUTPUT,
+                "ac_power_in": 0,
+                "ac_power_out": 0,
+                "power_out": 0,
+                "solar_port": PortStatus.NOT_CONNECTED,
+                "dc_output": PortStatus.NOT_CONNECTED,
+                "max_battery_percentage": 80,
+                "min_battery_percentage": 10,
+            },
+            id="c1000g2_ac_on",
+        ),
+        # Derived from the idle "c1000g2" frame above with only the "b2" param
+        # changed from 04000000 to 04010600 -- the value observed live on a real
+        # C1000 Gen 2 with the DC output on and a ~6 W 12 V load. This locks in
+        # the DC decode: dc_output is "b2" byte 1 (01 = OUTPUT) and dc_power_out
+        # is "b2" [2:4] little-endian watts (0x0006 = 6 W).
+        pytest.param(
+            C1000G2,
+            "a10134a221062011415043444b39363146333734303032393000054131373633060201010100a30b0400000000b0040058dc00a41b0400000000b0043201000000000000001e00010000000000640103a506041700646400a60a04000000000000ab2a64a70704000000010000a80404000000aa0404000000ab0404000000ac0404000000ae0404000000b20404010600d91a0400001964010000000100000000000000000000000000000000da18040000000000000000000001e00164057f00000000000000dc06040000000000f91d0406020101050005000000000005000500050300010000000000020200fa150401010101001f0300000000000000000000000000fd0e0031373634363538323735393838fe0503638c2e69f0",
+            {
+                "serial_number": "APCDK961F37400290",
+                "battery_percentage": 100,
+                "ac_output": PortStatus.NOT_CONNECTED,
+                "dc_output": PortStatus.OUTPUT,
+                "dc_power_out": 6,
+            },
+            id="c1000g2_dc_on",
+        ),
         pytest.param(
             C300,
             "a10131a2050300000000a3050300000000a40302ffffa503020000a603025400a703020000a803020000a903020000aa03020100ab03020000ac03020000ad03020000ae03025500af03020000b003020100b103021b04b20302fc01b30302fc01b403021c00b503027b00b603021b04b7020101b8020100b9020124ba020100bb020164bc020164bd020100be020100bf020100c0020101c1020100c2020100c3020100c4020100c51100415a5653424a30453339323030303438c603024a01c70302a005c803022c01c903023c00ca03020000cb020101cc020100cd020102ce020132cf020100d0020100d1020101",
@@ -490,6 +557,94 @@ from tests.helpers import MockDevice
             id="prime_160w_all_three_charging",
         ),
         pytest.param(
+            PrimePowerBank20k,
+            "a10131a203044d60a30404010000a4020101a50404000000a60404000000a7080400000000000000a80f0400000000009600ff00ffffffff00a90f0400000000000000ff00ffffffff00ac09040000000000000000af02011db002011eb103020900fe050300000000",
+            {
+                "battery_percentage": 77,
+                "temperature": 29,
+                "power_out": 0.0,
+                "usb_port_c1": PortStatus.NOT_CONNECTED,
+                "usb_c1_current": 0.0,
+                "usb_c1_power": 15.0,
+                "usb_c1_voltage": 0.0,
+                "usb_port_c2": PortStatus.NOT_CONNECTED,
+                "usb_c2_current": 0.0,
+                "usb_c2_power": 0.0,
+                "usb_c2_voltage": 0.0,
+                "usb_port_a1": PortStatus.NOT_CONNECTED,
+                "usb_a1_current": 0.0,
+                "usb_a1_power": 0.0,
+                "usb_a1_voltage": 0.0,
+            },
+            id="prime_power_bank_20k_idle",
+        ),
+        pytest.param(
+            PrimePowerBank20k,
+            "a10131a20304515ca30404010000a4020101a50404000000a60404013601a7080400000000000000a80f04019500140036010107ffffffff00a90f0400000000000000ff00ffffffff00ac09040000000000000000af02011ab002011bb103020900fe050300000000",
+            {
+                "battery_percentage": 81,
+                "temperature": 26,
+                "power_out": 31.0,
+                "usb_port_c1": PortStatus.OUTPUT,
+                "usb_c1_current": 2.0,
+                "usb_c1_power": 31.0,
+                "usb_c1_voltage": 14.9,
+                "usb_port_c2": PortStatus.NOT_CONNECTED,
+                "usb_c2_current": 0.0,
+                "usb_c2_power": 0.0,
+                "usb_c2_voltage": 0.0,
+                "usb_port_a1": PortStatus.NOT_CONNECTED,
+                "usb_a1_current": 0.0,
+                "usb_a1_power": 0.0,
+                "usb_a1_voltage": 0.0,
+            },
+            id="prime_power_bank_20k_discharge_c1",
+        ),
+        pytest.param(
+            PrimePowerBank20k,
+            "a10131a20304505ca30404010000a4020101a50404000000a60404013a01a7080400000000000000a80f0400000000003d01ff00ffffffff00a90f0401950014002a010107ffffffff00ac09040133000300100000af02011bb002011cb103020900fe050300000000",
+            {
+                "battery_percentage": 80,
+                "temperature": 27,
+                "power_out": 31.4,
+                "usb_port_c1": PortStatus.NOT_CONNECTED,
+                "usb_c1_current": 0.0,
+                "usb_c1_power": 31.7,
+                "usb_c1_voltage": 0.0,
+                "usb_port_c2": PortStatus.OUTPUT,
+                "usb_c2_current": 2.0,
+                "usb_c2_power": 29.8,
+                "usb_c2_voltage": 14.9,
+                "usb_port_a1": PortStatus.OUTPUT,
+                "usb_a1_current": 0.3,
+                "usb_a1_power": 1.6,
+                "usb_a1_voltage": 5.1,
+            },
+            id="prime_power_bank_20k_discharge_c2_a1",
+        ),
+        pytest.param(
+            PrimePowerBank20k,
+            "a10131a203044b5da30404010018a4020101a50404014102a6040401a300a7080400000000000000a80f04015900100096000107ffffffff00a90f0402c9001c004102ff07ffffffff00ac090401330002000d0000af02011cb002011db103020900fe050300000000",
+            {
+                "battery_percentage": 75,
+                "temperature": 28,
+                "power_out": 16.3,
+                "usb_port_c1": PortStatus.OUTPUT,
+                "usb_c1_current": 1.6,
+                "usb_c1_power": 15.0,
+                "usb_c1_voltage": 8.9,
+                "usb_port_c2": PortStatus.INPUT,
+                "usb_c2_current": 2.8,
+                "usb_c2_power": 57.7,
+                "usb_c2_voltage": 20.1,
+                "usb_port_a1": PortStatus.OUTPUT,
+                "usb_a1_current": 0.2,
+                "usb_a1_power": 1.3,
+                "usb_a1_voltage": 5.1,
+            },
+            id="prime_power_bank_20k_discharge_c1_a1_charge_c2",
+        ),
+        pytest.param(
             C300DC,
             "a10131a2050300000000a303020000a403020000a503020000a603020000a703020000a803020000a903020000aa03020000ab03020000ac03020000ad03020000ae03020000af03020000b003020000b103020000b203020000b303020000b403020000b5020180b6020100b7020100b8020100b9020100ba020100bb020100bc020100bd020100be020100bf020100c0020100c1020100c2020100c3110020202020202020202020202020202020c403020000c503020000c603020000c7020100c8020100c9020100ca020100cb03020000cc020100cd020100f7050300000000f815040000000000000000000000000000000000000000",
             {
@@ -669,6 +824,38 @@ from tests.helpers import MockDevice
             },
             id="solarbank2_telemetry",
         ),
+        # Anker MagGo 3-in-1 wireless charger. Real capture with a phone on pad 1
+        # and an Apple Watch on pad 2, pad 3 unused. Per-pad power is the little
+        # endian value at aX[6:8] divided by 100 (e.g a2 -> 0x011d = 285 -> 2.85).
+        pytest.param(
+            MagGo3in1,
+            "a10131a20804013a0232001d01a3080401c60214008e00a4080400f40100000000a50304ffffa6050400000000fe050300000000",
+            {
+                "pad_1": PortStatus.OUTPUT,
+                "pad_1_power": 2.85,
+                "pad_2": PortStatus.OUTPUT,
+                "pad_2_power": 1.42,
+                "pad_3": PortStatus.NOT_CONNECTED,
+                "pad_3_power": 0.0,
+                "power_out": 4.27,
+            },
+            id="maggo_3in1_phone_and_watch",
+        ),
+        # Same charger, only pad 2 (a3) differs - phone now drawing more power.
+        pytest.param(
+            MagGo3in1,
+            "a10131a20804013a0232001d01a3080401d0021e00d800a4080400f40100000000a50304ffffa6050400000000fe050300000000",
+            {
+                "pad_1": PortStatus.OUTPUT,
+                "pad_1_power": 2.85,
+                "pad_2": PortStatus.OUTPUT,
+                "pad_2_power": 2.16,
+                "pad_3": PortStatus.NOT_CONNECTED,
+                "pad_3_power": 0.0,
+                "power_out": 5.01,
+            },
+            id="maggo_3in1_phone_higher_power",
+        ),
     ],
 )
 async def test_values(
@@ -689,6 +876,30 @@ async def test_values(
         assert (
             getattr(device, class_property) == expected_value
         ), f"Mismatch for property '{class_property}'!"
+
+
+@pytest.mark.asyncio
+async def test_c1000g2_dc_control() -> None:
+    """C1000 Gen 2 DC output control dispatches command 4102.
+
+    Confirmed on real hardware (the 12 V port physically switched and acked).
+    Here we just lock in that turn_dc_on/off send command 4102 with the same
+    on/off payloads as the AC output, which is the only difference between the
+    two on the Gen 2.
+    """
+    device = C1000G2(MOCK_BLE_DEVICE)
+    device._send_command = mock.AsyncMock()
+
+    await device.turn_dc_on()
+    device._send_command.assert_awaited_once_with(
+        cmd=bytes.fromhex("4102"), payload=bytes.fromhex("a10121a2020101")
+    )
+
+    device._send_command.reset_mock()
+    await device.turn_dc_off()
+    device._send_command.assert_awaited_once_with(
+        cmd=bytes.fromhex("4102"), payload=bytes.fromhex("a10121a2020100")
+    )
 
 
 @pytest.mark.asyncio
@@ -759,6 +970,22 @@ async def test_values(
             ],
             "6a2c89888de58cce1e15d98eb22669898ec29bcb1519ce19f950439aac9dbcb5",
             id="solarbank2_1",
+        ),
+        pytest.param(
+            PrimePowerBank20k,
+            [
+                "ff091e000300014801ab273ed3e27270c3f4d676ac7d69a00572793732a6",
+                "ff092b000300014803ab273ed0443800b35db54c6d4a6ec3d48171a04ea7ebce8bf749e5e48c5d991a5e67",
+                "ff0958000300014829ab273ed144326ada9fc66fa02508c5ddf549ade014d1eeb352fea11c0315b70b8aaa8a734ca5830f8d5827acbaa1224f05ad300b38d27bac9862a768d95c29daed0a89e92feb1d09163a094aa700ff",
+                "ff091b000300014805abab709a595a803dd04246b78a927453cf65",
+                "ff095d000300014821ab277f4e77c3b9e1f44367539f64f85d19969d0273c2c0ca93a06f3a010cf636e3b2df75d10791adf1e3c706a3238bcf0a858cd1e2d55d4cf1164a1b7db3b0058c47dfb24c71f11f8a96209d9f0924d420f03120",
+                "ff091b000300014822e520695552c2745a608fd21cf84bc6e3ccb9",
+                "ff091b000300014827e520695552c2745a608fd21cf84bc6e3ccbc",
+                "ff09df000301114a00e5a17fe3ebb89758b89ffb0e7d35a36ffeaeba3e991d79323680049a018c8e719bb706b6d00a142199a6cdc7f05bb5489f1ebb093fe3d134caf7ae5ad7b456867d9a58885cee8479bc10ea2d42d5b94d3b5a929cf4f4fd25f987e5a4922ae6fa744e22289080676583f390c1351a4b68ac5c1dabdcbf8e5e23416e47a0cea7a6062326dd8505464f821ba881f0f6f2c8ea050a7c978962980a539e90879aa1499b5be92fdceb53de533fc2bdd78b7998aec24493fdcfe3d2bc7e95b383744f92a4168819350e89d0d3142d1dbedcb779e45cfad12008",
+                "ff098300030111430044014f704abfd87d1d38fc0d7a35a36efdaf1f9f9f1c799493804dfaa6882d789fb7aeb4d117bd2330cd63c5f13f1e4a089ce80ac2442c66c85fa1f0dcb0d6867d9a58f7a3ee8479ec124724f6d7b84d8a58939c465ffb24e43754a1889be5f8c946d82d93806765835569e75bd67cbd3ac71071159c13a83bb9",
+            ],
+            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
+            id="prime_power_bank_20k",
         ),
     ],
 )
@@ -842,6 +1069,13 @@ async def test_negotiation(
             "c0779a39bfa7b290ba9cd3d96b6fdc22a1f6a9746d4fc81e942c3d95",
             "a10131a20302e805a303020000a4020100a5080400000000000000a6080401d84e00000000a7080400000000000000a8020100a9020150aa020100ab090400001c50343b3b3bac0d0401002c0100002c0100000300ad0d0401002c0100002c0100000100ae0d0401002c0100002c0100000300af020101b0020101b1020100b2020101b30201ffb40d04fafffbff00000000fafffbffb50d04ffffffffffffffffffffffffe0050408000000e10b0400000000000000000000fe050300000000",
             id="prime_160w_telemetry_alt",
+        ),
+        pytest.param(
+            PrimePowerBank20k,
+            "44014f704abfd87d1d38fc0d7a35a36efdaf1f9f9f1c799493804dfaa6882d789fb7aeb4d117bd2330cd63c5f13f1e4a089ce80ac2442c66c85fa1f0dcb0d6867d9a58f7a3ee8479ec124724f6d7b84d8a58939c465ffb24e43754a1889be5f8c946d82d93806765835569e75bd67cbd3ac71071159c13a83b",
+            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
+            "a10131a203044d60a30404010000a4020101a50404000000a60404000000a7080400000000000000a80f0400000000009600ff00ffffffff00a90f0400000000000000ff00ffffffff00ac09040000000000000000af02011db002011eb103020900fe050300000000",
+            id="prime_power_bank_telemetry",
         ),
     ],
 )
@@ -995,6 +1229,51 @@ def test_payload_decryption(
             "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
             """{'a1': '31', 'a2': '02e805', 'a3': '020000', 'a4': '0100', 'a5': '0401a824fe0b3f0b', 'a6': '0400000000000000', 'a7': '0400000000000000', 'a8': '0103', 'a9': '0150', 'aa': '0100', 'ab': '0400000f0f0f000000', 'ac': '0401002c0100002c0100000203', 'ad': '0401002c0100002c0100000300', 'ae': '0401002c0100002c0100000300', 'af': '0100', 'b0': '0100', 'b1': '0101', 'b2': '0101', 'b3': '0101', 'b4': '04e8040000fafffbfffafffbff', 'b5': '04ffffffffffffffffffffffff', 'e0': '0408000000', 'e1': '0480034b53000000000000', 'fe': '0300000000'}""",
             id="prime_telemetry_packet",
+        ),
+        # Test an Anker Prime power bank (single payload device) with a single telemetry packet.
+        pytest.param(
+            PrimePowerBank20k,
+            [
+                "ff098300030111430044014f704abfd87d1d38fc0d7a35a36efdaf1f9f9f1c799493804dfaa6882d789fb7aeb4d117bd2330cd63c5f13f1e4a089ce80ac2442c66c85fa1f0dcb0d6867d9a58f7a3ee8479ec124724f6d7b84d8a58939c465ffb24e43754a1889be5f8c946d82d93806765835569e75bd67cbd3ac71071159c13a83bb9"
+            ],
+            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
+            """{'a1': '31', 'a2': '044d60', 'a3': '04010000', 'a4': '0101', 'a5': '04000000', 'a6': '04000000', 'a7': '0400000000000000', 'a8': '0400000000009600ff00ffffffff00', 'a9': '0400000000000000ff00ffffffff00', 'ac': '040000000000000000', 'af': '011d', 'b0': '011e', 'b1': '020900', 'fe': '0300000000'}""",
+            id="prime_power_bank_telemetry_packet",
+        ),
+        # Test an Anker Prime device (single payload device) with a single telemetry packet
+        # from the logs of someone elses unit which for some reason transmits telemetry
+        # unencrypted
+        pytest.param(
+            PrimeCharger160w,
+            [
+                "ff09ca000301110300a10131a203024606a303020000a4020100a5080401d8459906bb0ba6080401e81300000000a7080400000000000000a8020103a9020150aa020100ab090400000000000b0b0bac0d0401002c0100002c0100000200ad0d0401002c0100002c0100000201ae0d0401002c0100002c0100000300af020100b0020100b1020100b2020101b30201ffb40d0400000000ac051573fafffbffb50d04ffffffffffffffffffffffffe0050448000000e10b0400000000000000000000fe0503000000006b"
+            ],
+            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
+            """{'a1': '31', 'a2': '024606', 'a3': '020000', 'a4': '0100', 'a5': '0401d8459906bb0b', 'a6': '0401e81300000000', 'a7': '0400000000000000', 'a8': '0103', 'a9': '0150', 'aa': '0100', 'ab': '0400000000000b0b0b', 'ac': '0401002c0100002c0100000200', 'ad': '0401002c0100002c0100000201', 'ae': '0401002c0100002c0100000300', 'af': '0100', 'b0': '0100', 'b1': '0100', 'b2': '0101', 'b3': '01ff', 'b4': '0400000000ac051573fafffbff', 'b5': '04ffffffffffffffffffffffff', 'e0': '0448000000', 'e1': '0400000000000000000000', 'fe': '0300000000'}""",
+            id="prime_telemetry_packet_plain_text",
+        ),
+        # Anker MagGo 3-in-1 wireless charger telemetry packet (cmd 4300). The
+        # decrypted payload is a real capture (phone on pad 1, watch on pad 2);
+        # it was re-encrypted with the secret below to exercise the end-to-end
+        # command routing and decrypt/parse path for this device.
+        pytest.param(
+            MagGo3in1,
+            [
+                "ff094e00030111430044014f7041bf9427bc0ef8117b960f68fd68b88f9b9279303d80490ea7888a709b12adb02ee81b269cc267c5f1c11b499e9c170a1514a45ceafe1bbd3925d3a766ac4aa32d"
+            ],
+            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
+            """{'a1': '31', 'a2': '04013a0232001d01', 'a3': '0401c60214008e00', 'a4': '0400f40100000000', 'a5': '04ffff', 'a6': '0400000000', 'fe': '0300000000'}""",
+            id="maggo_3in1_telemetry_packet",
+        ),
+        # Same charger, phone now drawing more power (only a3 differs).
+        pytest.param(
+            MagGo3in1,
+            [
+                "ff094e00030111430044014f7041bf9427bc0ef8117b960f68fd7eb8859bc479303d80490ea7888a709b12adb02ee81b269cc267c5f1c11b499e9c170a7a6261f98ce9db7373fe83ccb3d81475e2"
+            ],
+            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
+            """{'a1': '31', 'a2': '04013a0232001d01', 'a3': '0401d0021e00d800', 'a4': '0400f40100000000', 'a5': '04ffff', 'a6': '0400000000', 'fe': '0300000000'}""",
+            id="maggo_3in1_telemetry_packet_higher_power",
         ),
     ],
 )
@@ -1167,6 +1446,81 @@ async def test_sb2_telemetry_packet_processing(
         device._parameters_to_str(device._data) if device._data else None
     )
     assert parameters == device_parameters, "Parameters do not match expected values!"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "device_class, packets, secret, expected_logs",
+    [
+        # Telemetry packet from logs of someone elses Prime 160w charger.
+        # Interestingly this packet is not encrypted at all
+        pytest.param(
+            PrimeCharger160w,
+            [
+                "ff09ca000301110300a10131a203024606a303020000a4020100a5080401e042b105b209a6080401e81300000000a7080400000000000000a8020103a9020150aa020100ab090400000000000b0b0bac0d0401002c0100002c0100000200ad0d0401002c0100002c0100000201ae0d0401002c0100002c0100000300af020100b0020100b1020100b2020101b30201ffb40d0400000000ac051573fafffbffb50d04ffffffffffffffffffffffffe0050448000000e10b0400000000000000000000fe05030000000074"
+            ],
+            "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
+            [
+                "Received non-encrypted telemetry message",
+                "Telemetry parameters: {'a1': '31', 'a2': '024606'",
+            ],
+            id="prime_160w_other",
+        ),
+    ],
+)
+async def test_generic_packet_processing(
+    caplog,
+    fast_sleep,
+    fast_timeouts,
+    device_class: type[SolixBLEDevice],
+    packets: list[str],
+    secret: str,
+    expected_logs: list[str],
+):
+    """
+    Test the _process_notification function when processing arbitrary
+    packets and check for expected log entries.
+
+    :param device_class: Class of device under test.
+    :param packets: List of packets to send to device.
+    :param secret: Shared secret used as AES key and IV.
+    :param expected_logs: List of expected entries in the debug log.
+    """
+
+    device = device_class(MOCK_BLE_DEVICE)
+
+    negotiation_responses = (
+        NEGOTIATION_RESPONSES_PRIME
+        if issubclass(device_class, PrimeDevice)
+        else NEGOTIATION_RESPONSES_SOLIX
+    )
+
+    async with MockDevice() as mock_bluetooth:
+        with caplog.at_level(logging.DEBUG):
+
+            # We first expect a negotiation
+            for expected, response in negotiation_responses.items():
+                mock_bluetooth.expect_ordered(
+                    bytes.fromhex(expected),
+                    [bytes.fromhex(x) for x in response],
+                )
+
+            # We expect the negotiations to succeed
+            assert await device.connect(), "Expected connect to return True"
+            await asyncio.sleep(0.5)
+            assert device.connected, "Expected connected to be True"
+            assert device.negotiated, "Expected connected to be True"
+            mock_bluetooth.check_assertions()
+
+            device._shared_secret = bytes.fromhex(secret)
+
+            for packet in packets:
+                await mock_bluetooth.send_data([bytes.fromhex(packet)])
+
+            for expected_log_entry in expected_logs:
+                assert (
+                    expected_log_entry in caplog.text
+                ), f"Expected to find '{expected_log_entry}' in logs but it was not found!"
 
 
 @pytest.mark.asyncio

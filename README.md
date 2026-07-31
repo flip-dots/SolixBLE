@@ -53,6 +53,7 @@ See the [support table](https://solixble.readthedocs.io/en/latest) in the docume
 - Solarbank 3
 - Prime Charger 160w
 - Prime Charger 250w
+- Prime MagGo 3in1 (A25X7)
 - Potentially more!
 
 
@@ -89,3 +90,8 @@ pip install SolixBLE
 See the `Generic` class inside `SolixBLE/devices/generic.py` and the 
 [documentation](https://solixble.readthedocs.io/en/latest/new_devices.html)
 for guidance on how to add support for new devices.
+
+
+## Disclaimer
+
+SolixBLE is a software library designed to work with Anker Solix/Prime devices. ANKER is a registered trademark of Anker Innovations Limited. This project is not affiliated with, endorsed by, or sponsored by Anker Innovations Limited (Though I wouldn't mind being sponsored 😉). All other trademarks cited herein are the property of their respective owners.

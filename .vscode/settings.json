@@ -6,6 +6,7 @@
         "editor.defaultFormatter": "ms-python.black-formatter",
         "editor.formatOnSave": true
     },
+    "ruff.lint.enable": true,
     "cSpell.enabled": true,
     "cSpell.words": [
         "Anker",

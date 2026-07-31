@@ -487,7 +487,9 @@ class PrimeDevice(SolixBLEDevice):
     # Packet processing #
     #####################
 
-    async def _process_telemetry_packet(self, payload: bytes, cmd: bytes = None) -> None:
+    async def _process_telemetry_packet(
+        self, payload: bytes, cmd: bytes = None
+    ) -> None:
         """
         Process a telemetry packet from an Anker Prime device.
 

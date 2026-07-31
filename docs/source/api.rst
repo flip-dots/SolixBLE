@@ -23,6 +23,8 @@ the list of properties for that class.
    solarbank3
    prime_charger_160w
    prime_charger_250w
+   prime_maggo_3in1
+   prime_power_bank_20k
    generic
    enums
    helpers

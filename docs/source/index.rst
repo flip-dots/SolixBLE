@@ -43,26 +43,26 @@ Battery health          ❌        ✅          ✅        ✅        ✅       
 Temperature             ✅        ✅          ✅        ✅        ✅         ✅           ✅
 Total Power In          ✅        ✅          ✅        ✅        ❌         ❌           ✅     
 Total Power Out         ✅        ✅          ✅        ✅        ✅         ❌           ✅ 
-AC on/off control       ✅        N/A         ✅        ✅        ❌         ❌           ❌  
+AC on/off control       ✅        N/A         ✅        ✅        ✅         ❌           ❌  
 AC Power in             ✅        N/A         ✅        ✅        ✅         ✅           ✅     
 AC Power out            ✅        N/A         ✅        ✅        ✅         ✅           ✅  
 AC on/off state         ✅        N/A         ✅        ✅        ✅         ❌           ✅   
 AC Timer                ✅        N/A         ✅        ✅        ❌         ❌           ❌  
-DC on/off control       ✅        ❌          ✅        ✅        ❌         ❌           ❌  
+DC on/off control       ✅        ✅          ✅        ✅        ✅         ❌           ❌
 DC Power in             ✅        ✅          ✅        ✅        ✅         ✅           ✅   
-DC Power out            ✅        ✅          ❌        ❌        ✅         ✅           ✅  
+DC Power out            ✅        ✅          ❌        ✅        ✅         ✅           ✅  
 DC Power in status      ✅        ✅          ❌        ❌        ✅         ❌           ❌ 
-DC Power out status     ✅        ❌          ❌        ❌        ✅         ❌           ✅   
+DC Power out status     ✅        ❌          ❌        ✅        ✅         ❌           ✅   
 DC Timer                ✅        ✅          ❌        ❌        ❌         ❌           ❌ 
 USB Power out           ✅        ✅          ✅        ✅        ✅         ✅           ✅     
 USB Port status         ✅        ✅          ❌        ❌        ✅         ❌           ✅ 
-Light control           ✅        ❌          ✅        ✅        ❌         ❌           ❌  
+Light control           ✅        ✅          ✅        ✅        ❌         ❌           ❌  
 Light status            ✅        ✅          ❌        ❌        N/A        ❌           ❌ 
-Display on/off control  ✅        ❌          ✅        ✅        ❌         ❌           ❌ 
+Display on/off control  ✅        ✅          ✅        ✅        ❌         ❌           ❌ 
 Display on/off status   ❌        ✅          ❌        ❌        ❌         ❌           ❌ 
-Display brightness ctrl ✅        ❌          ✅        ✅        ❌         ❌           ❌ 
+Display brightness ctrl ✅        ✅          ✅        ✅        ❌         ❌           ❌ 
 Display brightness stat ❌        ✅          ❌        ❌        ❌         ❌           ❌ 
-Display timeout ctrl    ✅        ❌          ✅        ✅        ❌         ❌           ❌ 
+Display timeout ctrl    ✅        ✅          ✅        ✅        ❌         ❌           ❌ 
 Display timeout stat    ❌        ✅          ❌        ❌        ❌         ❌           ❌
 Firmware version        ✅        ✅          ✅        ✅        ❌         ✅           ✅  
 Serial number           ✅        ✅          ✅        ✅        ✅         ✅           ✅     
@@ -131,22 +131,51 @@ Expansion battery serial number     ❌           ❌
 Prime charger support
 ---------------------
 
-======================= ============= =============
-Parameter               250w (A2345)  160w (A2687)
-======================= ============= =============
-Display status           ❌            ❌
-Total power out          ❌            ❌
-Port on/off control      ❌            ✅
-Timer control            ❌            ✅
-Individual port status   ✅            ✅
-Individual port voltage  ✅            ✅
-Individual port current  ✅            ✅
-Individual port power    ✅            ✅
-Temperature              ❌            ❌
-Firmware version         ❌            ❌
-Serial number            ❌            ❌
-======================= ============= =============
+======================= ============= ============= ===================
+Parameter               250w (A2345)  160w (A2687)  MagGo 3in1 (A25X7)
+======================= ============= ============= ===================
+Display status           ❌            ❌            ❌
+Total power out          ❌            ❌            ✅
+Port on/off control      ❌            ✅            ❌
+Port protocol control    ❌            ❌            ❌
+Timer control            ❌            ✅            ❌
+Individual port status   ✅            ✅            ✅
+Individual port voltage  ✅            ✅            ❌
+Individual port current  ✅            ✅            ❌
+Individual port power    ✅            ✅            ✅
+Temperature              ❌            ❌            ❌
+Firmware version         ❌            ❌            ❌
+Serial number            ❌            ❌            ❌
+======================= ============= ============= ===================
 
+
+Prime power bank support
+------------------------
+
+======================= ================= 
+Parameter               20k/220w (A110B)
+======================= =================
+Battery percentage       ✅
+Display status           ❌
+Total power out          ✅
+Port on/off control      ❌
+Port protocol control    ❌
+Individual port status   ✅
+Individual port voltage  ✅
+Individual port current  ✅
+Individual port power    ✅
+Temperature              ✅
+Firmware version         ❌
+Serial number            ❌
+======================= =================
+
+Disclaimer
+----------
+
+SolixBLE is a software library designed to work with Anker Solix/Prime devices.
+ANKER is a registered trademark of Anker Innovations Limited. 
+This project is not affiliated with, endorsed by, or sponsored by Anker Innovations Limited (Though I wouldn't mind being sponsored 😉).
+All other trademarks cited herein are the property of their respective owners.
 
 
 Contents

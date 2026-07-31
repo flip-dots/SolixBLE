@@ -4,32 +4,95 @@
 
 """
 
-from ..const import DEFAULT_METADATA_BOOL
 from ..device import SolixBLEDevice
 from ..states import PortStatus
+
+#: Command sent after connecting to start the telemetry stream. Unlike the gen-1
+#: models, the Gen 2 streams nothing until it receives this subscribe command.
+CMD_SUBSCRIBE = "4100"
+SUBSCRIBE_PAYLOAD = "a10121"
+
+CMD_AC_OUTPUT = "4101"
+CMD_DC_OUTPUT = "4102"
+
+PAYLOAD_ON = "a10121a2020101"
+PAYLOAD_OFF = "a10121a2020100"
 
 
 class C1000G2(SolixBLEDevice):
     """
     C1000(X) Gen 2 Power Station.
 
-    Use this class to connect and monitor a Gen 2 C1000(X) power station.
-    This model is also known as the A1763.
+    Use this class to connect, monitor and control a Gen 2 C1000(X) power
+    station. This model is also known as the A1763.
 
-    .. note::
-        This model was added using data from anker-solix-api. It has not been
-        tested!
-
-    .. note::
-        It should be possible to add more sensors. I think devices with lots of
-        telemetry values split them up into multiple messages but I have not
-        played around with this yet. That and I am being a bit conservative with
-        these initial implementations, if you want more sensors and are willing
-        to help with testing feel free to raise a GitHub issue.
-
+    The Gen 2 uses the same encryption and telemetry framing as the gen-1
+    models but with different command codes: it must be sent a subscribe command
+    (``4100``) after connecting before it streams any telemetry, its telemetry
+    arrives on commands ``c421``/``c900``, its AC output is controlled with
+    command ``4101`` and its DC output with command ``4102``. Telemetry and
+    AC/DC on/off control have been confirmed on real hardware.
     """
 
     _EXPECTED_TELEMETRY_LENGTH: int = 253
+
+    #: The Gen 2 pushes telemetry on different command codes to the gen-1 models.
+    _TELEMETRY_COMMANDS: tuple[str, ...] = ("c421", "c900")
+
+    async def _post_connect(self) -> None:
+        """Subscribe to telemetry once connected.
+
+        The Gen 2 streams no telemetry until it receives this command, so we send
+        it after every (re)connection.
+        """
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_SUBSCRIBE),
+            payload=bytes.fromhex(SUBSCRIBE_PAYLOAD),
+        )
+
+    async def turn_ac_on(self) -> None:
+        """Turn the AC output on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
+        )
+
+    async def turn_ac_off(self) -> None:
+        """Turn the AC output off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
+        )
+
+    async def turn_dc_on(self) -> None:
+        """Turn the DC (12 V) output on.
+
+        Confirmed on real hardware: the 12 V port physically switched and the
+        ``b2`` status byte latched on. The Gen 2 reuses the AC on/off payload on
+        a different command code (``4102``).
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
+        )
+
+    async def turn_dc_off(self) -> None:
+        """Turn the DC (12 V) output off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
+        )
 
     @property
     def serial_number(self) -> str:
@@ -73,7 +136,7 @@ class C1000G2(SolixBLEDevice):
 
     @property
     def power_out(self) -> int:
-        """Total Power Out.
+        """Total Power Out (watts).
 
         :returns: Total power out or default int value.
         """
@@ -81,7 +144,7 @@ class C1000G2(SolixBLEDevice):
 
     @property
     def ac_power_in(self) -> int:
-        """AC Power In.
+        """AC Power In (watts).
 
         :returns: Total AC power in or default int value.
         """
@@ -94,13 +157,24 @@ class C1000G2(SolixBLEDevice):
         PortStatus.NOT_CONNECTED signifies off.
         PortStatus.OUTPUT signifies on.
 
+        .. note::
+           :collapsible: closed
+
+           The AC port status is the first byte of the ``a7`` parameter,
+           mirroring the ``04 <status> <watts LE>`` per-port shape used by the
+           DC port (``b2``) and the USB ports; ``ac_power_out`` reads the watts
+           from this same ``a7`` TLV. Confirmed on hardware: ``a7[1]`` latches
+           ``01`` (OUTPUT) when AC is on and ``00`` when off, tracking the relay.
+           (The ``a4`` parameter is constant at the previously-used offset and
+           does NOT reflect the AC state.)
+
         :returns: Status of the AC port.
         """
         return PortStatus(self._parse_int("a7", begin=1, end=2))
 
     @property
     def ac_power_out(self) -> int:
-        """AC Power Out.
+        """AC Power Out (watts).
 
         :returns: Total AC power out or default int value.
         """
@@ -116,7 +190,9 @@ class C1000G2(SolixBLEDevice):
 
     @property
     def solar_power_in(self) -> int:
-        """Solar/DC Power In.
+        """Solar/DC Power In (watts).
+
+        .. note:: Offset inferred, not yet confirmed on hardware (no solar/DC-in capture taken).
 
         :returns: Solar/DC power in or default int value.
         """
@@ -164,7 +240,7 @@ class C1000G2(SolixBLEDevice):
 
     @property
     def usb_c3_power(self) -> int:
-        """USB C3 Power.
+        """USB C3 Power (watts).
 
         :returns: USB port C3 power or default int value.
         """
@@ -190,13 +266,19 @@ class C1000G2(SolixBLEDevice):
     def dc_output(self) -> PortStatus:
         """DC Port Status.
 
+        Confirmed on hardware: ``b2[1]`` latched ``01`` (OUTPUT) when the 12 V
+        port was switched on and ``00`` (NOT_CONNECTED) when off.
+
         :returns: Status of the DC output port.
         """
         return PortStatus(self._parse_int("b2", begin=1, end=2))
 
     @property
     def dc_power_out(self) -> int:
-        """DC Power Out.
+        """DC Power Out (watts).
+
+        Confirmed on hardware: ``b2`` [2:4] read 6 W with a 12 V load on the DC
+        output, matching the ``04 <status> <watts LE>`` per-port shape.
 
         :returns: DC power out or default int value.
         """

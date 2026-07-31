@@ -5,3 +5,5 @@ bleak
 cryptography
 pycryptodome
 bleak-retry-connector
+ruff
+mypy

@@ -187,6 +187,25 @@ class C1000(SolixBLEDevice):
         return self._parse_int("b0", begin=1)
 
     @property
+    def dc_output(self) -> PortStatus:
+        """DC Port Status.
+
+        PortStatus.NOT_CONNECTED signifies off.
+        PortStatus.OUTPUT signifies on.
+
+        :returns: Status of the DC output port.
+        """
+        return PortStatus(self._parse_int("b2", begin=1, end=2))
+
+    @property
+    def dc_power_out(self) -> int:
+        """DC Power Out.
+
+        :returns: DC power out or default int value.
+        """
+        return self._parse_int("b2", begin=2)
+
+    @property
     def software_version(self) -> str:
         """Main software version.
 
