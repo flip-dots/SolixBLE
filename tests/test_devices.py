@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import os
 from typing import Any
 from unittest import mock
 
@@ -29,7 +30,12 @@ from SolixBLE import (
     SolixBLEDevice,
     TemperatureUnit,
 )
-from SolixBLE.devices.solarbank2 import MaxLoadSB2
+from SolixBLE.devices.solarbank2 import (
+    ENV_SB2_ANKER_USER_ID,
+    MaxLoadSB2,
+    Solarbank2Prime,
+    Solarbank2Common,
+)
 from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
 from tests.const import (
     MOCK_BLE_DEVICE,
@@ -1325,6 +1331,123 @@ async def test_telemetry_packet_processing(
     assert parameters == device_parameters, "Parameters do not match expected!"
 
 
+# Solarbank 2 telemetry packet processing (0x03010f fragments).
+#
+# Unlike the connect()-driven test_telemetry_packet_processing above, these
+# drive _process_notification directly. Solarbank2Prime's handshake uses a
+# fresh random ECDH key per session, so it can't be replayed from fixed
+# negotiation fixtures; we set the session secret manually and feed raw
+# notification packets instead, exercising the same
+# _process_notification -> _process_telemetry_packet -> decrypt -> parse path.
+#
+# The packets are synthesized (encrypted made-up SB2 telemetry
+# TLV with the given secret, then frame it as one or more 03010f fragments).
+# The legacy Solarbank2 decrypts with AES-CBC; Solarbank2Prime with AES-GCM.
+_SB2_TELEMETRY_SECRET_CBC = (
+    "1122334455667788990011223344556677889900112233445566778899001122"
+)
+_SB2_TELEMETRY_SECRET_GCM = (
+    "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+)
+# Same TLV, decoded through either crypto path -> identical parsed parameters.
+_SB2_TELEMETRY_EXPECTED = (
+    "{'a1': '31', 'a2': '00415a563530453132333435', 'a3': '005a', "
+    "'a6': '000a', 'a7': '0005', 'a8': '0000', 'aa': '0019', "
+    "'ab': '00c800', 'ac': '000000', 'e5': '00'}"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "device_factory, packets, secret, parameters",
+    [
+        # Legacy Solarbank2 (AES-CBC), one 03010f fragment.
+        pytest.param(
+            lambda: Solarbank2(MOCK_BLE_DEVICE),
+            [
+                "ff094b0003010fc4051174c042283b2a419f1c221970d54659cc5098c4c21a1db14b9472c1f44418793eae17012661a7125619685bd2f226ac93da8bea558769e2cfd947778f94efcee1cb"
+            ],
+            _SB2_TELEMETRY_SECRET_CBC,
+            _SB2_TELEMETRY_EXPECTED,
+            id="legacy_cbc_single_fragment",
+        ),
+        # Legacy Solarbank2 (AES-CBC), split across two fragments (reassembly).
+        pytest.param(
+            lambda: Solarbank2(MOCK_BLE_DEVICE),
+            [
+                "ff092b0003010fc4051274c042283b2a419f1c221970d54659cc5098c4c21a1db14b9472c1f44418793eb8",
+                "ff092b0003010fc40522ae17012661a7125619685bd2f226ac93da8bea558769e2cfd947778f94efcee123",
+            ],
+            _SB2_TELEMETRY_SECRET_CBC,
+            _SB2_TELEMETRY_EXPECTED,
+            id="legacy_cbc_two_fragments",
+        ),
+        # Solarbank2Prime (AES-GCM), one 03010f fragment.
+        pytest.param(
+            lambda: Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id="e" * 40),
+            [
+                "ff094d0003010fc840114253291829c663bc3e6a78862c401c90977efe2b283efb46c5b20020955a8551f306ca45f7ebd09dd0aaf4d1a3271c4deed5d505ad1af6d21479cd107cdf4bfce27f4e"
+            ],
+            _SB2_TELEMETRY_SECRET_GCM,
+            _SB2_TELEMETRY_EXPECTED,
+            id="prime_gcm_single_fragment",
+        ),
+        # Solarbank2Prime (AES-GCM), split across two fragments (reassembly).
+        pytest.param(
+            lambda: Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id="e" * 40),
+            [
+                "ff092c0003010fc840124253291829c663bc3e6a78862c401c90977efe2b283efb46c5b20020955a8551f33f",
+                "ff092c0003010fc8402206ca45f7ebd09dd0aaf4d1a3271c4deed5d505ad1af6d21479cd107cdf4bfce27f6e",
+            ],
+            _SB2_TELEMETRY_SECRET_GCM,
+            _SB2_TELEMETRY_EXPECTED,
+            id="prime_gcm_two_fragments",
+        ),
+        # Only the first of two fragments arrives -> nothing is parsed yet.
+        pytest.param(
+            lambda: Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id="e" * 40),
+            [
+                "ff092c0003010fc840124253291829c663bc3e6a78862c401c90977efe2b283efb46c5b20020955a8551f33f",
+            ],
+            _SB2_TELEMETRY_SECRET_GCM,
+            None,
+            id="prime_gcm_incomplete_fragments",
+        ),
+    ],
+)
+async def test_sb2_telemetry_packet_processing(
+    device_factory, packets, secret, parameters
+):
+    """Solarbank 2 telemetry packets parse end-to-end into ``device._data``.
+
+    Feeds raw 03010f notification packets straight into
+    ``_process_notification`` (bypassing the handshake), covering both the
+    legacy AES-CBC path (:class:`Solarbank2`) and the Prime-style AES-GCM path
+    (:class:`Solarbank2Prime`), and both single- and multi-fragment reassembly.
+
+    :param device_factory: Callable returning the device under test.
+    :param packets: Raw notification packets to feed, in order.
+    :param secret: Session shared secret (AES key + IV/nonce material).
+    :param parameters: Expected parsed parameters string, or None if the
+        packets are insufficient to complete a telemetry payload.
+    """
+    device = device_factory()
+    # _process_notification only accepts packets from the current client;
+    # use one sentinel object as both the stored client and the sender.
+    device._client = mock.sentinel.mock_client
+    device._shared_secret = bytes.fromhex(secret)
+
+    for packet in packets:
+        await device._process_notification(
+            device._client, 0, bytearray.fromhex(packet)
+        )
+
+    device_parameters = (
+        device._parameters_to_str(device._data) if device._data else None
+    )
+    assert parameters == device_parameters, "Parameters do not match expected values!"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "device_class, packets, secret, expected_logs",
@@ -1491,3 +1614,208 @@ async def test_bad_values(
         assert (
             getattr(device, class_property) == expected_value
         ), f"Mismatch for property '{class_property}'!"
+
+
+# Solarbank 2 set-schedule payload (0x405e) and Solarbank2Prime construction
+# Synthetic user IDs - never the real Anker cloud userId from any capture.
+_FAKE_SB2_USER_ID_STR = "0" * 40
+_FAKE_SB2_USER_ID_BYTES = b"f" * 40
+_FAKE_SB2_USER_ID_ENV = "1" * 40
+
+
+@pytest.mark.parametrize(
+    "power_w",
+    [
+        pytest.param(0, id="charge_only"),
+        pytest.param(90, id="ninety_watts"),
+        pytest.param(320, id="mid_range"),
+        pytest.param(800, id="max_output"),
+    ],
+)
+def test_sb2_build_set_schedule_payload_matches_expected_layout(power_w):
+    """A uniform schedule produces the documented 7-day TLV layout.
+
+    Asserts the per-day-symmetric reading: 7 identical day-blocks
+    (a3, a7, ab, af, b3, b7, bb) each with enable flag, 8-byte struct,
+    per-day flag, 1-byte trailer; then the ``fd 05 03 <4B>`` nonce.
+    """
+    fixed_nonce = bytes.fromhex("00112233")
+    with mock.patch.object(os, "urandom", return_value=fixed_nonce):
+        result = Solarbank2Common._build_set_schedule_payload(power_w)
+
+    # 8-byte struct: start=0, end=1440 (0x05a0 LE), power (u16 LE),
+    # const=0x0050 LE.
+    struct_hex = "0000a005" + power_w.to_bytes(2, "little").hex() + "5000"
+
+    def day_block(base: int) -> str:
+        return (
+            f"{base:02x}020101"
+            f"{base + 1:02x}0904{struct_hex}"
+            f"{base + 2:02x}020100"
+            f"{base + 3:02x}0104"
+        )
+
+    expected_hex = (
+        "a10121"
+        "a2020101"
+        + "".join(day_block(0xa3 + 4 * d) for d in range(7))
+        + "fd050300112233"
+    )
+    assert result.hex() == expected_hex
+
+
+@pytest.mark.parametrize(
+    "bad_power",
+    [
+        pytest.param(-1, id="negative"),
+        pytest.param(-1000, id="very_negative"),
+        pytest.param(1001, id="one_over"),
+        pytest.param(2000, id="super_massive"),
+    ],
+)
+def test_sb2_build_set_schedule_payload_rejects_out_of_range(bad_power):
+    """Out-of-range wattage raises ValueError."""
+    with pytest.raises(ValueError):
+        Solarbank2Common._build_set_schedule_payload(bad_power)
+
+
+@pytest.mark.parametrize(
+    "power_w",
+    [
+        pytest.param(0, id="charge_only"),
+        pytest.param(100, id="hundred_watts"),
+        pytest.param(1000, id="max_output"),
+    ],
+)
+def test_sb2_build_set_schedule_payload_uses_fresh_nonce_per_call(power_w):
+    """Each call generates a fresh fd nonce (prevents 'abnormal state').
+
+    The Anker app generates fresh random bytes per write; reusing a value
+    causes the schedule storage to update but the inverter target to stay
+    stuck at the previous value.
+    """
+    a = Solarbank2Common._build_set_schedule_payload(power_w)
+    b = Solarbank2Common._build_set_schedule_payload(power_w)
+    assert a[:-4] == b[:-4]
+    # 1-in-2^32 false-fail rate is negligible.
+    assert a[-4:] != b[-4:]
+
+
+@pytest.mark.parametrize(
+    "anker_user_id,expected",
+    [
+        pytest.param(
+            _FAKE_SB2_USER_ID_STR,
+            _FAKE_SB2_USER_ID_STR.encode("ascii"),
+            id="str_encoded_as_ascii",
+        ),
+        pytest.param(
+            _FAKE_SB2_USER_ID_BYTES,
+            _FAKE_SB2_USER_ID_BYTES,
+            id="bytes_kept_as_is",
+        ),
+        # 40-char/byte values so no length warning fires.
+        pytest.param("abcdef01" * 5, b"abcdef01" * 5, id="hex_like_str"),
+        pytest.param(b"9" * 40, b"9" * 40, id="raw_bytes"),
+    ],
+)
+def test_sb2_prime_user_id_explicit(caplog, anker_user_id, expected):
+    """An explicit 40-char user ID is stored as bytes (``str`` ASCII-encoded,
+    ``bytes`` verbatim) and logs no length warning."""
+    with caplog.at_level(logging.WARNING):
+        dev = Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id=anker_user_id)
+    assert dev._anker_user_id == expected
+    assert "Anker user ID" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "bad_id,expected",
+    [
+        pytest.param(
+            "not-a-user-id@example.com",
+            b"not-a-user-id@example.com",
+            id="email",
+        ),
+        pytest.param("0" * 39, b"0" * 39, id="one_short"),
+        pytest.param("0" * 41, b"0" * 41, id="one_long"),
+        pytest.param("", b"", id="empty"),
+        # The hex-*decoded* form is 20 bytes; passing that is a mistake.
+        pytest.param(b"f" * 20, b"f" * 20, id="decoded_length_bytes"),
+    ],
+)
+def test_sb2_prime_user_id_wrong_length_warns(caplog, bad_id, expected):
+    """A user ID that isn't 40 characters logs a warning but is still used.
+
+    We only have two userId samples, so a length mismatch (likely an
+    email address, account name, or truncated value) is a soft signal rather
+    than a hard error - the value is stored and used regardless.
+    """
+    with caplog.at_level(logging.WARNING):
+        dev = Solarbank2Prime(MOCK_BLE_DEVICE, anker_user_id=bad_id)
+    assert dev._anker_user_id == expected
+    assert any(
+        r.levelno == logging.WARNING and "Anker user ID" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    "env_value",
+    [
+        pytest.param(_FAKE_SB2_USER_ID_ENV, id="forty_ones"),
+        pytest.param("b" * 40, id="forty_bees"),
+        pytest.param("0123456789" * 4, id="forty_numeric"),
+    ],
+)
+def test_sb2_prime_user_id_falls_back_to_env_var(monkeypatch, env_value):
+    """With no explicit arg, the user ID is read from the environment and
+    ASCII-encoded."""
+    monkeypatch.setenv(ENV_SB2_ANKER_USER_ID, env_value)
+    dev = Solarbank2Prime(MOCK_BLE_DEVICE)
+    assert dev._anker_user_id == env_value.encode("ascii")
+
+
+@pytest.mark.parametrize(
+    "env_value",
+    [
+        pytest.param(None, id="unset"),
+        pytest.param("", id="empty_string"),
+    ],
+)
+def test_sb2_prime_user_id_missing_raises(monkeypatch, env_value):
+    """No explicit arg and no usable env var raises ValueError."""
+    if env_value is None:
+        monkeypatch.delenv(ENV_SB2_ANKER_USER_ID, raising=False)
+    else:
+        monkeypatch.setenv(ENV_SB2_ANKER_USER_ID, env_value)
+    with pytest.raises(ValueError, match="Anker"):
+        Solarbank2Prime(MOCK_BLE_DEVICE)
+
+
+@pytest.mark.parametrize(
+    "plaintext",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param(bytes.fromhex("a104deadbeefa200"), id="tlv_like"),
+        pytest.param(b"\x00" * 32, id="all_zeros"),
+        pytest.param(bytes(range(64)), id="sequential_64"),
+    ],
+)
+def test_sb2_prime_static_key_encrypt_round_trips(monkeypatch, plaintext):
+    """``_encrypt_with_static_key`` output is decryptable using the same
+    Prime static GCM parameters.
+
+    The GCM tag verifying on decrypt is what proves key/nonce/AAD are
+    wired correctly. ``_decrypt_payload`` falls back to ``NEGOTIATION_KEY``
+    when ``_shared_secret`` is not yet set, mirroring the path used to
+    read RX 48xx handshake responses.
+    """
+    monkeypatch.setenv(ENV_SB2_ANKER_USER_ID, _FAKE_SB2_USER_ID_ENV)
+    dev = Solarbank2Prime(MOCK_BLE_DEVICE)
+    assert dev._shared_secret is None  # static-key path
+
+    encrypted = dev._encrypt_with_static_key(plaintext)
+
+    # GCM output = ciphertext + 16-byte tag.
+    assert len(encrypted) == len(plaintext) + 16
+    assert dev._decrypt_payload(encrypted) == plaintext

@@ -1,24 +1,63 @@
 """Solarbank 2 power station model.
 
+Two variants live in this module:
+
+* :class:`Solarbank2` - uses the legacy base ``SolixBLEDevice`` handshake
+  (00xx/08xx negotiation, AES-CBC for session traffic). Does not require
+  a cloud-tied user-id, so it can connect to any SB2 that accepts the
+  base handshake.
+
+* :class:`Solarbank2Prime` - uses the Anker-Prime-style handshake
+  (40xx/48xx negotiation across 8 stages, AES-GCM for session traffic).
+  Requires an Anker user-id.
+
+Both variants share telemetry property accessors, the 0x405e schedule write
+builder, and the wall-clock-timestamp ``_send_command`` override via the
+:class:`Solarbank2Common` base.
+
 .. moduleauthor:: Harvey Lelliott (flip-dots) <harveylelliott@duck.com>
 
 """
 
+import logging
+import os
+import time
 from enum import Enum
+
+from bleak.backends.device import BLEDevice
+from Crypto.Cipher import AES
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    ECDH,
+    SECP256R1,
+    EllipticCurvePublicKey,
+    generate_private_key,
+)
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from ..const import (
     DEFAULT_METADATA_BOOL,
     DEFAULT_METADATA_FLOAT,
     DEFAULT_METADATA_STRING,
+    UUID_COMMAND,
 )
 from ..device import SolixBLEDevice
+from ..prime_device import (
+    AAD,
+    NEGOTIATION_KEY,
+    NEGOTIATION_NONCE,
+    NEGOTIATION_PATTERN,
+    TELEMETRY_PATTERN,
+    PrimeDevice,
+)
 from ..states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode, TemperatureUnit
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class MaxLoadSB2(Enum):
     """
     Maximum output power of the Solarbank 2 in watts.
-    
+
     Only specific values are allowed.
     """
 
@@ -38,23 +77,293 @@ class MaxLoadSB2(Enum):
     W1000 = 1000
 
 
-class Solarbank2(SolixBLEDevice):
+#: One of the command codes for setting a schedule on an SB2.
+CMD_SB2_SET_SCHEDULE = "405e"
+
+#: Command code for setting the AC output power limit (max load).
+CMD_SB2_SET_MAX_LOAD = "4080"
+
+#: Command code for setting the reserved-power composite (discharge cutoff,
+#: low-power-input parameter, and charge cutoff written together).
+CMD_SB2_SET_RESERVED_POWER = "4067"
+
+#: Command code for turning the status light on or off.
+CMD_SB2_SET_LIGHT = "4068"
+
+#: TLV header introducing a 4-byte LE timestamp (tag ``a1``, length ``04``).
+#: Recurs across handshake stage plaintexts and post-handshake payloads.
+TLV_TIMESTAMP_HEADER = "a104"
+
+#: TLV for an empty ``a2`` field (tag ``a2``, length ``00``, no value).
+#: Appears as a fixed marker in several handshake plaintexts.
+TLV_A2_EMPTY = "a200"
+
+#: Environment variable for the Anker user ID required by Solarbank2Prime.
+#: Value should be the ASCII-hex string (40 hex chars, no dashes).
+#: The device validates this token against its
+#: account-bound whitelist during the Prime-style handshake.
+ENV_SB2_ANKER_USER_ID = "SB2_ANKER_USER_ID"
+
+#: Expected length of the Anker user ID.
+_ANKER_USER_ID_LEN = 40
+
+
+class Solarbank2Common(SolixBLEDevice):
     """
-    SolarBank 2 Power Station.
+    Shared base for both SB2 handshake variants.
 
-    Use this class to connect and monitor a Solarbank 2 power station.
-    This model is also known as the A17C1.
+    Holds everything that does not depend on the negotiation/crypto variant:
 
-    .. note::
-        It should be possible to add more sensors. I think devices with lots of
-        telemetry values split them up into multiple messages but I have not
-        played around with this yet. That and I am being a bit conservative with
-        these initial implementations, if you want more sensors and are willing
-        to help with testing feel free to raise a GitHub issue.
+    * Telemetry property accessors (parse fields out of ``self._data`` populated
+      by the parent's ``_process_telemetry``).
+    * ``set_schedule`` / ``_build_set_schedule_payload`` for the 0x405e write.
+    * ``_send_command`` override that uses a real wall-clock unix timestamp
+      in the ``fe 05 03 <ts>`` trailer (the SolixBLEDevice base would use
+      ``BASE_TIMESTAMP + elapsed_seconds`` which is fine for Prime but the SB2
+      validates the timestamp against a sane recent-time window).
 
+    The concrete subclasses :class:`Solarbank2` (legacy CBC) and
+    :class:`Solarbank2Prime` (Prime-style GCM) pick the handshake/crypto
+    behavior by their second base class.
     """
 
     _EXPECTED_TELEMETRY_LENGTH: int = 253
+
+    _TELEMETRY_COMMANDS: tuple[str, ...] = (*SolixBLEDevice._TELEMETRY_COMMANDS, "c840")
+
+    # Post-handshake command path
+
+    async def _send_command(self, cmd: bytes, payload: bytes) -> None:
+        """Send a post-handshake command with a wall-clock ``fe 05 03 <ts>`` trailer.
+
+        Overrides the base/Prime schemes that derive the timestamp from a
+        hardcoded ``BASE_TIMESTAMP`` constant. The SB2 expects a current Unix
+        timestamp.
+
+        Uses ``self._encrypt_payload`` and ``self._build_packet`` polymorphically:
+        for :class:`Solarbank2` (legacy) ``_encrypt_payload`` resolves to the
+        SolixBLEDevice CBC variant; for :class:`Solarbank2Prime` it resolves
+        to the PrimeDevice GCM variant.
+
+        :param cmd: 2-byte command identifier.
+        :param payload: Plaintext payload (without the ``fe 05 03 <ts>`` trailer).
+        :raises ConnectionError: If not connected/negotiated to device.
+        """
+        if not self.negotiated:
+            raise ConnectionError("Not connected to device")
+
+        ts = int(time.time()).to_bytes(4, "little")
+        full_payload = payload + bytes.fromhex("fe0503") + ts
+
+        encrypted = self._encrypt_payload(full_payload)
+        packet = self._build_packet(
+            pattern=bytes.fromhex(TELEMETRY_PATTERN),
+            cmd=cmd,
+            payload=encrypted,
+        )
+        _LOGGER.debug(f"SB2 _send_command cmd={cmd.hex()} packet={packet.hex()}")
+        await self._client.write_gatt_char(UUID_COMMAND, packet)
+
+    # 0x405e set-schedule
+
+    @staticmethod
+    def _build_set_schedule_payload(power_w: int) -> bytes:
+        """Build the plaintext payload for cmd 0x405e (set schedule).
+
+        Produces a uniform 7-fday schedule (Mon-Sun, all identical) with the
+        same time range (00:00-24:00) and the requested output power.
+
+        The caller's session timestamp is appended automatically by
+        ``_send_command`` as the ``fe 05 03 <4-byte LE>`` trailer, so this
+        function returns the payload *without* that trailer.
+
+        :param power_w: Output wattage (0 = charge-only).
+        """
+        if not (0 <= power_w <= 1000):
+            raise ValueError(f"power_w must be 0-1000 W, got {power_w}")
+        if power_w % 10 != 0:
+            _LOGGER.warning(
+                f"Power_w={power_w} is not a multiple of 10! This seems to work "
+                "and the device accepts it, but the Anker app only ever uses "
+                "10 W increments. Use with caution!"
+            )
+
+        # 8-byte schedule struct (byte layout shared with SB1, but the trailing
+        # 2 bytes are an unknown constant on SB2 - SB1 calls that slot SOC but
+        # on SB2 we've only ever seen 0x0050 LE regardless of user settings).
+        #   bytes [0:2]  start_min u16 LE
+        #   bytes [2:4]  end_min   u16 LE
+        #   bytes [4:6]  power_W   u16 LE
+        #   bytes [6:8]  unknown constant, always 0x0050 LE in captures
+        # 00:00-24:00 -> start=0, end=1440.
+        sched_struct = (
+            (0).to_bytes(2, "little")
+            + (1440).to_bytes(2, "little")
+            + power_w.to_bytes(2, "little")
+            + bytes.fromhex("5000")
+        )
+
+        pt = bytearray()
+        # Header
+        pt += bytes.fromhex("a10121")
+        pt += bytes.fromhex("a2020101")
+
+        # 7 fully-symmetric day blocks (Mon-Sun). Each day uses 4 tags starting
+        # at base = a3 + 4*day:
+        #   aX     02 01 01           enable/include flag for this day (always 1)
+        #   aX+1   09 04 <8B struct>  the schedule struct itself
+        #   aX+2   02 01 00           per-day flag (always 0 in captures)
+        #   aX+3   01 04              1-byte trailer (always value 0x04)
+        for day in range(7):
+            base = 0xa3 + 4 * day
+            pt += bytes([base]) + bytes.fromhex("020101")
+            pt += bytes([base + 1]) + bytes.fromhex("0904") + sched_struct
+            pt += bytes([base + 2]) + bytes.fromhex("020100")
+            pt += bytes([base + 3]) + bytes.fromhex("0104")
+
+        # `fd` trailer: 4 fresh random bytes generated per write. The Anker app
+        # uses a different value every time (confirmed by a 3-write
+        # capture); reusing a value the device has already seen in this session
+        # leaves the device in an "abnormal state" where the schedule storage
+        # gets updated but the inverter target doesn't change, and only a
+        # subsequent write with a fresh value clears it.
+        pt += bytes.fromhex("fd0503") + os.urandom(4)
+
+        return bytes(pt)
+
+    async def set_schedule(self, power_w: int) -> None:
+        """Set a uniform 7-day charge/discharge schedule on the SB2.
+
+        Sends cmd 405e with a payload that configures every day of the week
+        identically: output `power_w` Watts from 00:00 to 24:00.
+
+        .. attention::
+            There may be a legal & safe power limit below the limit enforced by this software
+            depending on your country of operation.
+            Make sure to comply with all local regulation!
+
+        .. warning::
+            This function writes a full weeks schedule to persistant memory.
+            Excessive use of this function (e.g. in short intervals of 2s)
+            may lead to memory wear and brick your device.
+            Use at your own risk.
+
+        :param power_w: Output wattage (0 = charge-only).
+        :raises ConnectionError: If not connected/negotiated to the device.
+        :raises ValueError: For out-of-range power_w.
+        """
+        payload = self._build_set_schedule_payload(power_w)
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_SB2_SET_SCHEDULE), payload=payload
+        )
+
+    @staticmethod
+    def _build_set_light_payload(light_on: bool) -> bytes:
+        """Build the plaintext payload for cmd 0x4068 (status light on/off).
+
+        Plaintext layout (without the ``fe 05 03 <ts>`` trailer added by
+        ``_send_command``)::
+
+            a1 01 21              command marker
+            a2 02 01 00           constant 0x00 flag (purpose unknown)
+            a3 02 01 <state>      0 = ON, 1 = OFF (the "light_off_switch" bit)
+        """
+        return bytes.fromhex(f"a10121a2020100a30201{0 if light_on else 1:02x}")
+
+    async def set_light_switch(self, light_on: bool) -> None:
+        """Turn the SB2 status light on or off.
+
+        :param light_on: ``True`` to turn the light on, ``False`` to turn it off.
+        :raises ConnectionError: If not connected/negotiated to the device.
+        """
+        payload = self._build_set_light_payload(light_on)
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_SB2_SET_LIGHT), payload=payload
+        )
+
+    # Mapping for 3rd field reserved power command
+    _RESERVED_POWER_A3_MAP: dict[int, int] = {5: 4, 10: 5}
+
+    @staticmethod
+    def _build_set_reserved_power_payload(level: SBPowerCutoff) -> bytes:
+        """Build the plaintext payload for cmd 0x4067 (reserved power).
+
+        The Anker app's "Reserved power" writes
+        three independent fields. This is reflected in the telemetry:
+        discharge cutoff (b4), low-power-input (b5), and charge cutoff (b6).
+        a2 and a4 both equal the reserved-power %; a3 seems to follow an
+        uncharacterized mapping.
+
+        Plaintext layout (without the ``fe 05 03 <ts>`` trailer)::
+
+            a1 01 21
+            a2 02 01 <pct>     -> c405 telemetry b4 (discharge cutoff)
+            a3 02 01 <b5>      -> c405 telemetry b5 (low-power-input parameter)
+            a4 02 01 <pct>     -> c405 telemetry b6 (charge cutoff)
+        """
+        if level is SBPowerCutoff.UNKNOWN:
+            raise ValueError("SBPowerCutoff.UNKNOWN is not a valid setter input")
+        pct = level.value
+        a3_value = Solarbank2Common._RESERVED_POWER_A3_MAP.get(pct)
+        if a3_value is None:
+            raise ValueError(
+                f"Reserved-power value {pct}% has no captured a3 mapping."
+            )
+        return bytes.fromhex(
+            f"a10121a20201{pct:02x}a30201{a3_value:02x}a40201{pct:02x}"
+        )
+
+    async def set_reserved_power(self, level: SBPowerCutoff) -> None:
+        """Set the battery reserved-power percentage.
+
+        Mirrors the Anker app's "Reserved power" toggle. Writes three
+        telemetry fields (output_cutoff_data, lowpower_input_data,
+        input_cutoff_data).
+
+        :param level: Desired reserved-power level
+            (:class:`SBPowerCutoff.P5` or :class:`SBPowerCutoff.P10`).
+        :raises ConnectionError: If not connected/negotiated to the device.
+        :raises ValueError: If ``level`` is ``UNKNOWN`` or has no captured
+            a3 mapping.
+        """
+        payload = self._build_set_reserved_power_payload(level)
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_SB2_SET_RESERVED_POWER), payload=payload
+        )
+
+    @staticmethod
+    def _build_set_max_load_payload(max_load: MaxLoadSB2) -> bytes:
+        """Build the plaintext payload for cmd 0x4080 (AC power limit).
+
+        Plaintext layout (without the ``fe 05 03 <ts>`` trailer)::
+
+            a1 01 21
+            a2 03 02 <u16 LE watts>     output power limit
+            a3 03 02 00 00              constant zero (flags/secondary cap?)
+        """
+        if max_load is MaxLoadSB2.UNKNOWN:
+            raise ValueError("MaxLoadSB2.UNKNOWN is not a valid setter input")
+        watts_le_hex = max_load.value.to_bytes(2, "little").hex()
+        return bytes.fromhex(f"a10121a20302{watts_le_hex}a303020000")
+
+    async def set_max_load(self, max_load: MaxLoadSB2) -> None:
+        """Set the AC output power limit (max load) in watts.
+
+        .. attention::
+            There may be a legal & safe power limit below the limit enforced by this software
+            depending on your country of operation.
+            Make sure to comply with all local regulation!
+
+        :param load: One of the discrete limits in :class:`MaxLoadSB2`.
+        :raises ConnectionError: If not connected/negotiated to the device.
+        :raises ValueError: If ``load`` is ``MaxLoadSB2.UNKNOWN``.
+        """
+        payload = self._build_set_max_load_payload(max_load)
+        await self._send_command(
+            cmd=bytes.fromhex(CMD_SB2_SET_MAX_LOAD), payload=payload
+        )
+
+    # Telemetry property accessors
 
     @property
     def serial_number(self) -> str:
@@ -381,7 +690,7 @@ class Solarbank2(SolixBLEDevice):
     def max_load(self) -> MaxLoadSB2:
         """
         Maximum output power in watts.
-        
+
         Maximum legal value depends on country of operation.
 
         :returns: Maximum load as a MaxLoadSB2 enum value.
@@ -445,3 +754,298 @@ class Solarbank2(SolixBLEDevice):
             else DEFAULT_METADATA_BOOL
         )
 
+
+class Solarbank2(Solarbank2Common):
+    """
+    SolarBank 2 power station with the legacy handshake.
+
+    Uses the SolixBLEDevice 00xx/08xx negotiation and AES-CBC for session
+    traffic. Does not require an Anker cloud user-id.
+
+    This is the recommended default for end users - no cloud-side
+    user-id capture needed. Use :class:`Solarbank2Prime` only if you need
+    to mimic the Anker app's exact handshake (e.g. for protocol research).
+
+    .. note::
+        A pristine, never-paired SB2 may still require a one-time pairing
+        through the Anker app before any BLE client (including SolixBLE)
+        can connect.
+    """
+
+    async def _initiate_negotiations(self) -> None:
+        """Start the legacy base SolixBLEDevice handshake."""
+        _LOGGER.info("SB2: starting legacy base handshake (00xx/08xx, AES-CBC)")
+        await super()._initiate_negotiations()
+
+
+class Solarbank2Prime(Solarbank2Common, PrimeDevice):
+    """
+    SolarBank 2 power station with the Anker-Prime-style handshake.
+
+    Uses 40xx/48xx negotiation across 8 stages and AES-GCM for session
+    traffic. Requires an Anker user-id. SB2 firmware whitelists user-ids
+    and rejects unknown values with RX 4827 = ``09 a1 02 b4 00``.
+
+    Differences from default Anker Prime flow:
+
+    * Per-session random ECDH private key.
+    * Different stage-0 through stage-4 plaintexts (live timestamps, extra
+      TLVs).
+    * Stage-6 sets the timezone (TX 4022); stage-7 re-sends the user-id
+      (TX 4027) session-encrypted.
+    * Post-stage-5 payloads use the ``fe 05 03 <ts>`` trailer rather than
+      Prime's ``fe 04 <ts>``.
+
+    .. note::
+       The Anker app sends TX 4001 (stage 0) and TX 4040 (stage 8) twice
+       each. We send each once because it seems to work.
+    """
+
+    # Per-session state for the SB2 handshake
+
+    def __init__(
+        self,
+        ble_device: BLEDevice,
+        anker_user_id: bytes | str | None = None,
+    ) -> None:
+        """Initialize SB2 device with per-instance ECDH key and Anker user ID.
+
+        :param ble_device: The discovered BLE device handle.
+        :param anker_user_id: Cloud-registered Anker user ID for the user's
+            Anker account. If ``None``, reads from the
+            ``SB2_ANKER_USER_ID`` environment variable. If neither is set,
+            raises ``ValueError``. A value that is not 40 characters long
+            logs a warning but is still used.
+        :raises ValueError: If no Anker user ID is available via either
+            source.
+        """
+        super().__init__(ble_device)
+        # Per-session random ECDH private key (regenerated on each connect via
+        # ``_initiate_negotiations``).
+        self._ecdh_private_key = generate_private_key(SECP256R1())
+        # Negotiation-stage timestamp baked into stage-0..4 TX plaintexts as the
+        # 4-byte LE int after the a1 tag. Same value across all of stages 0-4.
+        self._neg_ts_bytes: bytes | None = None
+        # Anker user ID resolution: explicit arg > env var > error.
+        # The SB2 firmware whitelists Anker user ID.
+        if anker_user_id is None:
+            env_val = os.environ.get(ENV_SB2_ANKER_USER_ID)
+            if not env_val:
+                raise ValueError(
+                    "Solarbank2Prime requires the Anker cloud-side userId. "
+                    "Either pass it to the constructor "
+                    f"or set the {ENV_SB2_ANKER_USER_ID} environment variable. "
+                    "Alternatively, use the Solarbank2 (legacy CBC) class - "
+                    "it does not require an Anker user ID."
+                )
+            anker_user_id = env_val
+        if isinstance(anker_user_id, str):
+            anker_user_id = anker_user_id.encode("ascii")
+        # Basic sanity check for known Anker cloud userId lengths
+        if len(anker_user_id) != _ANKER_USER_ID_LEN:
+            _LOGGER.warning(
+                f"Anker user ID is {len(anker_user_id)} characters, expected "
+                f"{_ANKER_USER_ID_LEN}. Continuing anyway, but "
+                "this could be wrong - make sure you are not using an email "
+                "address or account name."
+            )
+        self._anker_user_id: bytes = anker_user_id
+
+    # Encryption helpers
+
+    def _encrypt_with_static_key(self, plaintext: bytes) -> bytes:
+        """AES-GCM encrypt with the static negotiation key (stages 0-4)."""
+        cipher = AES.new(
+            bytes.fromhex(NEGOTIATION_KEY),
+            AES.MODE_GCM,
+            nonce=bytes.fromhex(NEGOTIATION_NONCE),
+        )
+        cipher.update(bytes.fromhex(AAD))
+        ciphertext, tag = cipher.encrypt_and_digest(plaintext)
+        return ciphertext + tag
+
+    def _build_static_packet(self, cmd_hex: str, plaintext: bytes) -> bytes:
+        """Build a stage-0..4 packet: encrypt with static key, then frame."""
+        return self._build_packet(
+            pattern=bytes.fromhex(NEGOTIATION_PATTERN),
+            cmd=bytes.fromhex(cmd_hex),
+            payload=self._encrypt_with_static_key(plaintext),
+        )
+
+    def _build_session_packet(self, cmd_hex: str, plaintext: bytes) -> bytes:
+        """Build a stage-5+ packet: encrypt with session key, then frame."""
+        return self._build_packet(
+            pattern=bytes.fromhex(NEGOTIATION_PATTERN),
+            cmd=bytes.fromhex(cmd_hex),
+            payload=self._encrypt_payload(plaintext),
+        )
+
+    # Handshake
+
+    async def _initiate_negotiations(self) -> None:
+        """SB2 stage 0: send TX 4001 with ``a1 04 <ts> a2 00``."""
+        _LOGGER.info(
+            "SB2: starting Prime-style handshake (40xx/48xx, AES-GCM, with Anker user ID)"
+        )
+        # Fresh ECDH key + negotiation timestamp on every (re-)connect.
+        self._ecdh_private_key = generate_private_key(SECP256R1())
+        self._neg_ts_bytes = int(time.time()).to_bytes(4, "little")
+
+        plaintext = (
+            bytes.fromhex(TLV_TIMESTAMP_HEADER)
+            + self._neg_ts_bytes
+            + bytes.fromhex(TLV_A2_EMPTY)
+        )
+        packet = self._build_static_packet("4001", plaintext)
+        _LOGGER.debug(f"SB2 stage 0 TX 4001 packet: {packet.hex()}")
+        await self._client.write_gatt_char(UUID_COMMAND, packet)
+
+    async def _process_negotiation(self, cmd: bytes, payload: bytes) -> None:
+        """SB2 handshake state machine (overrides PrimeDevice's variant)."""
+
+        # Decrypt for logging; _decrypt_payload picks static vs session key
+        # automatically based on whether _shared_secret has been set.
+        try:
+            decrypted = self._decrypt_payload(payload)
+            _LOGGER.debug(
+                f"SB2 stage cmd={cmd.hex()} decrypted plaintext={decrypted.hex()}"
+            )
+        except ValueError:
+            _LOGGER.exception(f"SB2 failed to decrypt stage cmd={cmd.hex()}")
+            decrypted = b""
+
+        match cmd.hex():
+
+            # Stage 1 - RX 4801 -> TX 4003 (a1 04 <ts> a2 00 a3 01 20 a4 02 00 f0)
+            case "4801":
+                pt = (
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + self._neg_ts_bytes
+                    + bytes.fromhex(TLV_A2_EMPTY)
+                    + bytes.fromhex("a30120")
+                    + bytes.fromhex("a40200f0")
+                )
+                packet = self._build_static_packet("4003", pt)
+                _LOGGER.debug(f"SB2 stage 2 TX 4003 packet: {packet.hex()}")
+                return await self._client.write_gatt_char(UUID_COMMAND, packet)
+
+            # Stage 2 - RX 4803 -> TX 4029 (a1 04 <ts> a2 <len> <user-id>)
+            case "4803":
+                pt = (
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + self._neg_ts_bytes
+                    + bytes.fromhex("a2")
+                    + bytes([len(self._anker_user_id)])
+                    + self._anker_user_id
+                )
+                packet = self._build_static_packet("4029", pt)
+                _LOGGER.debug(f"SB2 stage 3 TX 4029 packet: {packet.hex()}")
+                return await self._client.write_gatt_char(UUID_COMMAND, packet)
+
+            # Stage 3 - RX 4829 -> TX 4005
+            case "4829":
+                pt = (
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + self._neg_ts_bytes
+                    + bytes.fromhex(TLV_A2_EMPTY)
+                    + bytes.fromhex("a30120")
+                    + bytes.fromhex("a40200f0")
+                    + bytes.fromhex("a50140")
+                    + bytes.fromhex("a60102")
+                )
+                packet = self._build_static_packet("4005", pt)
+                _LOGGER.debug(f"SB2 stage 4 TX 4005 packet: {packet.hex()}")
+                return await self._client.write_gatt_char(UUID_COMMAND, packet)
+
+            # Stage 4 - RX 4805 -> TX 4021 (phone ECDH pubkey, raw X||Y)
+            case "4805":
+                # strip 0x04 prefix -> 64 B X||Y
+                phone_pub = self._ecdh_private_key.public_key().public_bytes(
+                    Encoding.X962, PublicFormat.UncompressedPoint
+                )
+                phone_pub_xy = phone_pub[1:]
+                pt = bytes.fromhex("a140") + phone_pub_xy
+                packet = self._build_static_packet("4021", pt)
+                _LOGGER.debug(f"SB2 stage 5 TX 4021 packet: {packet.hex()}")
+                return await self._client.write_gatt_char(UUID_COMMAND, packet)
+
+            # Stage 5 - RX 4821 -> derive shared secret, then TX 4022 (timezone)
+            case "4821":
+                # Parse plaintext: <status 1B> <TLV a1 40 <device pubkey 64B>>
+                parameters = self._parse_payload(decrypted[1:])
+                device_pub_xy = parameters["a1"]
+                device_pubkey = EllipticCurvePublicKey.from_encoded_point(
+                    SECP256R1(), bytes.fromhex("04") + device_pub_xy
+                )
+                self._shared_secret = self._ecdh_private_key.exchange(
+                    ECDH(), device_pubkey
+                )
+                self._negotiation_timestamp = time.time()
+                _LOGGER.debug(
+                    f"SB2 ECDH shared secret derived: {self._shared_secret.hex()}"
+                )
+
+                # TX 4022 - set timezone. Plaintext layout:
+                #   a1 04 <session-ts>  a2 00  a3 04 <tz_offset_seconds_LE>
+                #   a5 <len> <POSIX TZ string>
+                # The tz_offset is signed LE seconds; CEST in capture was -7200
+                # (= -2h). We hardcode that for now - proper localtime detection
+                # is a TODO.
+                tz_str = b"CET-1CEST,M3.5.0,M10.5.0/3"
+                tz_offset = (-7200).to_bytes(4, "little", signed=True)
+                pt = (
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + int(time.time()).to_bytes(4, "little")
+                    + bytes.fromhex(TLV_A2_EMPTY)
+                    + bytes.fromhex("a304")
+                    + tz_offset
+                    + bytes([0xa5, len(tz_str)])
+                    + tz_str
+                )
+                packet = self._build_session_packet("4022", pt)
+                _LOGGER.debug(f"SB2 stage 6 TX 4022 packet: {packet.hex()}")
+                return await self._client.write_gatt_char(UUID_COMMAND, packet)
+
+            # Stage 6 - RX 4822 -> TX 4027 (re-send user-id, session-encrypted)
+            case "4822":
+                pt = (
+                    bytes.fromhex(TLV_TIMESTAMP_HEADER)
+                    + int(time.time()).to_bytes(4, "little")
+                    + bytes.fromhex("a2")
+                    + bytes([len(self._anker_user_id)])
+                    + self._anker_user_id
+                )
+                packet = self._build_session_packet("4027", pt)
+                _LOGGER.debug(f"SB2 stage 7 TX 4027 packet: {packet.hex()}")
+                return await self._client.write_gatt_char(UUID_COMMAND, packet)
+
+            # Stage 7 - RX 4827 -> TX 4040 (start telemetry stream)
+            case "4827":
+                # _send_command handles the fe0503 timestamp trailer + 03000f
+                # pattern.
+                _LOGGER.debug("SB2 stage 8 - sending TX 4040 to start telemetry")
+                return await self._send_command(
+                    cmd=bytes.fromhex("4040"), payload=bytes.fromhex("a10121")
+                )
+
+            case _:
+                _LOGGER.warning(
+                    f"SB2 unexpected negotiation cmd: {cmd.hex()} "
+                    f"plaintext={decrypted.hex()}"
+                )
+
+    # Telemetry
+
+    async def _process_telemetry_packet(
+        self, payload: bytes, cmd: bytes = None
+    ) -> None:
+        """Handle SB2 multi-fragment telemetry (cmd c405 + c840, pattern 03010f).
+
+        PrimeDevice's variant assumes single-packet telemetry, but SB2 splits
+        large telemetry across multiple ``03010f`` packets with a per-packet
+        ``<index/total>`` nibble byte after CMD. Delegate to the base
+        SolixBLEDevice implementation, which already implements reassembly.
+        After reassembly it calls ``self._decrypt_payload``, which on this
+        class is PrimeDevice's AES-GCM variant.
+        """
+        return await SolixBLEDevice._process_telemetry_packet(self, payload, cmd)

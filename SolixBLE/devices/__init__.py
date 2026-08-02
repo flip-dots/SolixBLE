@@ -16,7 +16,7 @@ from .maggo_3in1 import MagGo3in1
 from .prime_charger_160w import PrimeCharger160w
 from .prime_charger_250w import PrimeCharger250w
 from .prime_power_bank_20k import PrimePowerBank20k
-from .solarbank2 import Solarbank2
+from .solarbank2 import Solarbank2, Solarbank2Prime
 from .solarbank3 import Solarbank3
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "F2000",
     "F3800",
     "Solarbank2",
+    "Solarbank2Prime",
     "Solarbank3",
     "PrimeCharger160w",
     "PrimeCharger250w",

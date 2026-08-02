@@ -45,6 +45,13 @@ section for more information on how to capture these commands and the :doc:`C300
 :doc:`800 <c800>`, and :doc:`C1000 <c1000>` source code for examples of how to implement the 
 control functions.
 
+.. note::
+    Some Anker devices accept more than one BLE handshake protocol, and a new device 
+    class may be needed per protocol. The :doc:`Solarbank 2 <solarbank2>` is an example: 
+    its firmware accepts both the legacy base-Solix handshake and an 
+    Anker-Prime-style handshake (8-stage), 
+    exposed as ``Solarbank2`` and ``Solarbank2Prime`` respectively.
+
 
 Example telemetry data
 ----------------------
