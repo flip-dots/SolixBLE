@@ -237,10 +237,16 @@ class Solarbank2Common(SolixBLEDevice):
         Sends cmd 405e with a payload that configures every day of the week
         identically: output `power_w` Watts from 00:00 to 24:00.
 
-        .. warning::
+        .. attention::
             There may be a legal & safe power limit below the limit enforced by this software
             depending on your country of operation.
             Make sure to comply with all local regulation!
+
+        .. warning::
+            This function writes a full weeks schedule to persistant memory.
+            Excessive use of this function (e.g. in short intervals of 2s)
+            may lead to memory wear and brick your device.
+            Use at your own risk.
 
         :param power_w: Output wattage (0 = charge-only).
         :raises ConnectionError: If not connected/negotiated to the device.
@@ -326,7 +332,7 @@ class Solarbank2Common(SolixBLEDevice):
         )
 
     @staticmethod
-    def _build_set_max_load_payload(load: MaxLoadSB2) -> bytes:
+    def _build_set_max_load_payload(max_load: MaxLoadSB2) -> bytes:
         """Build the plaintext payload for cmd 0x4080 (AC power limit).
 
         Plaintext layout (without the ``fe 05 03 <ts>`` trailer)::
@@ -335,15 +341,15 @@ class Solarbank2Common(SolixBLEDevice):
             a2 03 02 <u16 LE watts>     output power limit
             a3 03 02 00 00              constant zero (flags/secondary cap?)
         """
-        if load is MaxLoadSB2.UNKNOWN:
+        if max_load is MaxLoadSB2.UNKNOWN:
             raise ValueError("MaxLoadSB2.UNKNOWN is not a valid setter input")
-        watts_le_hex = load.value.to_bytes(2, "little").hex()
+        watts_le_hex = max_load.value.to_bytes(2, "little").hex()
         return bytes.fromhex(f"a10121a20302{watts_le_hex}a303020000")
 
-    async def set_max_load(self, load: MaxLoadSB2) -> None:
+    async def set_max_load(self, max_load: MaxLoadSB2) -> None:
         """Set the AC output power limit (max load) in watts.
 
-        .. warning::
+        .. attention::
             There may be a legal & safe power limit below the limit enforced by this software
             depending on your country of operation.
             Make sure to comply with all local regulation!
@@ -352,7 +358,7 @@ class Solarbank2Common(SolixBLEDevice):
         :raises ConnectionError: If not connected/negotiated to the device.
         :raises ValueError: If ``load`` is ``MaxLoadSB2.UNKNOWN``.
         """
-        payload = self._build_set_max_load_payload(load)
+        payload = self._build_set_max_load_payload(max_load)
         await self._send_command(
             cmd=bytes.fromhex(CMD_SB2_SET_MAX_LOAD), payload=payload
         )
