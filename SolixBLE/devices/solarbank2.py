@@ -170,12 +170,7 @@ class Solarbank2Common(SolixBLEDevice):
     def _build_set_schedule_payload(power_w: int) -> bytes:
         """Build the plaintext payload for cmd 0x405e (set schedule).
 
-        .. warning::
-            There may be a legal & safe power limit below the limit enforced by this software
-            depending on your country of operation.
-            Make sure to comply with all local regulation!
-
-        Produces a uniform 7-day schedule (Mon-Sun, all identical) with the
+        Produces a uniform 7-fday schedule (Mon-Sun, all identical) with the
         same time range (00:00-24:00) and the requested output power.
 
         The caller's session timestamp is appended automatically by
@@ -241,6 +236,11 @@ class Solarbank2Common(SolixBLEDevice):
 
         Sends cmd 405e with a payload that configures every day of the week
         identically: output `power_w` Watts from 00:00 to 24:00.
+
+        .. warning::
+            There may be a legal & safe power limit below the limit enforced by this software
+            depending on your country of operation.
+            Make sure to comply with all local regulation!
 
         :param power_w: Output wattage (0 = charge-only).
         :raises ConnectionError: If not connected/negotiated to the device.
@@ -342,6 +342,11 @@ class Solarbank2Common(SolixBLEDevice):
 
     async def set_max_load(self, load: MaxLoadSB2) -> None:
         """Set the AC output power limit (max load) in watts.
+
+        .. warning::
+            There may be a legal & safe power limit below the limit enforced by this software
+            depending on your country of operation.
+            Make sure to comply with all local regulation!
 
         :param load: One of the discrete limits in :class:`MaxLoadSB2`.
         :raises ConnectionError: If not connected/negotiated to the device.
