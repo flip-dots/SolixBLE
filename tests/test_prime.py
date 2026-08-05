@@ -33,7 +33,7 @@ from tests.const import MOCK_BLE_DEVICE
             id="stage_7a_response",
         ),
         pytest.param(
-            "ff09530003000f420a57e9b883d958e48e5b7de48d980206577e2dafbb3d604dea3686f3011969f0db2311906d142b5730ee2bfb11e3fbbe7485aac8877995310669156ec74645c962b419e579b385fd079967",
+            "ff092c0003000f420a57e9b883d958e48e5d5ae1bb5f63269f96779ebdbf43bd5ab4babfae73120d63897d15",
             prime_device.NEGOTIATION_COMMAND_8_PAYLOAD,
             "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
             id="stage_7b_response",
@@ -47,7 +47,9 @@ from tests.const import MOCK_BLE_DEVICE
     ],
 )
 def test_negotiation_encryption_session(
-    packet: str, decrypted_payload: str, shared_secret: str
+    packet: str,
+    decrypted_payload: str,
+    shared_secret: str,
 ):
     """
     Test that the encrypted packets produced by the library
@@ -68,7 +70,14 @@ def test_negotiation_encryption_session(
     prime._shared_secret = bytes.fromhex(shared_secret)
 
     decrypted = prime._decrypt_payload(payload)
-    assert decrypted.hex() == decrypted_payload
+    # Session commands append a fe04<4-byte timestamp> replay guard; accept and ignore
+    # it so the assertion is timestamp-agnostic (negotiation responses have no suffix).
+    decrypted_hex = decrypted.hex()
+    tail = decrypted_hex[len(decrypted_payload) :]
+    assert not tail or (len(tail) == 12 and tail.startswith("fe04")), (
+        f"unexpected trailing bytes: {tail}"
+    )
+    assert decrypted_hex[: len(decrypted_payload)] == decrypted_payload
 
     re_encrypted = prime._encrypt_payload(decrypted)
     assert payload.hex() == re_encrypted.hex()
