@@ -675,7 +675,7 @@ class SolixBLEDevice:
                 return await self._process_negotiation(cmd, payload)
 
             # Session messages
-            case "03010f" | "030111":
+            case "03000f" | "03010f" | "030111":
 
                 # Non-encrypted telemetry messages
                 if cmd.hex() == "0300":
