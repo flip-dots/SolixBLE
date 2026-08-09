@@ -11,7 +11,7 @@ import time
 from bleak.backends.device import BLEDevice
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from ..const import DEFAULT_METADATA_FLOAT, UUID_COMMAND
+from ..const import DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_STRING, UUID_COMMAND
 from ..prime_device import PrimeDevice
 from ..sb3_protocol import (
     SB3_4001,
@@ -19,10 +19,13 @@ from ..sb3_protocol import (
     SB3_4005,
     SB3_4029,
     SB3_4822_SUCCESS_PLAINTEXT,
+    SB3_SCHEDULE_MODE_CHARGE,
+    SB3_SCHEDULE_MODE_DISCHARGE,
     SB3_SET_MAX_LOAD_COMMAND,
     SB3_SET_SCHEDULE_COMMAND,
     aes_gcm_decrypt,
     build_account_auth_packet,
+    build_firmware_request_packet,
     build_max_load_plaintext,
     build_public_key_packet,
     build_schedule_plaintext,
@@ -55,7 +58,13 @@ class Solarbank3(PrimeDevice):
 
     """
 
-    _TELEMETRY_COMMANDS: tuple[str, ...] = ("c405", "c840")
+    _TELEMETRY_COMMANDS: tuple[str, ...] = (
+        "c405",
+        "c840",
+        "4409",
+        "4830",
+        "485e",
+    )
     _EXPECTED_TELEMETRY_LENGTH: int = 253
 
     def __init__(self, ble_device: BLEDevice, anker_user_id: str) -> None:
@@ -64,6 +73,10 @@ class Solarbank3(PrimeDevice):
         self._anker_user_id = validate_account_id(anker_user_id)
         self._sb3_session_ready = False
         self._sb3_private_key = ec.generate_private_key(ec.SECP256R1())
+        self._sb3_raw_fragments: dict[str, dict[int, bytes]] = {}
+        self._sb3_battery_metadata: bytes | None = None
+        self._sb3_firmware_metadata: dict[str, str] = {}
+        self._schedule_mode = SB3_SCHEDULE_MODE_DISCHARGE
 
     @property
     def negotiated(self) -> bool:
@@ -74,6 +87,18 @@ class Solarbank3(PrimeDevice):
         """Reset the inherited session and the SB3-specific authentication state."""
         super()._reset_session(reset_data)
         self._sb3_session_ready = False
+        self._sb3_raw_fragments = {}
+
+    @property
+    def schedule_mode(self) -> str:
+        """Return the direction used by the next all-day schedule write."""
+        return self._schedule_mode
+
+    def set_schedule_mode(self, mode: str) -> None:
+        """Choose whether a custom schedule charges or discharges the bank."""
+        if mode not in (SB3_SCHEDULE_MODE_DISCHARGE, SB3_SCHEDULE_MODE_CHARGE):
+            raise ValueError("mode must be 'discharge' or 'charge'")
+        self._schedule_mode = mode
 
     def _decrypt_payload(self, payload: bytes) -> bytes:
         """Authenticate and decrypt an A17C5 session payload without fallback."""
@@ -84,6 +109,94 @@ class Solarbank3(PrimeDevice):
             self._shared_secret[16:28],
             payload,
         )
+
+    @staticmethod
+    def _is_complete_tlv_payload(payload: bytes) -> bool:
+        """Return whether an A17C5 payload is a complete telemetry TLV list."""
+        if not payload:
+            return False
+        index = 1 if payload[0] == 0 else 0
+        if index == len(payload):
+            return False
+        while index < len(payload):
+            if len(payload) - index < 2:
+                return False
+            value_length = payload[index + 1]
+            index += 2
+            if len(payload) - index < value_length:
+                return False
+            index += value_length
+        return True
+
+    @staticmethod
+    def _parse_firmware_metadata(payload: bytes) -> dict[str, str]:
+        """Decode the compact ASCII TLV body returned by authenticated 4830."""
+        index = 1 if payload[:1] in (b"\x00", b"\x04") else 0
+        metadata: dict[str, str] = {}
+        while index + 2 <= len(payload):
+            parameter_id, value_length = payload[index : index + 2]
+            index += 2
+            value = payload[index : index + value_length]
+            if len(value) != value_length:
+                return {}
+            try:
+                metadata[f"{parameter_id:02x}"] = value.decode("ascii")
+            except UnicodeDecodeError:
+                pass
+            index += value_length
+        return metadata if index == len(payload) else {}
+
+    async def _process_telemetry_packet(
+        self, payload: bytes, cmd: bytes = None
+    ) -> None:
+        """Handle A17C5 GCM frames without losing a valid first byte.
+
+        A17C5 uses ``0x12``/``0x22`` only for actual two-part packets.  A
+        single encrypted packet can legitimately begin with ``0x11``; treating
+        that byte as a fragment marker drops data and makes AES-GCM validation
+        fail after reconnects.
+        """
+        if cmd is None:
+            return
+        command = cmd.hex()
+        complete_payload = bytes(payload)
+        if payload:
+            fragment_index = (payload[0] >> 4) & 0x0F
+            fragment_total = payload[0] & 0x0F
+            if 1 <= fragment_index <= fragment_total and 2 <= fragment_total <= 4:
+                fragments = self._sb3_raw_fragments.setdefault(command, {})
+                if fragment_index == 1:
+                    fragments.clear()
+                fragments[fragment_index] = bytes(payload[1:])
+                if len(fragments) < fragment_total:
+                    return
+                complete_payload = b"".join(
+                    fragments[index] for index in range(1, fragment_total + 1)
+                )
+                self._sb3_raw_fragments.pop(command, None)
+
+        plaintext = self._decrypt_payload(complete_payload)
+        if len(plaintext) == 4 and plaintext[:3] == b"\x01\xa1\x01":
+            _LOGGER.debug("Solarbank 3 command acknowledgement: %s", plaintext[-1:])
+            return
+        if command == "4409":
+            self._sb3_battery_metadata = plaintext
+            return
+        if command == "4830":
+            self._sb3_firmware_metadata = self._parse_firmware_metadata(plaintext)
+            return
+        if not self._is_complete_tlv_payload(plaintext):
+            _LOGGER.debug(
+                "Ignoring authenticated non-telemetry A17C5 packet %s", command
+            )
+            return
+        await self._process_telemetry(self._parse_payload(plaintext))
+
+    async def _process_telemetry(self, parameters: dict[str, bytes]) -> None:
+        """Merge partial A17C5 updates instead of clearing known fields."""
+        if self._data is not None:
+            parameters = {**self._data, **parameters}
+        await super()._process_telemetry(parameters)
 
     async def _initiate_negotiations(self) -> None:
         """Start the A17C5 secure-conference handshake."""
@@ -131,9 +244,12 @@ class Solarbank3(PrimeDevice):
                 self._shared_secret[16:28],
             )
         elif command == "4827":
-            # Authentication is bound to the GCM tag; the acknowledgement body
-            # is not otherwise used by the device implementation.
-            self._decrypt_payload(payload)
+            plaintext = self._decrypt_payload(payload)
+            if plaintext != b"\x00":
+                raise ValueError(
+                    "Solarbank 3 client-security authentication failed: "
+                    f"{plaintext.hex()}"
+                )
             self._sb3_session_ready = True
             reply = build_telemetry_request_packet(
                 self._shared_secret[:16],
@@ -148,15 +264,26 @@ class Solarbank3(PrimeDevice):
         await self._client.write_gatt_char(UUID_COMMAND, reply, response=False)
 
     async def _post_connect(self) -> None:
-        """Re-arm the status request after connect for firmware compatibility."""
+        """Re-arm status telemetry and request read-only firmware metadata."""
         if self._sb3_session_ready:
+            timestamp = int.from_bytes(bytes.fromhex("ef79b569"), "little") + int(
+                time.time() - self._negotiation_timestamp
+            )
             await self._client.write_gatt_char(
                 UUID_COMMAND,
                 build_telemetry_request_packet(
                     self._shared_secret[:16],
                     self._shared_secret[16:28],
-                    int.from_bytes(bytes.fromhex("ef79b569"), "little")
-                    + int(time.time() - self._negotiation_timestamp),
+                    timestamp,
+                ),
+                response=False,
+            )
+            await self._client.write_gatt_char(
+                UUID_COMMAND,
+                build_firmware_request_packet(
+                    self._shared_secret[:16],
+                    self._shared_secret[16:28],
+                    timestamp + 1,
                 ),
                 response=False,
             )
@@ -167,6 +294,7 @@ class Solarbank3(PrimeDevice):
         *,
         start_minutes: int = 0,
         end_minutes: int = 1440,
+        mode: str | None = None,
     ) -> None:
         """Set a uniform seven-day output schedule using command 405e."""
         await self._send_command(
@@ -175,6 +303,7 @@ class Solarbank3(PrimeDevice):
                 power_w,
                 start_minutes=start_minutes,
                 end_minutes=end_minutes,
+                mode=self._schedule_mode if mode is None else mode,
             ),
         )
 
@@ -203,6 +332,27 @@ class Solarbank3(PrimeDevice):
         return self._parse_string("a2", begin=1)
 
     @property
+    def software_version(self) -> str:
+        """Return the primary Solarbank firmware reported by ``4830``."""
+        return self._sb3_firmware_metadata.get("a2", DEFAULT_METADATA_STRING)
+
+    @property
+    def firmware_versions(self) -> str:
+        """Return all verified bank-side firmware and component strings."""
+        labels = (
+            ("Solarbank", "a2"),
+            ("Internal MCU", "a1"),
+            ("MCU component", "a4"),
+            ("ESP32 component", "a5"),
+        )
+        values = [
+            f"{label}: {value}"
+            for label, key in labels
+            if (value := self._sb3_firmware_metadata.get(key))
+        ]
+        return " | ".join(values) if values else DEFAULT_METADATA_STRING
+
+    @property
     def battery_percentage_aggregate(self) -> float:
         """Battery Percentage average across all batteries.
 
@@ -211,7 +361,12 @@ class Solarbank3(PrimeDevice):
         if self._data is None:
             return DEFAULT_METADATA_FLOAT
 
-        return float(self._parse_int("a3", begin=1))
+        percentages = [self._parse_int("a3", begin=1)]
+        for slot in range(1, 6):
+            percentage = self._expansion_battery(slot)[1]
+            if percentage is not None:
+                percentages.append(percentage)
+        return float(sum(percentages) // len(percentages))
 
     @property
     def battery_health(self) -> float:
@@ -329,7 +484,14 @@ class Solarbank3(PrimeDevice):
 
         :returns: Solar power in or default int value.
         """
-        return round(self._parse_sb3_float("c7"))
+        return self._solar_pv_port_power_in("c6")
+
+    def _solar_pv_port_power_in(self, key: str) -> int:
+        """Return a non-stale individual MPPT value from c6 through c9."""
+        value = max(0.0, self._parse_sb3_float(key))
+        if self.solar_power_in <= 0 and value > 0:
+            return 0
+        return round(value)
 
     @property
     def solar_pv_2_power_in(self) -> int:
@@ -337,19 +499,7 @@ class Solarbank3(PrimeDevice):
 
         :returns: Solar power in or default int value.
         """
-        value = self._parse_sb3_float("c8")
-        total = self._parse_sb3_float("ab")
-        other_ports = (
-            self._parse_sb3_float("c7")
-            + self._parse_sb3_float("c9")
-            + self._parse_sb3_float("ca")
-        )
-        # Firmware 1.0.7.1 occasionally reports a stale port-2 value.  The
-        # total and the other three MPPT values provide a safe narrow fallback.
-        residual = total - other_ports
-        if residual > value + 5 and residual > 0:
-            return round(residual)
-        return round(value)
+        return self._solar_pv_port_power_in("c7")
 
     @property
     def solar_pv_3_power_in(self) -> int:
@@ -357,7 +507,7 @@ class Solarbank3(PrimeDevice):
 
         :returns: Solar power in or default int value.
         """
-        return round(self._parse_sb3_float("c9"))
+        return self._solar_pv_port_power_in("c8")
 
     @property
     def solar_pv_4_power_in(self) -> int:
@@ -365,7 +515,7 @@ class Solarbank3(PrimeDevice):
 
         :returns: Solar power in or default int value.
         """
-        return round(self._parse_sb3_float("ca"))
+        return self._solar_pv_port_power_in("c9")
 
     @property
     def temperature(self) -> int:
@@ -375,6 +525,85 @@ class Solarbank3(PrimeDevice):
         """
         return self._parse_int("a5", begin=1, signed=True)
 
+    def _expansion_battery(
+        self, slot: int
+    ) -> tuple[str | None, int | None, int | None]:
+        """Decode one inserted BP1600/BP2700 record from ``4409`` metadata.
+
+        Firmware through 1.0.7.3 uses either ``63 01`` or ``6a 01`` as the
+        record marker.  The 16 ASCII bytes directly ahead of that marker are
+        the battery serial; SoC and temperature use the verified positions in
+        the compact record.  Unknown layouts remain unavailable rather than
+        being guessed.
+        """
+        payload = getattr(self, "_sb3_battery_metadata", None)
+        if payload is None:
+            return None, None, None
+        for marker_start in (0x63, 0x6A):
+            marker = bytes((marker_start, 0x01, slot))
+            start = 0
+            while (index := payload.find(marker, start)) >= 16:
+                if index + 7 > len(payload):
+                    start = index + 1
+                    continue
+                try:
+                    serial = payload[index - 16 : index].decode("ascii")
+                except UnicodeDecodeError:
+                    start = index + 1
+                    continue
+                return serial, payload[index + 5], payload[index + 3]
+        return None, None, None
+
+    @property
+    def num_expansion(self) -> int:
+        """Return the number of detected expansion batteries."""
+        return sum(self._expansion_battery(slot)[0] is not None for slot in range(1, 6))
+
+    @property
+    def expansion_battery_1_serial_number(self) -> str | None:
+        """Return the first expansion serial, when present."""
+        return self._expansion_battery(2)[0]
+
+    @property
+    def expansion_battery_1_percentage(self) -> int | None:
+        """Return the first expansion state of charge, when present."""
+        return self._expansion_battery(2)[1]
+
+    @property
+    def expansion_battery_1_temperature(self) -> int | None:
+        """Return the first expansion temperature, when present."""
+        return self._expansion_battery(2)[2]
+
+    @property
+    def expansion_battery_2_serial_number(self) -> str | None:
+        """Return the second expansion serial, when present."""
+        return self._expansion_battery(3)[0]
+
+    @property
+    def expansion_battery_2_percentage(self) -> int | None:
+        """Return the second expansion state of charge, when present."""
+        return self._expansion_battery(3)[1]
+
+    @property
+    def expansion_battery_2_temperature(self) -> int | None:
+        """Return the second expansion temperature, when present."""
+        return self._expansion_battery(3)[2]
+
+    @property
+    def expansion_battery_3_serial_number(self) -> str | None:
+        """Return the third expansion serial, when present."""
+        return self._expansion_battery(4)[0]
+
+    @property
+    def expansion_battery_3_percentage(self) -> int | None:
+        """Return the third expansion state of charge, when present."""
+        return self._expansion_battery(4)[1]
+
+    @property
+    def expansion_battery_3_temperature(self) -> int | None:
+        """Return the third expansion temperature, when present."""
+        return self._expansion_battery(4)[2]
+
     @property
     def power_out(self) -> int:
         """Total Power Out.
@@ -382,6 +611,11 @@ class Solarbank3(PrimeDevice):
         :returns: Total power out or default int value.
         """
         return round(self._parse_sb3_float("ad"))
+
+    @property
+    def power_in(self) -> int:
+        """Return live battery charging power from verified field ``bc``."""
+        return round(self._parse_sb3_float("bc"))
 
     @property
     def grid_to_home_power(self) -> int:

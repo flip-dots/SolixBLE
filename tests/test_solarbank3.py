@@ -11,6 +11,7 @@ from SolixBLE.sb3_protocol import (
     SB3_DEFAULT_CLIENT_ID,
     SB3_INITIAL_AES_KEY,
     SB3_INITIAL_NONCE,
+    SB3_SCHEDULE_MODE_CHARGE,
     aes_gcm_decrypt,
     aes_gcm_encrypt,
     build_max_load_plaintext,
@@ -34,6 +35,17 @@ def test_sb3_schedule_matches_captured_layout() -> None:
     assert payload[:7] == bytes.fromhex("a10121a2020101")
     assert payload[161:] == bytes.fromhex("fd050301020304")
     assert [payload[18 + 22 * day] for day in range(7)] == [0x5E] * 7
+
+
+def test_sb3_charge_schedule_changes_only_the_slot_direction() -> None:
+    """The app's charge tab uses the second byte after the 0x50 trailer."""
+    payload = build_schedule_plaintext(
+        300,
+        mode=SB3_SCHEDULE_MODE_CHARGE,
+        fd_token=b"\x01\x02\x03\x04",
+    )
+
+    assert payload[14:22] == bytes.fromhex("0000a0052c015001")
 
 
 def test_sb3_max_load_uses_little_endian_watts() -> None:
@@ -75,10 +87,10 @@ def test_sb3_telemetry_mappings_match_firmware_1071() -> None:
         "b1": _float_tlv(400),
         "b2": _float_tlv(390),
         "b9": b"\x02\x90\x01",
-        "c7": _float_tlv(309),
-        "c8": _float_tlv(23),
-        "c9": _float_tlv(13),
-        "ca": _float_tlv(40),
+        "c6": _float_tlv(309),
+        "c7": _float_tlv(23),
+        "c8": _float_tlv(13),
+        "c9": _float_tlv(40),
     }
 
     assert device.battery_percentage == 90
@@ -87,7 +99,10 @@ def test_sb3_telemetry_mappings_match_firmware_1071() -> None:
     assert device.power_out == 327
     assert device.schedule_power == 400
     assert device.solar_power_in == 689
-    assert device.solar_pv_2_power_in == 327
+    assert device.solar_pv_1_power_in == 309
+    assert device.solar_pv_2_power_in == 23
+    assert device.solar_pv_3_power_in == 13
+    assert device.solar_pv_4_power_in == 40
 
 
 class _FakeClient:
@@ -132,7 +147,38 @@ async def test_sb3_authentication_sequence_reaches_session_ready() -> None:
 
     await device._process_negotiation(
         bytes.fromhex("4827"),
-        aes_gcm_encrypt(session_key, session_nonce, b"\x04"),
+        aes_gcm_encrypt(session_key, session_nonce, b"\x00"),
     )
     assert device._sb3_session_ready
     assert parse_packet(device._client.writes[-1])[1] == bytes.fromhex("4040")
+
+
+@pytest.mark.asyncio
+async def test_sb3_single_payload_starting_with_11_is_not_a_fragment() -> None:
+    """A GCM packet beginning with 0x11 must retain that byte verbatim."""
+    device = Solarbank3.__new__(Solarbank3)
+    device._sb3_raw_fragments = {}
+    observed: list[bytes] = []
+
+    def decrypt(payload: bytes) -> bytes:
+        observed.append(payload)
+        return b"\x01\xa1\x01\x31"
+
+    device._decrypt_payload = decrypt
+    await device._process_telemetry_packet(
+        b"\x11" + b"ciphertext", bytes.fromhex("485e")
+    )
+
+    assert observed == [b"\x11ciphertext"]
+
+
+def test_sb3_battery_metadata_accepts_new_firmware_marker() -> None:
+    """Firmware 1.0.7.3 uses 6a01 instead of the older 6301 marker."""
+    device = Solarbank3.__new__(Solarbank3)
+    device._sb3_battery_metadata = (
+        b"APCDJF4G72230095" + bytes((0x6A, 0x01, 0x02, 25, 0x02, 80, 0x64))
+    )
+
+    assert device.expansion_battery_1_serial_number == "APCDJF4G72230095"
+    assert device.expansion_battery_1_percentage == 80
+    assert device.expansion_battery_1_temperature == 25

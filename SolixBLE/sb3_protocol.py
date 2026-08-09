@@ -25,6 +25,9 @@ SB3_INITIAL_AES_KEY = bytes.fromhex("b8ff7422955d4eb6d554a2c470280559")
 SB3_INITIAL_NONCE = bytes.fromhex("6ba3e3f2f3a60f2971ce5d1f")
 SB3_AES_GCM_AAD = bytes.fromhex("3322110077665544bbaa9988ffeeddcc")
 SB3_MAX_LOAD_VALUES = (350, 600, 800, 1200)
+SB3_SCHEDULE_MODE_DISCHARGE = "discharge"
+SB3_SCHEDULE_MODE_CHARGE = "charge"
+SB3_SCHEDULE_MODES = (SB3_SCHEDULE_MODE_DISCHARGE, SB3_SCHEDULE_MODE_CHARGE)
 
 SB3_SET_SCHEDULE_COMMAND = bytes.fromhex("405e")
 SB3_SET_MAX_LOAD_COMMAND = bytes.fromhex("4080")
@@ -196,11 +199,31 @@ def build_telemetry_request_packet(
     )
 
 
+def build_firmware_request_packet(
+    session_key: bytes, session_nonce: bytes, timestamp: int | None = None
+) -> bytes:
+    """Build the authenticated ``4030`` firmware-information request.
+
+    A17C5 firmware pages use the same replay-protected request body as
+    ``4040``.  The response is ``4830`` and contains a compact ASCII TLV list.
+    """
+    return build_packet(
+        b"\x03\x00\x0f",
+        b"\x40\x30",
+        aes_gcm_encrypt(
+            session_key,
+            session_nonce,
+            build_telemetry_request_plaintext(timestamp),
+        ),
+    )
+
+
 def build_schedule_plaintext(
     power_w: int,
     *,
     start_minutes: int = 0,
     end_minutes: int = 1440,
+    mode: str = SB3_SCHEDULE_MODE_DISCHARGE,
     fd_token: bytes | None = None,
 ) -> bytes:
     """Build the seven-day 405e schedule payload observed on firmware 1.0.7.1."""
@@ -210,6 +233,8 @@ def build_schedule_plaintext(
         raise ValueError("power_w must be between 0 and 1200 W in 50 W steps")
     if not 0 <= start_minutes <= end_minutes <= 1440:
         raise ValueError("schedule times must be between 0 and 1440 minutes")
+    if mode not in SB3_SCHEDULE_MODES:
+        raise ValueError("mode must be 'discharge' or 'charge'")
     if fd_token is None:
         fd_token = secrets.token_bytes(4)
     if len(fd_token) != 4:
@@ -219,7 +244,7 @@ def build_schedule_plaintext(
         start_minutes.to_bytes(2, "little")
         + end_minutes.to_bytes(2, "little")
         + power_w.to_bytes(2, "little")
-        + b"\x50\x00"
+        + bytes((0x50, 0x01 if mode == SB3_SCHEDULE_MODE_CHARGE else 0x00))
     )
     schedule = bytearray(b"\xa1\x01\x21\xa2\x02\x01\x01")
     for day in range(7):
