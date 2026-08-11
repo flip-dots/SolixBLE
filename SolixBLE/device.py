@@ -57,18 +57,25 @@ class SolixBLEDevice:
     #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
     _TELEMETRY_COMMANDS: tuple[str, ...] = ("c402", "4300", "c405")
 
+    #: Bytes of framing wrapped around every payload: ``ff09`` (2) + length (2) +
+    #: pattern (3) + cmd (2) + checksum (1). Added to a payload length to recover the
+    #: size of the notification it arrived in, so that size can be compared against
+    #: the largest notification the link allows.
+    _FRAME_OVERHEAD: int = 10
+
     def __init__(self, ble_device: BLEDevice) -> None:
         """Initialise device object. Does not connect automatically."""
 
         _LOGGER.debug(
             f"Initializing Solix device '{ble_device.name}' with"
-            f"address '{ble_device.address}' and details '{ble_device.details}'"
+            f"address '{ble_device.address}' and details '{ble_device.details}'",
         )
 
         self._ble_device: BLEDevice = ble_device
         self._client: BleakClient | None = None
         self._fragment_buffers: dict[bytes, dict[int, bytes]] = {}
         self._fragment_totals: dict[bytes, int] = {}
+        self._declared_mtu: int | None = None
         self._data: dict[str, bytes] | None = None
         self._last_data_timestamp: datetime | None = None
         self._last_packet_timestamp: datetime | None = None
@@ -119,7 +126,6 @@ class SolixBLEDevice:
         self._connection_attempts = self._connection_attempts + 1
 
         try:
-
             # If we have an old client get rid of it
             if self._client is not None:
                 await self._dispose_of_client()
@@ -139,23 +145,24 @@ class SolixBLEDevice:
 
         except BleakError:
             _LOGGER.exception(
-                f"Error establishing initial connection to '{self.name}'!"
+                f"Error establishing initial connection to '{self.name}'!",
             )
 
         # If we are still not connected then we have failed
         if not self.connected:
             _LOGGER.error(
-                f"Failed to establish initial connection to '{self.name}' on attempt {self._connection_attempts}!"
+                f"Failed to establish initial connection to '{self.name}' on attempt {self._connection_attempts}!",
             )
             return False
 
         _LOGGER.debug(
-            f"Established initial connection to '{self.name}' on attempt {self._connection_attempts}!"
+            f"Established initial connection to '{self.name}' on attempt {self._connection_attempts}!",
         )
         try:
             _LOGGER.debug(f"Subscribing to notifications from device '{self.name}'!")
             await self._client.start_notify(
-                UUID_TELEMETRY, partial(self._process_notification, self._client)
+                UUID_TELEMETRY,
+                partial(self._process_notification, self._client),
             )
         except BleakError:
             _LOGGER.exception(f"Error subscribing/negotiating with '{self.name}'!")
@@ -164,10 +171,8 @@ class SolixBLEDevice:
         # Negotiate
         try:
             async with asyncio.timeout(NEGOTIATION_TIMEOUT):
-
                 # While negotiations have not completed
                 while not self.negotiated:
-
                     # If we have not received any packet from the device in
                     # any stage then restart negotiations from the start
                     if (
@@ -175,16 +180,15 @@ class SolixBLEDevice:
                         or (time.time() - self._last_packet_timestamp)
                         > NEGOTIATION_RESPONSE_TIMEOUT
                     ):
-
                         _LOGGER.debug(
-                            f"Sending negotiation initiation request to '{self.name}'..."
+                            f"Sending negotiation initiation request to '{self.name}'...",
                         )
                         await self._initiate_negotiations()
 
                     # Wait at this long to see if we get any response to
                     # our initial request in stage 0. This weird layout
                     # allows us to exit immediately when negotiation occurs
-                    for _ in range(0, NEGOTIATION_RESPONSE_TIMEOUT):
+                    for _ in range(NEGOTIATION_RESPONSE_TIMEOUT):
                         await asyncio.sleep(1)
                         if self.negotiated:
                             break
@@ -233,7 +237,6 @@ class SolixBLEDevice:
         for example, send a subscribe command to start a telemetry stream (see
         :class:`~SolixBLE.devices.c1000g2.C1000G2`).
         """
-        pass
 
     async def _keep_alive(self) -> int | None:
         """Execute designated keep-alive command periodically after good negotiation.
@@ -335,7 +338,11 @@ class SolixBLEDevice:
         return self._last_data_timestamp
 
     def _parse_int(
-        self, key: str, begin: int = None, end: int = None, signed: bool = False
+        self,
+        key: str,
+        begin: int = None,
+        end: int = None,
+        signed: bool = False,
     ) -> int:
         """Parse an integer at the specified key in the telemetry data.
 
@@ -379,23 +386,24 @@ class SolixBLEDevice:
 
         # Validate encoded length is correct
         packet_length = int.from_bytes(
-            bytes([packet_copy.pop(0), packet_copy.pop(0)]), byteorder="little"
+            bytes([packet_copy.pop(0), packet_copy.pop(0)]),
+            byteorder="little",
         )
         if packet_length != len(packet):
             raise ValueError(
-                f"Packet length is encoded as {packet_length} but its length was {len(packet)}!"
+                f"Packet length is encoded as {packet_length} but its length was {len(packet)}!",
             )
 
         # Validate checksum is correct
         packet_checksum = packet_copy.pop(-1).to_bytes()
         if packet_checksum != self._checksum(packet[:-1]):
             raise ValueError(
-                f"Packet checksum is encoded as {packet_checksum.hex()} but it is actually {self._checksum(packet[:-1]).hex()}!"
+                f"Packet checksum is encoded as {packet_checksum.hex()} but it is actually {self._checksum(packet[:-1]).hex()}!",
             )
 
         # Extract pattern
         packet_pattern = bytes(
-            [packet_copy.pop(0), packet_copy.pop(0), packet_copy.pop(0)]
+            [packet_copy.pop(0), packet_copy.pop(0), packet_copy.pop(0)],
         )
 
         # Extract command
@@ -469,17 +477,19 @@ class SolixBLEDevice:
 
                 # Sometimes there is just a param_id with no length or values
                 if len(remaining_data) == 0:
-                    parsed_data[param_id] = bytes()
+                    parsed_data[param_id] = b""
                     break
 
                 # Extract encoded length of parameter
                 param_len = int.from_bytes(
-                    _verbose_pop(remaining_data, 1, f"param_len (id={param_id})")
+                    _verbose_pop(remaining_data, 1, f"param_len (id={param_id})"),
                 )
 
                 # Extract data/body from parameter
                 param_data = _verbose_pop(
-                    remaining_data, param_len, f"param_data (id={param_id})"
+                    remaining_data,
+                    param_len,
+                    f"param_data (id={param_id})",
                 )
                 parsed_data[param_id] = param_data
 
@@ -487,13 +497,15 @@ class SolixBLEDevice:
                 _LOGGER.exception(
                     f"Unexpected end of packet! Data may be missing or invalid!"
                     f" Extracted so far: '{self._parameters_to_str(parsed_data)}'."
-                    f" Payload: '{payload.hex()}'"
+                    f" Payload: '{payload.hex()}'",
                 )
 
         return parsed_data
 
     def _parameters_to_str(
-        self, parameters: dict[str, bytes], types: bool = False
+        self,
+        parameters: dict[str, bytes],
+        types: bool = False,
     ) -> str:
         if types:
             with_types = {
@@ -506,8 +518,7 @@ class SolixBLEDevice:
                 for k, v in parameters.items()
             }
             return json.dumps(with_types, indent=4, sort_keys=True)
-        else:
-            return str({k: v.hex() for k, v in parameters.items()})
+        return str({k: v.hex() for k, v in parameters.items()})
 
     def _log_diff(self, old: dict[str, bytes], new: dict[str, bytes]) -> None:
         """Log any differences between parameters."""
@@ -522,13 +533,15 @@ class SolixBLEDevice:
             if new[k] != old[k]
         }
         _LOGGER.debug(
-            f"Parameter changes: \n{json.dumps(differences, indent=4, sort_keys=True)}"
+            f"Parameter changes: \n{json.dumps(differences, indent=4, sort_keys=True)}",
         )
 
     def _decrypt_payload(self, payload: bytes) -> bytes:
         """Decrypt telemetry packet using negotiated shared secret and IV."""
         cipher = AES.new(
-            self._shared_secret[:16], AES.MODE_CBC, iv=self._shared_secret[16:]
+            self._shared_secret[:16],
+            AES.MODE_CBC,
+            iv=self._shared_secret[16:],
         )
         decrypted = cipher.decrypt(payload)
         unpadder = PKCS7(128).unpadder()
@@ -543,59 +556,139 @@ class SolixBLEDevice:
         padded_data = padder.update(payload)
         padded_data += padder.finalize()
         cipher = AES.new(
-            self._shared_secret[:16], AES.MODE_CBC, iv=self._shared_secret[16:]
+            self._shared_secret[:16],
+            AES.MODE_CBC,
+            iv=self._shared_secret[16:],
         )
         return cipher.encrypt(padded_data)
 
-    async def _process_telemetry_packet(
-        self, payload: bytes, cmd: bytes = None
-    ) -> None:
-        """Process a telemetry packet from the device.
+    def _reassemble(self, cmd: bytes, payload: bytes) -> bytes | None:
+        """Combine a fragmented payload, or pass a non-fragmented one through.
 
-        This performs the default processing of telemetry packets in which
-        telemetry payloads are spread across multiple packets. This is
-        overridden for devices which do not use multi-packet payloads for
-        telemetry.
+        Some Anker devices split a payload across multiple packets. This combines
+        fragmented payloads, or passes non-fragmented ones through, before they can
+        be further processed and/or decrypted. It runs before the cipher, so
+        telemetry and unknown session frames share one reassembler whether the
+        device encrypts with AES-GCM or AES-CBC (SolixBLE #42).
+
+        Each fragment of a fragmented payload is prefixed with an
+        ``<index><total>`` byte (high nibble = 1-based index, low nibble = fragment
+        count). Non-fragmented payloads are *not* required to carry that byte --
+        some devices (e.g. the A91B2 station) begin theirs with ciphertext -- so a
+        payload is classified by its length rather than by trusting its first byte.
+
+        :param cmd: 2-byte command the payload arrived under; fragments are
+            buffered per command.
+        :param payload: Payload bytes as received, still encrypted.
+        :returns: The complete payload ready to decrypt, or ``None`` while
+            fragments are still missing.
         """
+        if not payload:
+            return payload
 
-        # First byte encodes fragment info (high nibble = index, low = total)
-        fragment_index = (payload[0] >> 4) & 0x0F
-        fragment_total = payload[0] & 0x0F
+        cmd_key = bytes(cmd)
+        index = (payload[0] >> 4) & 0x0F
+        total = payload[0] & 0x0F
 
-        # Multi-part message
-        if fragment_total > 1:
-            fragment_data = payload[1:]
-            cmd_key = bytes(cmd)
+        # If we already have fragments of this payload.
+        if cmd_key in self._fragment_buffers:
             _LOGGER.debug(
-                f"Fragment {fragment_index}/{fragment_total} for cmd {cmd.hex()}, {len(fragment_data)} bytes"
+                f"Fragment {index}/{self._fragment_totals[cmd_key]} for cmd "
+                f"{cmd.hex()}, {len(payload) - 1} bytes",
             )
+            self._fragment_buffers[cmd_key][index] = payload[1:]
+            return self._join_fragments(cmd_key)
 
-            # Store fragment
-            if cmd_key not in self._fragment_buffers or fragment_index == 1:
-                self._fragment_buffers[cmd_key] = {}
-                self._fragment_totals[cmd_key] = fragment_total
-
-            self._fragment_buffers[cmd_key][fragment_index] = fragment_data
-
-            # Wait until all fragments have arrived
-            if len(self._fragment_buffers[cmd_key]) < fragment_total:
-                _LOGGER.debug("Waiting for remaining fragments...")
-                return
-
-            # Reassemble in order
-            payload = b"".join(
-                self._fragment_buffers[cmd_key][i]
-                for i in sorted(self._fragment_buffers[cmd_key])
+        # Every fragment of a fragmented payload except the last one fills the
+        # notification, so only a maximum-size notification can begin one. Without
+        # that check, a short payload whose first ciphertext byte happened to look
+        # like an ``<index><total>`` header would start a payload that never
+        # completes.
+        notification_length = len(payload) + self._FRAME_OVERHEAD
+        if index == 1 and total > 1 and notification_length >= self._max_notification:
+            _LOGGER.debug(
+                f"Fragment 1/{total} for cmd {cmd.hex()}, {len(payload) - 1} bytes",
             )
-            del self._fragment_buffers[cmd_key]
-            del self._fragment_totals[cmd_key]
-            _LOGGER.debug(f"Reassembled payload: {len(payload)} bytes")
+            self._fragment_buffers[cmd_key] = {1: payload[1:]}
+            self._fragment_totals[cmd_key] = total
+            return self._join_fragments(cmd_key)
 
-        else:
-            # Strip fragment info
-            payload = payload[1:]
+        # Non-fragmented payload. Strip the leading byte only when it is a valid
+        # "fragment 1 of 1" marker; otherwise the whole payload is data.
+        if payload[0] == 0x11:
+            return payload[1:]
+        return payload
 
-        decrypted_payload = self._decrypt_payload(payload)
+    def _record_declared_mtu(self, parameters: dict[str, bytes]) -> None:
+        """Record the maximum notification size the device declares at stage 2.
+
+        The stage-2 response carries it as ``a2`` -- 253 on most models, 297 on the
+        Prime 160W charger. Devices predating the field simply omit it.
+
+        :param parameters: Parsed parameters of the stage-2 response.
+        """
+        declared = parameters.get("a2")
+        if not declared:
+            return
+        self._declared_mtu = int.from_bytes(declared, byteorder="little")
+        _LOGGER.debug(f"Device declared a maximum notification of {self._declared_mtu}")
+
+    @property
+    def _max_notification(self) -> int:
+        """Largest notification the link can carry, in bytes.
+
+        Prefers the value the device declares as ``a2`` of its stage-2 negotiation
+        response, which every device sends and which needs no platform support to
+        read. Falls back to the negotiated ATT MTU less the 3-byte ATT notification
+        header, which bleak's BlueZ backend reports as a default 23 unless
+        ``_acquire_mtu()`` has been called.
+        """
+        if self._declared_mtu is not None:
+            return self._declared_mtu
+        return self._client.mtu_size - 3
+
+    def _join_fragments(self, cmd_key: bytes) -> bytes | None:
+        """Return the merged payload, or ``None`` if fragments are still missing.
+
+        Merges and resets once every fragment is present in the buffer.
+        """
+        if len(self._fragment_buffers[cmd_key]) < self._fragment_totals[cmd_key]:
+            _LOGGER.debug("Waiting for remaining fragments...")
+            return None
+
+        payload = b"".join(
+            self._fragment_buffers[cmd_key][i]
+            for i in sorted(self._fragment_buffers[cmd_key])
+        )
+        del self._fragment_buffers[cmd_key]
+        del self._fragment_totals[cmd_key]
+        _LOGGER.debug(f"Reassembled payload: {len(payload)} bytes")
+        return payload
+
+    async def _process_telemetry_packet(
+        self,
+        payload: bytes,
+        cmd: bytes = None,
+    ) -> None:
+        """Decrypt and dispatch a telemetry payload.
+
+        The payload is already whole by this point, having passed through
+        :meth:`_reassemble`, so this just decrypts and parses it. Kept as an override
+        point for devices whose telemetry needs post-processing (e.g. the A91B2
+        station remaps two frame layouts onto one property set).
+        """
+        try:
+            decrypted_payload = self._decrypt_payload(payload)
+        except Exception:  # noqa: BLE001
+            # A fragment whose first fragment was lost or arrived out of order
+            # cannot be joined onto anything, and devices that omit the fragment
+            # header on non-fragmented payloads make it indistinguishable from
+            # ciphertext, so it reaches here and will not decrypt. Drop it rather
+            # than let it escape into the notification callback.
+            _LOGGER.debug(
+                f"Discarding undecryptable payload for cmd {cmd.hex() if cmd else '?'}",
+            )
+            return None
         _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
         parameters = self._parse_payload(decrypted_payload)
         return await self._process_telemetry(parameters)
@@ -607,12 +700,11 @@ class SolixBLEDevice:
 
         if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
-                f"Telemetry parameters: {self._parameters_to_str(parameters)}"
+                f"Telemetry parameters: {self._parameters_to_str(parameters)}",
             )
 
             # Print state update if changes
             if state_changed:
-
                 # If we have previous data to compare against log the diff
                 if self._data is not None:
                     _LOGGER.debug("Parameters have changed since previous update!")
@@ -621,7 +713,7 @@ class SolixBLEDevice:
                 # Else log the parameters but with the types
                 else:
                     _LOGGER.debug(
-                        f"Telemetry parameters: {self._parameters_to_str(parameters, types=True)}"
+                        f"Telemetry parameters: {self._parameters_to_str(parameters, types=True)}",
                     )
 
         # Update internal parameters
@@ -630,12 +722,14 @@ class SolixBLEDevice:
 
         # Run callbacks if state changed
         if state_changed:
-
             _LOGGER.debug(self)
             self._run_state_changed_callbacks()
 
     async def _process_notification(
-        self, client: BleakClient, handle: int, data: bytearray
+        self,
+        client: BleakClient,
+        handle: int,
+        data: bytearray,
     ) -> None:
         """Process a notification from the device."""
 
@@ -643,11 +737,11 @@ class SolixBLEDevice:
 
         if self._client is not client:
             _LOGGER.debug("Ignoring notification from old client")
-            return
+            return None
 
         # Split packet into pattern, command, and payload
         _LOGGER.debug(
-            f"Received notification from '{self.name}'. length: {len(data)}, packet: '{data.hex()}'"
+            f"Received notification from '{self.name}'. length: {len(data)}, packet: '{data.hex()}'",
         )
         self._last_packet_timestamp = time.time()
         pattern, cmd, payload = self._split_packet(data)
@@ -656,19 +750,28 @@ class SolixBLEDevice:
         _LOGGER.debug(f"Payload: {payload.hex()}")
         _LOGGER.debug(f"Payload length: {len(payload)}")
 
+        # Combine fragmented payloads before the payload is used anywhere, so that
+        # anything waiting on a packet -- including _listen_for_packet() -- receives
+        # a whole payload rather than its first fragment. Negotiation frames are
+        # never fragmented, so they are left alone.
+        if pattern.hex() != "030001":
+            reassembled = self._reassemble(cmd, payload)
+            if reassembled is None:
+                return None
+            payload = reassembled
+
         # If the packet has a future registered then we just trigger that
         # future instead of processing it here
         if pattern + cmd in self._packet_futures:
             _LOGGER.debug(
-                "Packet has future(s) registered. Triggering future(s) and ignoring packet..."
+                "Packet has future(s) registered. Triggering future(s) and ignoring packet...",
             )
             for future in self._packet_futures[pattern + cmd]:
                 future.set_result(payload)
-            return
+            return None
 
         # Match against common message types
         match pattern.hex():
-
             # Negotiation messages
             case "030001":
                 _LOGGER.debug("Received negotiation message!")
@@ -676,7 +779,6 @@ class SolixBLEDevice:
 
             # Session messages
             case "03010f" | "030111":
-
                 # Non-encrypted telemetry messages
                 if cmd.hex() == "0300":
                     _LOGGER.debug("Received non-encrypted telemetry message!")
@@ -684,51 +786,47 @@ class SolixBLEDevice:
                     return await self._process_telemetry(parameters)
 
                 # Encrypted telemetry messages
-                elif cmd.hex() in self._TELEMETRY_COMMANDS:
+                if cmd.hex() in self._TELEMETRY_COMMANDS:
                     _LOGGER.debug("Received encrypted telemetry message!")
                     return await self._process_telemetry_packet(payload, cmd)
 
                 # Unknown messages
-                else:
-                    _LOGGER.debug(f"Received unknown message of type: {cmd.hex()}")
-                    try:
-
-                        # If the payload is one byte too short and we are
-                        # using the default AES (CBC) then try putting the
-                        # last byte of the cmd in front of it
-                        if (
-                            len(payload) % 16 == 15
-                            and self._decrypt_payload
-                            is SolixBLEDevice._decrypt_payload
-                        ):
-                            _LOGGER.debug(
-                                "Using special trick of embedded part of CMD in payload..."
-                            )
-                            payload = cmd[1].to_bytes() + payload
-
-                        decrypted_payload = self._decrypt_payload(payload)
+                _LOGGER.debug(f"Received unknown message of type: {cmd.hex()}")
+                try:
+                    # If the payload is one byte too short and we are
+                    # using the default AES (CBC) then try putting the
+                    # last byte of the cmd in front of it
+                    if (
+                        len(payload) % 16 == 15
+                        and self._decrypt_payload is SolixBLEDevice._decrypt_payload
+                    ):
                         _LOGGER.debug(
-                            f"Decrypted payload: {decrypted_payload.hex()}"
+                            "Using special trick of embedded part of CMD in payload...",
                         )
-                        parameters = self._parse_payload(decrypted_payload)
-                        _LOGGER.debug(
-                            f"Parameters: {self._parameters_to_str(parameters, types=True)}"
-                        )
-                    except Exception:
-                        _LOGGER.exception(
-                            "Exception decrypting unknown message type"
-                        )
+                        payload = cmd[1].to_bytes() + payload
+
+                    decrypted_payload = self._decrypt_payload(payload)
+                    _LOGGER.debug(
+                        f"Decrypted payload: {decrypted_payload.hex()}",
+                    )
+                    parameters = self._parse_payload(decrypted_payload)
+                    _LOGGER.debug(
+                        f"Parameters: {self._parameters_to_str(parameters, types=True)}",
+                    )
+                except Exception:
+                    _LOGGER.exception(
+                        "Exception decrypting unknown message type",
+                    )
 
             case _:
                 _LOGGER.warning(
-                    f"Unexpected packet type '{pattern}' sent by device! Packet: {data.hex()}"
+                    f"Unexpected packet type '{pattern}' sent by device! Packet: {data.hex()}",
                 )
 
     async def _process_negotiation(self, cmd: bytes, payload: bytes) -> None:
         """Negotiate encryption with the device."""
 
         match cmd.hex():
-
             # There is a "stage 0" in which we automatically send a negotiation
             # request as soon as we establish the initial connection. That
             # should lead to the power station sending a response landing us
@@ -737,56 +835,61 @@ class SolixBLEDevice:
             # Negotiation stage 1
             case "0801":
                 _LOGGER.debug(
-                    "Entered negotiation stage 1 due to response from device!"
+                    "Entered negotiation stage 1 due to response from device!",
                 )
                 parameters = self._parse_payload(payload)
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
                 _LOGGER.debug("Sending stage 1 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_1)
+                    UUID_COMMAND,
+                    bytes.fromhex(NEGOTIATION_COMMAND_1),
                 )
 
             # Negotiation stage 2
             case "0803":
                 _LOGGER.debug(
-                    "Entered negotiation stage 2 due to response from device!"
+                    "Entered negotiation stage 2 due to response from device!",
                 )
                 parameters = self._parse_payload(payload)
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
+                self._record_declared_mtu(parameters)
                 _LOGGER.debug("Sending stage 2 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_2)
+                    UUID_COMMAND,
+                    bytes.fromhex(NEGOTIATION_COMMAND_2),
                 )
 
             # Negotiation stage 3
             case "0829":
                 _LOGGER.debug(
-                    "Entered negotiation stage 3 due to response from device!"
+                    "Entered negotiation stage 3 due to response from device!",
                 )
                 parameters = self._parse_payload(payload)
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
                 self._negotiation_timestamp = time.time()
                 _LOGGER.debug("Sending stage 3 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_3)
+                    UUID_COMMAND,
+                    bytes.fromhex(NEGOTIATION_COMMAND_3),
                 )
 
             # Negotiation stage 4
             case "0805":
                 _LOGGER.debug(
-                    "Entered negotiation stage 4 due to response from device!"
+                    "Entered negotiation stage 4 due to response from device!",
                 )
                 parameters = self._parse_payload(payload)
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
                 _LOGGER.debug("Sending stage 4 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_4)
+                    UUID_COMMAND,
+                    bytes.fromhex(NEGOTIATION_COMMAND_4),
                 )
 
             # Negotiation stage 5
             case "0821":
                 _LOGGER.debug(
-                    "Entered negotiation stage 5 due to response from device!"
+                    "Entered negotiation stage 5 due to response from device!",
                 )
                 parameters = self._parse_payload(payload)
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
@@ -795,14 +898,16 @@ class SolixBLEDevice:
                 device_public_key_bytes = bytes.fromhex("04") + parameters["a1"]
                 _LOGGER.debug(f"Public key of device: {device_public_key_bytes.hex()}")
                 device_public_key = EllipticCurvePublicKey.from_encoded_point(
-                    SECP256R1(), device_public_key_bytes
+                    SECP256R1(),
+                    device_public_key_bytes,
                 )
 
                 # Calculate the shared secret
                 # The first half of the shared secret is the encryption key
                 # and the second half is the IV
                 private_value = int.from_bytes(
-                    bytes.fromhex(PRIVATE_KEY), byteorder="big"
+                    bytes.fromhex(PRIVATE_KEY),
+                    byteorder="big",
                 )
                 private_key = derive_private_key(private_value, SECP256R1())
                 self._shared_secret = private_key.exchange(ECDH(), device_public_key)
@@ -810,7 +915,8 @@ class SolixBLEDevice:
 
                 _LOGGER.debug("Sending stage 5 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_5)
+                    UUID_COMMAND,
+                    bytes.fromhex(NEGOTIATION_COMMAND_5),
                 )
 
             # Negotiation stage 6 (Optional)
@@ -819,7 +925,7 @@ class SolixBLEDevice:
             # but it does not hurt to decrypt it anyway.
             case "4822":
                 _LOGGER.debug(
-                    "Entered negotiation stage 6 (optional) due to response from device!"
+                    "Entered negotiation stage 6 (optional) due to response from device!",
                 )
                 decrypted_payload = self._decrypt_payload(payload)
                 parameters = self._parse_payload(decrypted_payload)
@@ -827,7 +933,7 @@ class SolixBLEDevice:
 
             case _:
                 _LOGGER.warning(
-                    f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{self._parameters_to_str(parameters)}'"
+                    f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{self._parameters_to_str(parameters)}'",
                 )
 
     def _checksum(self, packet: bytes) -> bytes:
@@ -851,10 +957,12 @@ class SolixBLEDevice:
         # and that timestamp is set during negotiations
         time_passed = int(time.time() - self._negotiation_timestamp)
         base_timestamp = int.from_bytes(
-            bytes.fromhex(BASE_TIMESTAMP), byteorder="little"
+            bytes.fromhex(BASE_TIMESTAMP),
+            byteorder="little",
         )
         new_timestamp = (base_timestamp + time_passed).to_bytes(
-            length=4, byteorder="little"
+            length=4,
+            byteorder="little",
         )
         new_payload = payload + bytes.fromhex("fe0503") + new_timestamp
         await self._send_encrypted_packet(cmd, new_payload)
@@ -882,7 +990,7 @@ class SolixBLEDevice:
     async def _send_encrypted_packet(self, cmd: bytes, payload: bytes) -> None:
         """Send an encrypted packet using negotiated shared secret and IV."""
         _LOGGER.debug(
-            f"Building packet with cmd: {cmd.hex()} and payload: {payload.hex()}"
+            f"Building packet with cmd: {cmd.hex()} and payload: {payload.hex()}",
         )
         encrypted_payload = self._encrypt_payload(payload)
 
@@ -893,7 +1001,10 @@ class SolixBLEDevice:
         await self._client.write_gatt_char(UUID_COMMAND, packet)
 
     def _register_future(
-        self, future: asyncio.Future, pattern: bytes, cmd: bytes
+        self,
+        future: asyncio.Future,
+        pattern: bytes,
+        cmd: bytes,
     ) -> None:
         """Register a future to be triggered when the pattern and cmd bytes are received."""
 
@@ -907,7 +1018,10 @@ class SolixBLEDevice:
             self._packet_futures[pattern + cmd].append(future)
 
     def _deregister_future(
-        self, future: asyncio.Future, pattern: bytes, cmd: bytes
+        self,
+        future: asyncio.Future,
+        pattern: bytes,
+        cmd: bytes,
     ) -> None:
         """Deregister a future to be triggered when the pattern and cmd bytes are received."""
 
@@ -927,7 +1041,10 @@ class SolixBLEDevice:
             self._packet_futures.pop(pattern + cmd)
 
     async def _listen_for_packet(
-        self, pattern: bytes, cmd: bytes, timeout: int = 10
+        self,
+        pattern: bytes,
+        cmd: bytes,
+        timeout: int = 10,
     ) -> bytes | None:
         """Wait for a response and return its payload bytes.
 
@@ -960,7 +1077,7 @@ class SolixBLEDevice:
                 function()
             except Exception:
                 _LOGGER.exception(
-                    f"Exception raised by a registered state change callback '{function}'!"
+                    f"Exception raised by a registered state change callback '{function}'!",
                 )
 
     async def _auto_reconnect(self) -> None:
@@ -980,26 +1097,24 @@ class SolixBLEDevice:
             )
 
         try:
-
             # If callbacks need to be run on reconnection, we silently
             # reconnect if the timeout has not been exceeded, else we
             # run callbacks to let subscribers know we were disconnected
             run_callbacks_on_reconnect = False
 
             while _can_retry():
-
                 # If we are already connected and negotiated then wait for disconnection
                 if self.negotiated:
                     _LOGGER.debug(
-                        f"Automatic reconnect task ready and waiting for disconnect event from '{self.name}'!"
+                        f"Automatic reconnect task ready and waiting for disconnect event from '{self.name}'!",
                     )
                     await self._disconnect_event.wait()
                     _LOGGER.debug(
-                        f"Disconnection event signalled by '{self.name}', starting reconnection..."
+                        f"Disconnection event signalled by '{self.name}', starting reconnection...",
                     )
                 else:
                     _LOGGER.debug(
-                        f"We are still not connected to '{self.name}', starting reconnection..."
+                        f"We are still not connected to '{self.name}', starting reconnection...",
                     )
 
                 # If we have reached this stage we are not connected
@@ -1009,18 +1124,16 @@ class SolixBLEDevice:
                     # we have to trigger callbacks to let subscribers know we
                     # are disconnected
                     async with asyncio.timeout(DISCONNECT_TIMEOUT):
-
                         while _can_retry():
-
                             await asyncio.sleep(RECONNECT_DELAY)
 
                             try:
                                 attempt_number = self._connection_attempts
                                 if await self.connect(
-                                    run_callbacks=run_callbacks_on_reconnect
+                                    run_callbacks=run_callbacks_on_reconnect,
                                 ):
                                     _LOGGER.debug(
-                                        f"""Successfully reconnected to '{self.name}' {"silently" if not run_callbacks_on_reconnect else ""} on attempt {attempt_number}!"""
+                                        f"""Successfully reconnected to '{self.name}' {"silently" if not run_callbacks_on_reconnect else ""} on attempt {attempt_number}!""",
                                     )
 
                                     # Reset back to false on successful connection
@@ -1030,13 +1143,13 @@ class SolixBLEDevice:
                                     break
                             except Exception:
                                 _LOGGER.exception(
-                                    f"""Exception raised attempting to {"silently" if not run_callbacks_on_reconnect else ""} reconnect to '{self.name}'!"""
+                                    f"""Exception raised attempting to {"silently" if not run_callbacks_on_reconnect else ""} reconnect to '{self.name}'!""",
                                 )
 
                 # If timeout exceeded
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     _LOGGER.warning(
-                        f"Timed out attempting to silently reconnect to '{self.name}', callbacks will be triggered due to disconnect!"
+                        f"Timed out attempting to silently reconnect to '{self.name}', callbacks will be triggered due to disconnect!",
                     )
                     self._reset_session(reset_data=True)
                     self._run_state_changed_callbacks()
@@ -1045,15 +1158,13 @@ class SolixBLEDevice:
                     # need to run them again on reconnect
                     run_callbacks_on_reconnect = True
 
-            else:
-                _LOGGER.warning("Maximum reconnect limit exceeded!")
+            _LOGGER.warning("Maximum reconnect limit exceeded!")
 
         except asyncio.CancelledError:
             _LOGGER.debug("Automatic reconnect task has been canceled/stopped")
 
         except Exception:
             _LOGGER.exception("Unexpected exception in automatic reconnect task!")
-
 
     async def _keep_alive_fn(self) -> None:
         """Task designed to be run in background to execute keep-alive.
@@ -1066,7 +1177,6 @@ class SolixBLEDevice:
         """
         try:
             while self.negotiated:
-
                 try:
                     _LOGGER.debug("Executing keep-alive...")
                     result = await self._keep_alive()
@@ -1103,7 +1213,7 @@ class SolixBLEDevice:
         # Ignore disconnect callbacks from old clients
         if client is not self._client:
             _LOGGER.debug(
-                f"Disconnect of '{self.name}' came from other client. Ignoring..."
+                f"Disconnect of '{self.name}' came from other client. Ignoring...",
             )
             return
 
@@ -1123,7 +1233,7 @@ class SolixBLEDevice:
             await client.disconnect()
         except Exception:
             _LOGGER.exception(
-                f"Exception raised when disposing of bleak client '{client}'!"
+                f"Exception raised when disposing of bleak client '{client}'!",
             )
 
     def _reset_session(self, reset_data: bool = True) -> None:
@@ -1159,7 +1269,7 @@ class SolixBLEDevice:
                 return prop.fget(self)
             except Exception as e:
                 _LOGGER.exception(
-                    f"Failed to parse property '{name}' when stringifying class! Is there an undocumented state?"
+                    f"Failed to parse property '{name}' when stringifying class! Is there an undocumented state?",
                 )
                 return f"{type(e).__name__}: {e}"
 
