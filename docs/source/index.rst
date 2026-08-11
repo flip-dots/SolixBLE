@@ -33,46 +33,63 @@ No pairing is required in order to receive telemetry data or control the device.
 Power station support
 ---------------------
 
-======================= ======== ========== ========= ========= ========= ============ ====== ======
-Parameter               C300(X)  C300(X) DC C800(X)   C1000(X)  C1000 G2  F2000 (767)  F2600  F3800
-======================= ======== ========== ========= ========= ========= ============ ====== ======
-Charging status         ✅        ✅          ❌        ❌        ❌         ❌           ✅      ✅
-Time remaining          ✅        ✅          ✅        ✅        ❌         ✅           ✅      ✅
-Battery percentage      ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-Battery health          ❌        ✅          ✅        ✅        ✅         ✅           ✅      ❌
-Temperature             ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-Total Power In          ✅        ✅          ✅        ✅        ❌         ❌           ✅      ✅
-Total Power Out         ✅        ✅          ✅        ✅        ✅         ❌           ✅      ✅
-AC on/off control       ✅        N/A         ✅        ✅        ✅         ❌           ✅      ✅
-AC Power in             ✅        N/A         ✅        ✅        ✅         ✅           ✅      ✅
-AC Power out            ✅        N/A         ✅        ✅        ✅         ✅           ✅      ✅
-AC on/off state         ✅        N/A         ✅        ✅        ✅         ❌           ✅      ✅
-AC Timer                ✅        N/A         ✅        ✅        ❌         ❌           ✅      ❌
-DC on/off control       ✅        ✅          ✅        ✅        ✅         ❌           ✅      ✅
-DC Power in             ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-DC Power out            ✅        ✅          ❌        ✅        ✅         ✅           ✅      ✅
-DC Power in status      ✅        ✅          ❌        ❌        ✅         ❌           ✅      ❌
-DC Power out status     ✅        ❌          ❌        ✅        ✅         ❌           ✅      ✅
-DC Timer                ✅        ✅          ❌        ❌        ❌         ❌           ✅      ❌
-USB Power out           ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-USB Port status         ✅        ✅          ❌        ❌        ✅         ❌           ✅      ✅
-Light control           ✅        ✅          ✅        ✅        ❌         ❌           ✅      ❌
-Light status            ✅        ✅          ❌        ❌        N/A        ❌           ✅      ❌
-Display on/off control  ✅        ✅          ✅        ✅        ❌         ❌           ✅      ❌
-Display on/off status   ❌        ✅          ❌        ❌        ❌         ❌           ✅      ❌
-Display brightness ctrl ✅        ✅          ✅        ✅        ❌         ❌           ✅      ❌
-Display brightness stat ❌        ✅          ❌        ❌        ❌         ❌           ✅      ❌
-Display timeout ctrl    ✅        ✅          ✅        ✅        ❌         ❌           ✅      ❌
-Display timeout stat    ❌        ✅          ❌        ❌        ❌         ❌           ✅      ❌
-Firmware version        ✅        ✅          ✅        ✅        ❌         ✅           ✅      ✅
-Serial number           ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-Expansion temperature   N/A       N/A         N/A      ✅        N/A       ✅           ✅      ❌
-Expansion percentage    N/A       N/A         N/A      ✅        N/A       ✅           ✅      ✅
-Expansion health        N/A       N/A         N/A      ✅        N/A       ✅           ✅      ❌
-Expansion firmware      N/A       N/A         N/A      ✅        N/A       ✅           ✅      ✅
-Expansion num           N/A       N/A         N/A      ✅        N/A       ✅           ✅      ❌
-Polled status updates   ✅        ❌          ✅        ✅        ❌         ❌           ✅      ❌
-======================= ======== ========== ========= ========= ========= ============ ====== ======
+The support tables below use these marks: ✅ supported · 🚧 known but not yet
+implemented · ❌ not supported · N/A not applicable · ❔ not investigated. A
+``read/control`` pair such as ✅/🚧 gives the two states separately (e.g. the max
+charge power is readable but not yet settable).
+
+=======================  =======  ==========  =======  ========  ========  ========  ===========  =====  =====
+Parameter                C300(X)  C300(X) DC  C800(X)  C1000(X)  C1000 G2  C2000 G2  F2000 (767)  F2600  F3800
+=======================  =======  ==========  =======  ========  ========  ========  ===========  =====  =====
+Charging status          ✅       ✅          ❌       ❌        🚧        🚧        ❌            ✅     ✅
+Time remaining           ✅       ✅          ✅       ✅        ✅        ✅        ✅            ✅     ✅
+Battery percentage       ✅       ✅          ✅       ✅        ✅        ✅        ✅            ✅     ✅
+Battery health           ❌       ✅          ✅       ✅        ✅        ✅        ✅            ✅     ❌
+Temperature              ✅       ✅          ✅       ✅        ✅        ✅        ✅            ✅     ✅
+Total Power In           ✅       ✅          ✅       ✅        ✅        ✅        ❌            ✅     ✅
+Total Power Out          ✅       ✅          ✅       ✅        ✅        ✅        ❌            ✅     ✅
+AC on/off control        ✅       N/A         ✅       ✅        ✅        ✅        ❌            ✅     ✅
+AC Power in              ✅       N/A         ✅       ✅        ✅        ✅        ✅            ✅     ✅
+AC Power out             ✅       N/A         ✅       ✅        ✅        ✅        ✅            ✅     ✅
+AC on/off state          ✅       N/A         ✅       ✅        ✅        ✅        ❌            ✅     ✅
+AC Timer                 ✅       N/A         ✅       ✅        🚧        🚧        ❌            ✅     ❌
+DC on/off control        ✅       ✅          ✅       ✅        ✅        ✅        ❌            ✅     ✅
+DC Power in              ✅       ✅          ✅       ✅        ✅        ✅        ✅            ✅     ✅
+DC Power out             ✅       ✅          ❌       ✅        ✅        ✅        ✅            ✅     ✅
+DC Power in status       ✅       ✅          ❌       ❌        ✅        ✅        ❌            ✅     ❌
+DC Power out status      ✅       ❌          ❌       ✅        ✅        ✅        ❌            ✅     ✅
+DC Timer                 ✅       ✅          ❌       ❌        🚧        🚧        ❌            ✅     ❌
+USB Power out            ✅       ✅          ✅       ✅        ✅        ✅        ✅            ✅     ✅
+USB Port status          ✅       ✅          ❌       ❌        ✅        ✅        ❌            ✅     ✅
+Max charge power         ❔       ❔          ❔       ❔        ✅/🚧     ✅/🚧     ❔            ❔     ❔
+Pack voltage             ❔       ❔          ❔       ❔        ✅        ✅        ❔            ❔     ❔
+Cumulative energy out    ❔       ❔          ❔       ❔        ✅        ✅        ❔            ❔     ❔
+Charge presence          ❔       ❔          ❔       ❔        ✅        ✅        ❔            ❔     ❔
+Light control            ✅       ✅          ✅       ✅        🚧        🚧        ❌            ✅     ❌
+Light status             ✅       ✅          ❌       ❌        N/A       N/A       ❌            ✅     ❌
+Display on/off control   ✅       ✅          ✅       ✅        🚧        🚧        ❌            ✅     ❌
+Display on/off status    ❌       ✅          ❌       ❌        🚧        🚧        ❌            ✅     ❌
+Display brightness ctrl  ✅       ✅          ✅       ✅        🚧        🚧        ❌            ✅     ❌
+Display brightness stat  ❌       ✅          ❌       ❌        🚧        🚧        ❌            ✅     ❌
+Display timeout ctrl     ✅       ✅          ✅       ✅        🚧        🚧        ❌            ✅     ❌
+Display timeout stat     ❌       ✅          ❌       ❌        🚧        🚧        ❌            ✅     ❌
+Firmware version         ✅       ✅          ✅       ✅        🚧        🚧        ✅            ✅     ✅
+Serial number            ✅       ✅          ✅       ✅        ✅        ✅        ✅            ✅     ✅
+Expansion temperature    N/A      N/A         N/A      ✅        N/A       🚧        ✅            ✅     ❌
+Expansion percentage     N/A      N/A         N/A      ✅        N/A       🚧        ✅            ✅     ✅
+Expansion health         N/A      N/A         N/A      ✅        N/A       🚧        ✅            ✅     ❌
+Expansion firmware       N/A      N/A         N/A      ✅        N/A       🚧        ✅            ✅     ✅
+Expansion num            N/A      N/A         N/A      ✅        N/A       ✅        ✅            ✅     ❌
+Polled status updates    ✅       ❌          ✅       ✅        🚧        🚧        ❌            ✅     ❌
+=======================  =======  ==========  =======  ========  ========  ========  ===========  =====  =====
+
+The C2000 G2 (A1783) shares the C1000 G2 (A1763) telemetry stack, so the two
+columns track together. The ``Max charge power``, ``Pack voltage``,
+``Cumulative energy out`` and ``Charge presence`` rows are read from the
+``c490`` protobuf device summary rather than the live per-second stream, and
+are exposed through :attr:`summary` alongside dedicated properties. Only the
+A1783 was verified against hardware; the A1763 column reflects the shared code
+path.
 
 
 Solar system support

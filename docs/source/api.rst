@@ -17,6 +17,7 @@ the list of properties for that class.
    c800
    c1000
    c1000g2
+   c2000g2
    f2000
    f2600
    f3800
