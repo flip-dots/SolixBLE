@@ -755,9 +755,10 @@ class SolixBLEDevice:
         # a whole payload rather than its first fragment. Negotiation frames are
         # never fragmented, so they are left alone.
         if pattern.hex() != "030001":
-            payload = self._reassemble(cmd, payload)
-            if payload is None:
+            reassembled = self._reassemble(cmd, payload)
+            if reassembled is None:
                 return None
+            payload = reassembled
 
         # If the packet has a future registered then we just trigger that
         # future instead of processing it here
