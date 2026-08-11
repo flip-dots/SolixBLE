@@ -246,7 +246,8 @@ class C800(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
+            cmd=bytes.fromhex(CMD_AC_OUTPUT),
+            payload=bytes.fromhex(PAYLOAD_ON),
         )
 
     async def turn_ac_off(self) -> None:
@@ -256,7 +257,8 @@ class C800(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
+            cmd=bytes.fromhex(CMD_AC_OUTPUT),
+            payload=bytes.fromhex(PAYLOAD_OFF),
         )
 
     async def turn_dc_on(self) -> None:
@@ -266,7 +268,8 @@ class C800(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
+            cmd=bytes.fromhex(CMD_DC_OUTPUT),
+            payload=bytes.fromhex(PAYLOAD_ON),
         )
 
     async def turn_dc_off(self) -> None:
@@ -276,7 +279,8 @@ class C800(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
+            cmd=bytes.fromhex(CMD_DC_OUTPUT),
+            payload=bytes.fromhex(PAYLOAD_OFF),
         )
 
     async def set_light_mode(self, mode: LightStatus) -> None:
@@ -335,7 +339,8 @@ class C800(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_ON)
+            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF),
+            payload=bytes.fromhex(PAYLOAD_ON),
         )
 
     async def turn_display_off(self) -> None:
@@ -345,7 +350,8 @@ class C800(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_OFF)
+            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF),
+            payload=bytes.fromhex(PAYLOAD_OFF),
         )
 
     async def get_status_update(self) -> dict[str, bytes]:
@@ -361,21 +367,15 @@ class C800(SolixBLEDevice):
             payload=bytes.fromhex("a10121"),
         )
 
-        packet_1 = await self._listen_for_packet(
-            bytes.fromhex("03010f"), bytes.fromhex("c840")
+        # Fragments are combined before this point, so the payload arrives whole.
+        payload = await self._listen_for_packet(
+            bytes.fromhex("03010f"),
+            bytes.fromhex("c840"),
         )
-        if not packet_1:
-            raise TimeoutError("Timed out waiting for packet 1!")
+        if not payload:
+            raise TimeoutError("Timed out waiting for packet!")
 
-        packet_2 = await self._listen_for_packet(
-            bytes.fromhex("03010f"), bytes.fromhex("c840")
-        )
-        if not packet_2:
-            raise TimeoutError("Timed out waiting for packet 2!")
-
-        # We need to ignore the first byte of each packet with these types
-        new_payload = packet_1[1:] + packet_2[1:]
-        decrypted_payload = self._decrypt_payload(new_payload)
+        decrypted_payload = self._decrypt_payload(payload)
         parameters = self._parse_payload(decrypted_payload)
         _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters, types=True)}")
         return parameters

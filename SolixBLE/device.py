@@ -57,10 +57,10 @@ class SolixBLEDevice:
     #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
     _TELEMETRY_COMMANDS: tuple[str, ...] = ("c402", "4300", "c405")
 
-    #: Fixed ff09-frame overhead between the on-wire notification value and the
-    #: ``payload`` that :meth:`_split_packet` returns: ``ff09`` (2) + length (2) +
-    #: pattern (3) + cmd (2) + checksum (1). Added back so the fragmentation gate can
-    #: compare the notification length to the live ``ATT_MTU - 3`` cap.
+    #: Bytes of framing wrapped around every payload: ``ff09`` (2) + length (2) +
+    #: pattern (3) + cmd (2) + checksum (1). Added to a payload length to recover the
+    #: size of the notification it arrived in, so that size can be compared against
+    #: the largest notification the link allows.
     _FRAME_OVERHEAD: int = 10
 
     def __init__(self, ble_device: BLEDevice) -> None:
@@ -75,6 +75,7 @@ class SolixBLEDevice:
         self._client: BleakClient | None = None
         self._fragment_buffers: dict[bytes, dict[int, bytes]] = {}
         self._fragment_totals: dict[bytes, int] = {}
+        self._declared_mtu: int | None = None
         self._data: dict[str, bytes] | None = None
         self._last_data_timestamp: datetime | None = None
         self._last_packet_timestamp: datetime | None = None
@@ -562,26 +563,25 @@ class SolixBLEDevice:
         return cipher.encrypt(padded_data)
 
     def _reassemble(self, cmd: bytes, payload: bytes) -> bytes | None:
-        """Reassemble a possibly-fragmented session frame into one payload.
+        """Combine a fragmented payload, or pass a non-fragmented one through.
 
-        Fragmentation is a transport effect that sits *below* the cipher: a frame
-        larger than a single notification (``ATT_MTU - 3`` bytes on the wire) is
-        split, and every fragment is prefixed with a ``<index><total>`` byte (high
-        nibble = 1-based index, low nibble = fragment count). A frame that fits in
-        one notification arrives whole. Because this operates on the still-encrypted
-        payload, the same reassembler serves telemetry and unknown session frames
-        alike, regardless of the AES variant used to decrypt the result (SolixBLE
-        #42).
+        Some Anker devices split a payload across multiple packets. This combines
+        fragmented payloads, or passes non-fragmented ones through, before they can
+        be further processed and/or decrypted. It runs before the cipher, so
+        telemetry and unknown session frames share one reassembler whether the
+        device encrypts with AES-GCM or AES-CBC (SolixBLE #42).
 
-        Single frames are told apart from fragments by length, not by trusting the
-        first byte: only a full-length notification (or the continuation of an open
-        run) is a fragment. A short frame is a standalone single, and it carries a
-        ``<index><total>`` byte *only* if that byte is a valid single marker
-        (``0x11``); some families (e.g. the A91B2 station) put no frag byte on
-        singles, so their first byte is already ciphertext and must be kept.
+        Each fragment of a fragmented payload is prefixed with an
+        ``<index><total>`` byte (high nibble = 1-based index, low nibble = fragment
+        count). Non-fragmented payloads are *not* required to carry that byte --
+        some devices (e.g. the A91B2 station) begin theirs with ciphertext -- so a
+        payload is classified by its length rather than by trusting its first byte.
 
-        :returns: the complete (still-encrypted) payload ready to decrypt, or
-            ``None`` while fragments are still outstanding.
+        :param cmd: 2-byte command the payload arrived under; fragments are
+            buffered per command.
+        :param payload: Payload bytes as received, still encrypted.
+        :returns: The complete payload ready to decrypt, or ``None`` while
+            fragments are still missing.
         """
         if not payload:
             return payload
@@ -590,7 +590,7 @@ class SolixBLEDevice:
         index = (payload[0] >> 4) & 0x0F
         total = payload[0] & 0x0F
 
-        # Continuation (or short tail) of a run already in progress for this cmd.
+        # If we already have fragments of this payload.
         if cmd_key in self._fragment_buffers:
             _LOGGER.debug(
                 f"Fragment {index}/{self._fragment_totals[cmd_key]} for cmd "
@@ -599,15 +599,13 @@ class SolixBLEDevice:
             self._fragment_buffers[cmd_key][index] = payload[1:]
             return self._join_fragments(cmd_key)
 
-        # A run only starts on a full-length first fragment. The length guard stops a
-        # short frame whose first ciphertext byte happens to look like a ``0x1x``
-        # header from opening a run that never completes.
+        # Every fragment of a fragmented payload except the last one fills the
+        # notification, so only a maximum-size notification can begin one. Without
+        # that check, a short payload whose first ciphertext byte happened to look
+        # like an ``<index><total>`` header would start a payload that never
+        # completes.
         notification_length = len(payload) + self._FRAME_OVERHEAD
-        if (
-            index == 1
-            and total > 1
-            and notification_length >= self._client.mtu_size - 3
-        ):
+        if index == 1 and total > 1 and notification_length >= self._max_notification:
             _LOGGER.debug(
                 f"Fragment 1/{total} for cmd {cmd.hex()}, {len(payload) - 1} bytes",
             )
@@ -615,14 +613,45 @@ class SolixBLEDevice:
             self._fragment_totals[cmd_key] = total
             return self._join_fragments(cmd_key)
 
-        # Standalone single notification. Strip the frag byte only when it is a valid
-        # single marker; otherwise the whole payload is data.
+        # Non-fragmented payload. Strip the leading byte only when it is a valid
+        # "fragment 1 of 1" marker; otherwise the whole payload is data.
         if payload[0] == 0x11:
             return payload[1:]
         return payload
 
+    def _record_declared_mtu(self, parameters: dict[str, bytes]) -> None:
+        """Record the maximum notification size the device declares at stage 2.
+
+        The stage-2 response carries it as ``a2`` -- 253 on most models, 297 on the
+        Prime 160W charger. Devices predating the field simply omit it.
+
+        :param parameters: Parsed parameters of the stage-2 response.
+        """
+        declared = parameters.get("a2")
+        if not declared:
+            return
+        self._declared_mtu = int.from_bytes(declared, byteorder="little")
+        _LOGGER.debug(f"Device declared a maximum notification of {self._declared_mtu}")
+
+    @property
+    def _max_notification(self) -> int:
+        """Largest notification the link can carry, in bytes.
+
+        Prefers the value the device declares as ``a2`` of its stage-2 negotiation
+        response, which every device sends and which needs no platform support to
+        read. Falls back to the negotiated ATT MTU less the 3-byte ATT notification
+        header, which bleak's BlueZ backend reports as a default 23 unless
+        ``_acquire_mtu()`` has been called.
+        """
+        if self._declared_mtu is not None:
+            return self._declared_mtu
+        return self._client.mtu_size - 3
+
     def _join_fragments(self, cmd_key: bytes) -> bytes | None:
-        """Join a completed fragment run, or ``None`` if more fragments are due."""
+        """Return the merged payload, or ``None`` if fragments are still missing.
+
+        Merges and resets once every fragment is present in the buffer.
+        """
         if len(self._fragment_buffers[cmd_key]) < self._fragment_totals[cmd_key]:
             _LOGGER.debug("Waiting for remaining fragments...")
             return None
@@ -641,22 +670,23 @@ class SolixBLEDevice:
         payload: bytes,
         cmd: bytes = None,
     ) -> None:
-        """Decrypt and dispatch a (reassembled) telemetry payload.
+        """Decrypt and dispatch a telemetry payload.
 
-        The payload has already been made whole by :meth:`_reassemble`, so this just
-        decrypts and parses it. Kept as an override point for devices whose telemetry
-        needs post-processing (e.g. the A91B2 station remaps two frame layouts onto
-        one property set).
+        The payload is already whole by this point, having passed through
+        :meth:`_reassemble`, so this just decrypts and parses it. Kept as an override
+        point for devices whose telemetry needs post-processing (e.g. the A91B2
+        station remaps two frame layouts onto one property set).
         """
         try:
             decrypted_payload = self._decrypt_payload(payload)
         except Exception:  # noqa: BLE001
-            # A fragment that arrived with no matching run (out of order, or its
-            # first fragment was lost) is returned whole by :meth:`_reassemble` and
-            # will not decrypt; drop it rather than crash the notification handler.
+            # A fragment whose first fragment was lost or arrived out of order
+            # cannot be joined onto anything, and devices that omit the fragment
+            # header on non-fragmented payloads make it indistinguishable from
+            # ciphertext, so it reaches here and will not decrypt. Drop it rather
+            # than let it escape into the notification callback.
             _LOGGER.debug(
-                f"Discarding undecryptable telemetry frame for cmd "
-                f"{cmd.hex() if cmd else '?'}",
+                f"Discarding undecryptable payload for cmd {cmd.hex() if cmd else '?'}",
             )
             return None
         _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
@@ -720,6 +750,15 @@ class SolixBLEDevice:
         _LOGGER.debug(f"Payload: {payload.hex()}")
         _LOGGER.debug(f"Payload length: {len(payload)}")
 
+        # Combine fragmented payloads before the payload is used anywhere, so that
+        # anything waiting on a packet -- including _listen_for_packet() -- receives
+        # a whole payload rather than its first fragment. Negotiation frames are
+        # never fragmented, so they are left alone.
+        if pattern.hex() != "030001":
+            payload = self._reassemble(cmd, payload)
+            if payload is None:
+                return None
+
         # If the packet has a future registered then we just trigger that
         # future instead of processing it here
         if pattern + cmd in self._packet_futures:
@@ -744,12 +783,6 @@ class SolixBLEDevice:
                     _LOGGER.debug("Received non-encrypted telemetry message!")
                     parameters = self._parse_payload(payload)
                     return await self._process_telemetry(parameters)
-
-                # Reassemble multi-fragment frames before the cipher, so telemetry
-                # and unknown session frames share one reassembler (SolixBLE #42).
-                payload = self._reassemble(cmd, payload)
-                if payload is None:
-                    return None
 
                 # Encrypted telemetry messages
                 if cmd.hex() in self._TELEMETRY_COMMANDS:
@@ -818,6 +851,7 @@ class SolixBLEDevice:
                 )
                 parameters = self._parse_payload(payload)
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
+                self._record_declared_mtu(parameters)
                 _LOGGER.debug("Sending stage 2 response message...")
                 return await self._client.write_gatt_char(
                     UUID_COMMAND,
@@ -1131,7 +1165,6 @@ class SolixBLEDevice:
         except Exception:
             _LOGGER.exception("Unexpected exception in automatic reconnect task!")
 
-
     async def _keep_alive_fn(self) -> None:
         """Task designed to be run in background to execute keep-alive.
 
@@ -1143,7 +1176,6 @@ class SolixBLEDevice:
         """
         try:
             while self.negotiated:
-
                 try:
                     _LOGGER.debug("Executing keep-alive...")
                     result = await self._keep_alive()

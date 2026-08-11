@@ -115,7 +115,9 @@ class PrimeDevice(SolixBLEDevice):
         16 bytes and appended to the end of the payload.
         """
         cipher = AES.new(
-            self._shared_secret[:16], AES.MODE_GCM, nonce=self._shared_secret[16:28]
+            self._shared_secret[:16],
+            AES.MODE_GCM,
+            nonce=self._shared_secret[16:28],
         )
         cipher.update(bytes.fromhex(AAD))
         encrypted_payload, mac_bytes = cipher.encrypt_and_digest(payload)
@@ -155,7 +157,7 @@ class PrimeDevice(SolixBLEDevice):
         # If validation fails decrypt anyway
         except ValueError:
             _LOGGER.exception(
-                "Failed to validate authenticity of payload, decoding anyway..."
+                "Failed to validate authenticity of payload, decoding anyway...",
             )
             cipher = AES.new(key, AES.MODE_GCM, nonce)
             return cipher.decrypt(encrypted_payload)
@@ -173,15 +175,16 @@ class PrimeDevice(SolixBLEDevice):
         if _LOGGER.isEnabledFor(logging.DEBUG):
             new_parameters = self._parse_payload(
                 self._decrypt_payload(
-                    self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_0))[2]
-                )
+                    self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_0))[2],
+                ),
             )
             _LOGGER.debug(
-                f"Stage 0 message parameters: {self._parameters_to_str(new_parameters, types=True)}"
+                f"Stage 0 message parameters: {self._parameters_to_str(new_parameters, types=True)}",
             )
 
         await self._client.write_gatt_char(
-            UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_0)
+            UUID_COMMAND,
+            bytes.fromhex(NEGOTIATION_COMMAND_0),
         )
 
     async def _process_negotiation(self, cmd: bytes, payload: bytes) -> None:
@@ -190,7 +193,6 @@ class PrimeDevice(SolixBLEDevice):
         """
 
         match cmd.hex():
-
             # There is a "stage 0" in which we automatically send a negotiation
             # request as soon as we establish the initial connection. That
             # should lead to the power station sending a response landing us
@@ -201,24 +203,24 @@ class PrimeDevice(SolixBLEDevice):
             # Negotiation stage 1
             case "4801":
                 _LOGGER.debug(
-                    "Entered negotiation stage 1 due to response from device!"
+                    "Entered negotiation stage 1 due to response from device!",
                 )
                 decrypted_payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
                 parameters = self._parse_payload(decrypted_payload)
                 _LOGGER.debug(
-                    f"Parameters: {self._parameters_to_str(parameters, types=True)}"
+                    f"Parameters: {self._parameters_to_str(parameters, types=True)}",
                 )
 
                 # Log parameters we will send if debugging (makes handshake easier to see in logs)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     new_parameters = self._parse_payload(
                         self._decrypt_payload(
-                            self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_1))[2]
-                        )
+                            self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_1))[2],
+                        ),
                     )
                     _LOGGER.debug(
-                        f"Stage 1 response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
+                        f"Stage 1 response message parameters: {self._parameters_to_str(new_parameters, types=True)}",
                     )
 
                 _LOGGER.debug("Sending stage 1 response message...")
@@ -230,24 +232,24 @@ class PrimeDevice(SolixBLEDevice):
             # Negotiation stage 2
             case "4803":
                 _LOGGER.debug(
-                    "Entered negotiation stage 2 due to response from device!"
+                    "Entered negotiation stage 2 due to response from device!",
                 )
                 decrypted_payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
                 parameters = self._parse_payload(decrypted_payload)
                 _LOGGER.debug(
-                    f"Parameters: {self._parameters_to_str(parameters, types=True)}"
+                    f"Parameters: {self._parameters_to_str(parameters, types=True)}",
                 )
 
                 # Log parameters we will send if debugging (makes handshake easier to see in logs)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     new_parameters = self._parse_payload(
                         self._decrypt_payload(
-                            self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_2))[2]
-                        )
+                            self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_2))[2],
+                        ),
                     )
                     _LOGGER.debug(
-                        f"Stage 2 response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
+                        f"Stage 2 response message parameters: {self._parameters_to_str(new_parameters, types=True)}",
                     )
 
                 _LOGGER.debug("Sending stage 2 response message...")
@@ -259,24 +261,24 @@ class PrimeDevice(SolixBLEDevice):
             # Negotiation stage 3
             case "4829":
                 _LOGGER.debug(
-                    "Entered negotiation stage 3 due to response from device!"
+                    "Entered negotiation stage 3 due to response from device!",
                 )
                 decrypted_payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
                 parameters = self._parse_payload(decrypted_payload)
                 _LOGGER.debug(
-                    f"Parameters: {self._parameters_to_str(parameters, types=True)}"
+                    f"Parameters: {self._parameters_to_str(parameters, types=True)}",
                 )
 
                 # Log parameters we will send if debugging (makes handshake easier to see in logs)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     new_parameters = self._parse_payload(
                         self._decrypt_payload(
-                            self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_3))[2]
-                        )
+                            self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_3))[2],
+                        ),
                     )
                     _LOGGER.debug(
-                        f"Stage 3 response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
+                        f"Stage 3 response message parameters: {self._parameters_to_str(new_parameters, types=True)}",
                     )
 
                 _LOGGER.debug("Sending stage 3 response message...")
@@ -288,24 +290,24 @@ class PrimeDevice(SolixBLEDevice):
             # Negotiation stage 4
             case "4805":
                 _LOGGER.debug(
-                    "Entered negotiation stage 4 due to response from device!"
+                    "Entered negotiation stage 4 due to response from device!",
                 )
                 decrypted_payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
                 parameters = self._parse_payload(decrypted_payload)
                 _LOGGER.debug(
-                    f"Parameters: {self._parameters_to_str(parameters, types=True)}"
+                    f"Parameters: {self._parameters_to_str(parameters, types=True)}",
                 )
 
                 # Log parameters we will send if debugging (makes handshake easier to see in logs)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     new_parameters = self._parse_payload(
                         self._decrypt_payload(
-                            self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_4))[2]
-                        )
+                            self._split_packet(bytes.fromhex(NEGOTIATION_COMMAND_4))[2],
+                        ),
                     )
                     _LOGGER.debug(
-                        f"Stage 4 response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
+                        f"Stage 4 response message parameters: {self._parameters_to_str(new_parameters, types=True)}",
                     )
 
                 _LOGGER.debug("Sending stage 4 response message...")
@@ -317,13 +319,13 @@ class PrimeDevice(SolixBLEDevice):
             # Negotiation stage 5
             case "4821":
                 _LOGGER.debug(
-                    "Entered negotiation stage 5 due to response from device!"
+                    "Entered negotiation stage 5 due to response from device!",
                 )
                 decrypted_payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
                 parameters = self._parse_payload(decrypted_payload)
                 _LOGGER.debug(
-                    f"Parameters: {self._parameters_to_str(parameters, types=True)}"
+                    f"Parameters: {self._parameters_to_str(parameters, types=True)}",
                 )
 
                 self._negotiation_timestamp = time.time()
@@ -332,7 +334,8 @@ class PrimeDevice(SolixBLEDevice):
                 device_public_key_bytes = bytes.fromhex("04") + parameters["a1"]
                 _LOGGER.debug(f"Public key of device: {device_public_key_bytes.hex()}")
                 device_public_key = EllipticCurvePublicKey.from_encoded_point(
-                    SECP256R1(), device_public_key_bytes
+                    SECP256R1(),
+                    device_public_key_bytes,
                 )
 
                 # Calculate the shared secret
@@ -355,14 +358,14 @@ class PrimeDevice(SolixBLEDevice):
                 # Log parameters we will send if debugging (makes handshake easier to see in logs)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     new_parameters = self._parse_payload(
-                        bytes.fromhex(NEGOTIATION_COMMAND_5_PAYLOAD)
+                        bytes.fromhex(NEGOTIATION_COMMAND_5_PAYLOAD),
                     )
                     _LOGGER.debug(
-                        f"Stage 5 response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
+                        f"Stage 5 response message parameters: {self._parameters_to_str(new_parameters, types=True)}",
                     )
 
                 new_payload = self._encrypt_payload(
-                    bytes.fromhex(NEGOTIATION_COMMAND_5_PAYLOAD)
+                    bytes.fromhex(NEGOTIATION_COMMAND_5_PAYLOAD),
                 )
                 new_packet = self._build_packet(
                     pattern=bytes.fromhex(NEGOTIATION_PATTERN),
@@ -380,13 +383,13 @@ class PrimeDevice(SolixBLEDevice):
             # Negotiation stage 6
             case "4822":
                 _LOGGER.debug(
-                    "Entered negotiation stage 6 due to response from device!"
+                    "Entered negotiation stage 6 due to response from device!",
                 )
                 decrypted_payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
                 parameters = self._parse_payload(decrypted_payload)
                 _LOGGER.debug(
-                    f"Parameters: {self._parameters_to_str(parameters, types=True)}"
+                    f"Parameters: {self._parameters_to_str(parameters, types=True)}",
                 )
 
                 _LOGGER.debug("Sending stage 6 response message...")
@@ -394,14 +397,14 @@ class PrimeDevice(SolixBLEDevice):
                 # Log parameters we will send if debugging (makes handshake easier to see in logs)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     new_parameters = self._parse_payload(
-                        bytes.fromhex(NEGOTIATION_COMMAND_6_PAYLOAD)
+                        bytes.fromhex(NEGOTIATION_COMMAND_6_PAYLOAD),
                     )
                     _LOGGER.debug(
-                        f"Stage 6 response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
+                        f"Stage 6 response message parameters: {self._parameters_to_str(new_parameters, types=True)}",
                     )
 
                 new_payload = self._encrypt_payload(
-                    bytes.fromhex(NEGOTIATION_COMMAND_6_PAYLOAD)
+                    bytes.fromhex(NEGOTIATION_COMMAND_6_PAYLOAD),
                 )
                 new_packet = self._build_packet(
                     pattern=bytes.fromhex(NEGOTIATION_PATTERN),
@@ -417,20 +420,20 @@ class PrimeDevice(SolixBLEDevice):
             # Negotiation stage 7
             case "4827":
                 _LOGGER.debug(
-                    "Entered negotiation stage 7 due to response from device!"
+                    "Entered negotiation stage 7 due to response from device!",
                 )
                 decrypted_payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
                 parameters = self._parse_payload(decrypted_payload)
                 _LOGGER.debug(
-                    f"Parameters: {self._parameters_to_str(parameters, types=True)}"
+                    f"Parameters: {self._parameters_to_str(parameters, types=True)}",
                 )
 
                 _LOGGER.debug("Sending stage 7 response messages...")
 
                 # Packet A
                 new_payload_a = self._encrypt_payload(
-                    bytes.fromhex(NEGOTIATION_COMMAND_7_PAYLOAD)
+                    bytes.fromhex(NEGOTIATION_COMMAND_7_PAYLOAD),
                 )
                 new_packet_a = self._build_packet(
                     pattern=bytes.fromhex(TELEMETRY_PATTERN),
@@ -446,15 +449,15 @@ class PrimeDevice(SolixBLEDevice):
                 # Log parameters we will send if debugging (makes handshake easier to see in logs)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     new_parameters = self._parse_payload(
-                        bytes.fromhex(NEGOTIATION_COMMAND_7_PAYLOAD)
+                        bytes.fromhex(NEGOTIATION_COMMAND_7_PAYLOAD),
                     )
                     _LOGGER.debug(
-                        f"Stage 7a response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
+                        f"Stage 7a response message parameters: {self._parameters_to_str(new_parameters, types=True)}",
                     )
 
                 # Packet B
                 new_payload_b = self._encrypt_payload(
-                    bytes.fromhex(NEGOTIATION_COMMAND_8_PAYLOAD)
+                    bytes.fromhex(NEGOTIATION_COMMAND_8_PAYLOAD),
                 )
                 new_packet_b = self._build_packet(
                     pattern=bytes.fromhex(TELEMETRY_PATTERN),
@@ -470,36 +473,22 @@ class PrimeDevice(SolixBLEDevice):
                 # Log parameters we will send if debugging (makes handshake easier to see in logs)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     new_parameters = self._parse_payload(
-                        bytes.fromhex(NEGOTIATION_COMMAND_8_PAYLOAD)
+                        bytes.fromhex(NEGOTIATION_COMMAND_8_PAYLOAD),
                     )
                     _LOGGER.debug(
-                        f"Stage 7b response message parameters: {self._parameters_to_str(new_parameters, types=True)}"
+                        f"Stage 7b response message parameters: {self._parameters_to_str(new_parameters, types=True)}",
                     )
 
-                return
+                return None
 
             case _:
                 _LOGGER.warning(
-                    f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{self._parameters_to_str(parameters, types=True)}'"
+                    f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{self._parameters_to_str(parameters, types=True)}'",
                 )
 
     #####################
     # Packet processing #
     #####################
-
-    async def _process_telemetry_packet(
-        self, payload: bytes, cmd: bytes = None
-    ) -> None:
-        """
-        Process a telemetry packet from an Anker Prime device.
-
-        Anker Prime devices pack all telemetry data into a single packet
-        requiring no special logic to handle.
-        """
-        decrypted_payload = self._decrypt_payload(payload)
-        _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
-        parameters = self._parse_payload(decrypted_payload)
-        return await self._process_telemetry(parameters)
 
     async def _send_command(self, cmd: bytes, payload: bytes) -> None:
         """Send a command to the device.
@@ -515,10 +504,12 @@ class PrimeDevice(SolixBLEDevice):
         # and that timestamp is set during negotiations
         time_passed = int(time.time() - self._negotiation_timestamp)
         base_timestamp = int.from_bytes(
-            bytes.fromhex(BASE_TIMESTAMP), byteorder="little"
+            bytes.fromhex(BASE_TIMESTAMP),
+            byteorder="little",
         )
         new_timestamp = (base_timestamp + time_passed).to_bytes(
-            length=4, byteorder="little"
+            length=4,
+            byteorder="little",
         )
         new_payload = payload + bytes.fromhex("fe04") + new_timestamp
         await self._send_encrypted_packet(cmd, new_payload)
