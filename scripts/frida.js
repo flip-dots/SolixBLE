@@ -2,32 +2,14 @@
  * Script name   : frida.js
  * Description   : Frida script for preventing exit and extracting shared preferences
  * Author        : Harvey Lelliott (@flip-dots)
- * Date          : 23/03/26
+ * Date          : 16/07/26
  * 
  * License       : MIT
- * Revision      : 1.0.0
+ * Revision      : 1.1.0
  *
  * This script is based off https://codeshare.frida.re/@ninjadiary/frinja---sharedpreferences/
  * but with additional code to prevent the anti-tamper mechanism from killing the app.
 */
-
-// Prevent anti-tamper mechanism from fully killing app
-setImmediate(function() {
-    Java.perform(function() {
-        var System = Java.use('java.lang.System');
-        var Process = Java.use('android.os.Process');
-
-        // Stop System.exit()
-        System.exit.implementation = function(code) {
-            console.log("[!] Intercepted exit (" + code + ")");
-        };
-
-        // Stop Process.killProcess()
-        Process.killProcess.implementation = function(pid) {
-            console.log("[!] Intercepted killProcess for PID: " + pid);
-        };
-    });
-});
 
 // Log any reads/writes to shared preferences
 // From: https://codeshare.frida.re/@ninjadiary/frinja---sharedpreferences/
@@ -181,3 +163,84 @@ Java.perform(function () {
         };
     });
 });
+
+
+/********************** 
+ *                    *
+ * Anti-Tamper Bypass *
+ *                    *
+ **********************/
+
+
+// Prevent anti-tamper mechanism from killing the app in Java
+setImmediate(function() {
+    Java.perform(function() {
+        console.log("Tampering with anti-tamper protection using Java API...");
+    
+        var System = Java.use('java.lang.System');
+        var Process = Java.use('android.os.Process');
+
+        // Stop System.exit()
+        System.exit.implementation = function(code) {
+            console.log("[!] Intercepted exit (" + code + ")");
+        };
+
+        // Stop Process.killProcess()
+        Process.killProcess.implementation = function(pid) {
+            console.log("[!] Intercepted killProcess for PID: " + pid);
+        };
+    });
+});
+
+
+// Prevent anti-tamper mechanism from killing the app in C
+function blockNativeExit() {
+    console.log("Tampering with anti-tamper protection using C API...");
+
+    let usleepAddr = null;
+    try {
+        usleepAddr = Module.findGlobalExportByName("usleep") || Module.findExportByName("usleep");
+    } catch (e) {
+        console.log("[-] Could not find usleep globally: " + e.message);
+    }
+
+    let nativeUsleep = null;
+    if (usleepAddr) {
+        nativeUsleep = new NativeFunction(usleepAddr, 'int', ['uint32']);
+    }
+
+    // Standard libc functions used by packers to terminate processes
+    const exitSymbols = ["exit", "_exit", "abort", "kill", "pthread_exit"];
+
+    exitSymbols.forEach(function (symbol) {
+        let address = null;
+        try {
+            // Find global exports using Frida 17 APIs
+            address = Module.findGlobalExportByName(symbol) || Module.findExportByName(symbol);
+        } catch (e) {
+            // Ignore search errors
+        }
+
+        if (address) {
+            try {
+                Interceptor.attach(address, {
+                    onEnter: function (args) {
+                        console.log("[!] Native anti-debug triggered " + symbol + "(). Freezing thread to prevent crash...");
+                        
+                        // Infinite loop using the native OS sleep to halt the calling thread
+                        while (true) {
+                            if (nativeUsleep) {
+                                nativeUsleep(100000); // Sleep for 100ms per iteration safely
+                            }
+                        }
+                    }
+                });
+                console.log("[+] Hooked native function: " + symbol);
+            } catch (e) {
+                console.log("[-] Failed to hook: " + symbol + " (" + e.message + ")");
+            }
+        }
+    });
+}
+
+blockNativeExit();

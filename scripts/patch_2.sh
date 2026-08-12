@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# Script name   : patch.sh
+# Script name   : patch_2.sh
 # Description   : Script for injecting Frida gadget into Anker Android app
 # Author        : Harvey Lelliott (@flip-dots)
 # Date          : 16/07/26
-# Usage         : ./patch.sh [ADB device (e.g 192.168.1.1:1234)]
+# Usage         : ./patch_2.sh [ADB device (e.g 192.168.1.1:1234)]
 # 
 # License       : MIT
-# Revision      : 1.1.0
+# Revision      : 1.0.0
 #
 set -euxo pipefail
 
@@ -53,15 +53,19 @@ WORKING_FOLDER=$(pwd)
 
 # Folder to put all data in
 DATA_FOLDER="${WORKING_FOLDER}/data"
-rm -rf $DATA_FOLDER && mkdir -p $DATA_FOLDER
+mkdir -p $DATA_FOLDER
 
 # Folder to put source APK inside
 APK_SOURCE_FOLDER="${DATA_FOLDER}/source_apks"
 mkdir -p $APK_SOURCE_FOLDER
 
-# Folder to put source APK inside
-APK_DECOMPILED_FOLDER="${DATA_FOLDER}/base_apk_decompiled"
-mkdir -p $APK_DECOMPILED_FOLDER
+# Folder to put the main decompiled APK inside
+APK_MAIN_DECOMPILED_FOLDER="${DATA_FOLDER}/base_apk_decompiled"
+mkdir -p $APK_MAIN_DECOMPILED_FOLDER
+
+# Folder to put the flutter decompiled APK inside
+APK_FLUTTER_DECOMPILED_FOLDER="${DATA_FOLDER}/flutter_apk_decompiled"
+mkdir -p $APK_FLUTTER_DECOMPILED_FOLDER
 
 # Folder to put patched APKs inside
 APK_PATCHED_FOLDER="${DATA_FOLDER}/patched"
@@ -73,11 +77,12 @@ mkdir -p $APK_SIGNED_FOLDER
 
 # Folder to put tools in
 TOOLS_FOLDER="${WORKING_FOLDER}/tools"
-rm -rf $TOOLS_FOLDER && mkdir -p $TOOLS_FOLDER
+mkdir -p $TOOLS_FOLDER
 
 # Folder to put Frida gadgets in
 FRIDA_FOLDER="${TOOLS_FOLDER}/frida"
 mkdir -p $FRIDA_FOLDER
+
 
 
 #######################
@@ -87,8 +92,8 @@ echo "Downloading dependencies/tools"
 
 cd $FRIDA_FOLDER && wget "https://github.com/zer0def/undetected-frida/releases/download/${FRIDA_VERSION}/undetected-frida-gadget-${FRIDA_VERSION}-android-arm.so.xz"
 cd $FRIDA_FOLDER && wget "https://github.com/zer0def/undetected-frida/releases/download/${FRIDA_VERSION}/undetected-frida-gadget-${FRIDA_VERSION}-android-arm64.so.xz"
-cd $FRIDA_FOLDER && unxz "undetected-frida-gadget-${FRIDA_VERSION}-android-arm.so.xz"
-cd $FRIDA_FOLDER && unxz "undetected-frida-gadget-${FRIDA_VERSION}-android-arm64.so.xz"
+cd $FRIDA_FOLDER && unxz -f "undetected-frida-gadget-${FRIDA_VERSION}-android-arm.so.xz"
+cd $FRIDA_FOLDER && unxz -f "undetected-frida-gadget-${FRIDA_VERSION}-android-arm64.so.xz"
 
 cd $TOOLS_FOLDER && wget "https://github.com/patrickfav/uber-apk-signer/releases/download/v${UBER_APK_SIGNER_VERSION}/uber-apk-signer-${UBER_APK_SIGNER_VERSION}.jar"
 
@@ -101,52 +106,66 @@ cd $TOOLS_FOLDER && wget "https://github.com/patrickfav/uber-apk-signer/releases
 echo "Extracting original APKs from phone..."
 adb -s $DEVICE shell pm path com.anker.charging | sed 's/^package://' | tr -d '\r' | xargs -I {} adb -s $DEVICE pull {} $APK_SOURCE_FOLDER
 
-# Decompile main APK
-echo "Decompiling main APK..."
-apktool d "${APK_SOURCE_FOLDER}/base.apk" -o $APK_DECOMPILED_FOLDER -f
-
 
 ################
 # Inject Frida #
 ################
-echo "Injecting Frida gadget into main APK..."
+echo "Injecting Frida gadget into flutter APK..."
 
-# Copy Frida gadget binaries
-mkdir -p "${APK_DECOMPILED_FOLDER}/lib/armeabi"
-mkdir -p "${APK_DECOMPILED_FOLDER}/lib/armeabi-v7a"
-mkdir -p "${APK_DECOMPILED_FOLDER}/lib/arm64-v8a"
-cp "${FRIDA_FOLDER}/undetected-frida-gadget-${FRIDA_VERSION}-android-arm.so" "${APK_DECOMPILED_FOLDER}/lib/armeabi/libnative-utils.so"
-cp "${FRIDA_FOLDER}/undetected-frida-gadget-${FRIDA_VERSION}-android-arm.so" "${APK_DECOMPILED_FOLDER}/lib/armeabi-v7a/libnative-utils.so"
-cp "${FRIDA_FOLDER}/undetected-frida-gadget-${FRIDA_VERSION}-android-arm64.so" "${APK_DECOMPILED_FOLDER}/lib/arm64-v8a/libnative-utils.so"
+# Extract Flutter library from Flutter APK
+mkdir -p "${APK_FLUTTER_DECOMPILED_FOLDER}/lib/arm64-v8a"
+unzip -p "${APK_SOURCE_FOLDER}/split_config.arm64_v8a.apk" "lib/arm64-v8a/libflutter.so" > "${APK_FLUTTER_DECOMPILED_FOLDER}/lib/arm64-v8a/libflutter.so"
 
-cp "${WORKING_FOLDER}/frida_config.json" "${APK_DECOMPILED_FOLDER}/lib/armeabi/libnative-utils.config.so"
-cp "${WORKING_FOLDER}/frida_config.json" "${APK_DECOMPILED_FOLDER}/lib/armeabi-v7a/libnative-utils.config.so"
-cp "${WORKING_FOLDER}/frida_config.json" "${APK_DECOMPILED_FOLDER}/lib/arm64-v8a/libnative-utils.config.so"
+# Use LIEF to inject the Frida gadget as a dependency of Flutter
+python3 -c "
+import lief
+import sys
 
-# Add Frida gadget to app startup
-sed -i '' 's/\.locals 5/\.locals 6/g' "${APK_DECOMPILED_FOLDER}/smali/s/h/e/l/l/S.smali"
-sed -i '' '2386c \
-const-string v5, "native-utils"\
-invoke-static {v5}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\
-' "${APK_DECOMPILED_FOLDER}/smali/s/h/e/l/l/S.smali"
+target_path = '${APK_FLUTTER_DECOMPILED_FOLDER}/lib/arm64-v8a/libflutter.so'
 
-# Modify manifest to enable Frida loading
-sed -i '' '/<application/,/>/ s/android:allowBackup="false"/android:allowBackup="true"/' "${APK_DECOMPILED_FOLDER}/AndroidManifest.xml"
-sed -i '' '/<application/,/>/ s/android:extractNativeLibs="false"/android:extractNativeLibs="true" android:debuggable="true"/' "${APK_DECOMPILED_FOLDER}/AndroidManifest.xml"
+try:
+    # Parse the ELF binary
+    binary = lief.parse(target_path)
+
+    # Inject the dependency
+    binary.add_library('libnative-utils.so')
+    binary.write(target_path)
+    print(f'Successfully injected Frida into Flutter')
+except Exception as e:
+    print(f'Failed to inject Frida into Flutter: {e}')
+    sys.exit(1)
+"
+
+# Copy Frida gadget binaries into Flutter APK
+cp "${FRIDA_FOLDER}/undetected-frida-gadget-${FRIDA_VERSION}-android-arm64.so" "${APK_FLUTTER_DECOMPILED_FOLDER}/lib/arm64-v8a/libnative-utils.so"
+cp "${WORKING_FOLDER}/frida_config.json" "${APK_FLUTTER_DECOMPILED_FOLDER}/lib/arm64-v8a/libnative-utils.config.so"
+
+
+# Decompile the main APK
+echo "Decompiling main APK..."
+apktool d "${APK_SOURCE_FOLDER}/base.apk" -o $APK_MAIN_DECOMPILED_FOLDER -f
+
+# Modify manifest of main APK to enable Frida loading
+sed -i '' '/<application/,/>/ s/android:allowBackup="false"/android:allowBackup="true"/' "${APK_MAIN_DECOMPILED_FOLDER}/AndroidManifest.xml"
+sed -i '' '/<application/,/>/ s/android:extractNativeLibs="false"/android:extractNativeLibs="true" android:debuggable="true"/' "${APK_MAIN_DECOMPILED_FOLDER}/AndroidManifest.xml"
+
 
 
 ##########################
 # Re-package and re-sign #
 ##########################
-echo "Re-packaging and re-signing APK..."
+echo "Re-packaging and re-signing APKs..."
 
-# Re-package base/main APK
-apktool b -o "${APK_PATCHED_FOLDER}/base.apk" ${APK_DECOMPILED_FOLDER}
+# Re-package APKs
+apktool b -o "${APK_PATCHED_FOLDER}/base.apk" ${APK_MAIN_DECOMPILED_FOLDER}
+
+cp "${APK_SOURCE_FOLDER}/split_config.arm64_v8a.apk" "${APK_PATCHED_FOLDER}/split_config.arm64_v8a.apk"
+cd "${APK_FLUTTER_DECOMPILED_FOLDER}" && zip -ur "${APK_PATCHED_FOLDER}/split_config.arm64_v8a.apk" lib/
 
 # Re-sign APKs
 java -jar "${TOOLS_FOLDER}/uber-apk-signer-${UBER_APK_SIGNER_VERSION}.jar" -o $APK_SIGNED_FOLDER --allowResign --apks \
    "${APK_PATCHED_FOLDER}/base.apk" \
-   "${APK_SOURCE_FOLDER}/split_config.arm64_v8a.apk" \
+   "${APK_PATCHED_FOLDER}/split_config.arm64_v8a.apk" \
    "${APK_SOURCE_FOLDER}/split_config.en.apk" \
    "${APK_SOURCE_FOLDER}/split_config.xxhdpi.apk" \
    "${APK_SOURCE_FOLDER}/split_flutter_assets_pack.apk"

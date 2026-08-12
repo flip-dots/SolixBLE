@@ -100,7 +100,7 @@ To manually capture the logs follow these steps:
 6. Perform the actions required to get the packets needed for analysis (add device, send commands, etc).
 
 .. note::
-    This process is incredibly time sensitive, it may take multiple attempts to get it right.
+    This process is incredibly time sensitive, it may take multiple attempts (10+) to get it right.
 
 
 run.sh
@@ -111,7 +111,7 @@ and in addition writes the logs to a file as well as the console. This is
 the recommend approach.
 
 .. note::
-    The app must not be running when you start the script.
+    The app must **not** be running when you start the script.
 
 This script performs the following actions:
 
