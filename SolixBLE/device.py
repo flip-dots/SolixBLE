@@ -52,6 +52,9 @@ _LOGGER = logging.getLogger(__name__)
 class SolixBLEDevice:
     """Solix BLE device object."""
 
+    #: Pull some constants into the class because they may change with inherited versions
+    UUID_TELEMETRY = UUID_TELEMETRY
+
     #: Command codes (hex) that carry telemetry for this device. Subclasses can
     #: override this if their model uses different telemetry command codes
     #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
@@ -155,7 +158,7 @@ class SolixBLEDevice:
         try:
             _LOGGER.debug(f"Subscribing to notifications from device '{self.name}'!")
             await self._client.start_notify(
-                UUID_TELEMETRY, partial(self._process_notification, self._client)
+                self.UUID_TELEMETRY, partial(self._process_notification, self._client)
             )
         except BleakError:
             _LOGGER.exception(f"Error subscribing/negotiating with '{self.name}'!")
