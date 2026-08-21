@@ -452,54 +452,69 @@ class Telemetry: # pylint: disable=too-many-instance-attributes
         header = Header.from_bytes(data)
 
         if header.packet_type == PacketType.TELEMETRY:
-            telemetry_type = TelemetryType(header.telemetry_id)
-            if telemetry_type in [TelemetryType.TELEMETRY, TelemetryType.EXTENDED]:
-                self.days_remaining = data[18]
-                self.hours_remaining = data[17] / 10.0
-                self.battery_remaining = timedelta(days=self.days_remaining, hours=self.hours_remaining)
-                self.ac_outlet = Output(is_on=data[63], watts=extract16(data, 21))
-                self.twelve_volt_1 = Output(
-                        is_on=data[80],
-                        watts=extract16(data, 33),
-                        time_remaining=timedelta(seconds=extract16(data, 13)),
-                    )
-                self.twelve_volt_2 = Output(
-                        is_on=data[81],
-                        watts=extract16(data, 35),
-                        time_remaining=timedelta(seconds=extract16(data, 13)),
-                    )
-                self.usb_c_1 = Output(is_on=data[75], watts=extract16(data, 23))
-                self.usb_c_2 = Output(is_on=data[76], watts=extract16(data, 25))
-                self.usb_c_3 = Output(is_on=data[77], watts=extract16(data, 27))
-                self.usb_a_1 = Output(is_on=data[78], watts=extract16(data, 29))
-                self.usb_a_2 = Output(is_on=data[79], watts=extract16(data, 31))
-                self.total_output_watts = extract16(data, 41)
-                self.ac_input_watts = extract16(data, 19)
-                self.solar_input_watts = extract16(data, 37)
-                self.total_input_watts = extract16(data, 39)
-                self.firmware_version = ".".join(str(data[47]))
-                self.internal_battery = Battery(temperature=data[66], percentage=data[70])
-                self.external_battery = Battery(temperature=data[67], percentage=data[71])
-                self.charging_status = ChargingStatus(data[68])
-                self.battery_health = data[72]
-                self.device_serial = data[85:101].decode("utf-8")
+            telemetry_type = TelemetryType.TELEMETRY
 
-                if telemetry_type == TelemetryType.EXTENDED:
-                    self.recharge_power_limit = extract16(data, 101)
-                    self.screen_timeout = extract16(data, 105)
-                    self.screen_brightness = LightStatus(data[115])
-                    self.power_save_status = data[117]
-                    self.led_light_level = LightStatus(data[118])
-                    self.temperature_unit = TemperatureUnit(data[119])
-                    _LOGGER.warning(f"got an extended telemetery")
+            # If a command was issued, the next telemetry packet's telemetry ID is the Command ID
+            # of the last command sent, so just keep it and parse the telemetry as normal.
+            if header.telemetry_id in [t.value for t in TelemetryType]:
+                telemetry_type = TelemetryType(header.telemetry_id)
+            else:
+                self.last_command_type = CommandType(header.telemetry_id)
 
-            if telemetry_type == TelemetryType.STATE_ACK:                
-                self.ac_outlet.is_on = data[9]
-                self.twelve_volt_1.is_on = data[10]
-                self.twelve_volt_2.is_on = data[10]
-                self.power_save_on = data[11]
-                self.led_light_level = LightStatus(data[12])
-                _LOGGER.warning(f"got a state ack: light_level: {data[12]}")
+            try:
+                if telemetry_type in [TelemetryType.TELEMETRY, TelemetryType.EXTENDED]:
+                    self.days_remaining = data[18]
+                    self.hours_remaining = data[17] / 10.0
+                    self.battery_remaining = timedelta(days=self.days_remaining, hours=self.hours_remaining)
+                    self.ac_outlet = Output(is_on=data[63], watts=extract16(data, 21))
+                    self.twelve_volt_1 = Output(
+                            is_on=data[80],
+                            watts=extract16(data, 33),
+                            time_remaining=timedelta(seconds=extract16(data, 13)),
+                        )
+                    self.twelve_volt_2 = Output(
+                            is_on=data[81],
+                            watts=extract16(data, 35),
+                            time_remaining=timedelta(seconds=extract16(data, 13)),
+                        )
+                    self.usb_c_1 = Output(is_on=data[75], watts=extract16(data, 23))
+                    self.usb_c_2 = Output(is_on=data[76], watts=extract16(data, 25))
+                    self.usb_c_3 = Output(is_on=data[77], watts=extract16(data, 27))
+                    self.usb_a_1 = Output(is_on=data[78], watts=extract16(data, 29))
+                    self.usb_a_2 = Output(is_on=data[79], watts=extract16(data, 31))
+                    self.total_output_watts = extract16(data, 41)
+                    self.ac_input_watts = extract16(data, 19)
+                    self.solar_input_watts = extract16(data, 37)
+                    self.total_input_watts = extract16(data, 39)
+                    self.firmware_version = ".".join(str(data[47]))
+                    self.internal_battery = Battery(temperature=data[66], percentage=data[70])
+                    self.external_battery = Battery(temperature=data[67], percentage=data[71])
+                    # There's an odd thing when sending some commands, the charging status briefly goes
+                    # to 3, which is an unknown value at this point.
+                    tmp_charging_status = data[68]
+                    if tmp_charging_status in [c.value for c in ChargingStatus]:
+                        self.charging_status = ChargingStatus(data[68])
+                    else:
+                        self.charging_status = ChargingStatus.UNKNOWN
+                    self.battery_health = data[72]
+                    self.device_serial = data[85:101].decode("utf-8")
+
+                    if telemetry_type == TelemetryType.EXTENDED:
+                        self.recharge_power_limit = extract16(data, 101)
+                        self.screen_timeout = extract16(data, 105)
+                        self.screen_brightness = LightStatus(data[115])
+                        self.power_save_status = data[117]
+                        self.led_light_level = LightStatus(data[118])
+                        self.temperature_unit = TemperatureUnit(data[119])
+
+                if telemetry_type == TelemetryType.STATE_ACK:
+                    self.ac_outlet.is_on = data[9]
+                    self.twelve_volt_1.is_on = data[10]
+                    self.twelve_volt_2.is_on = data[10]
+                    self.power_save_status = data[11]
+                    self.led_light_level = LightStatus(data[12])
+            except Exception as ex:
+                _LOGGER.error(f"{ex}: {header.telemetry_id}: bytes: {data.hex(' ')}")
             
         elif header.packet_type == PacketType.COMMAND_ACK:
             self.last_command_type = CommandType(header.telemetry_id)
@@ -514,6 +529,7 @@ class F2000Old(SolixBLEDevice):
 
     """
 
+    # These are specific to the older firmware
     UUID_TELEMETRY = "00008888-0000-1000-8000-00805f9b34fb"
     UUID_COMMAND = "00007777-0000-1000-8000-00805f9b34fb"
 
@@ -521,6 +537,7 @@ class F2000Old(SolixBLEDevice):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self._data_received = False
 
     async def _process_notification(
         self, client: BleakClient, handle: int, data: bytearray
@@ -544,6 +561,11 @@ class F2000Old(SolixBLEDevice):
 
         self._last_data_timestamp = datetime.now()
         self._run_state_changed_callbacks()
+
+        # First time around poll for the extended data
+        if not self._data_received:
+            await self.send_poll_extended()
+            self._data_received = True
 
     @property
     def negotiated(self) -> bool:
@@ -574,11 +596,11 @@ class F2000Old(SolixBLEDevice):
     def timestamp_remaining(self) -> datetime | None:
         """Time remaining as a datetime
         
-        We only return this if we're actually charging or discharging otheriwse
+        We only return this if we're actually discharging otheriwse
         the value jumps around wildly and causes HA to record state changes with
         every new value.  The value is useless in idle mode anyways.
         """
-        if self.telemetry.charging_status != ChargingStatus.IDLE:
+        if self.telemetry.charging_status == ChargingStatus.DISCHARGING:
             return datetime.now() + self.telemetry.battery_remaining
         else:
             return None
@@ -599,7 +621,7 @@ class F2000Old(SolixBLEDevice):
         return self.telemetry.internal_battery.percentage
 
     @property
-    def battery_percentage_expansion(self) -> int:
+    def battery_percentage_expansion(self) -> int | None:
         """Battery percentage remaining of the expansion battery
         
         Whether or not an expansion battery is currently connected still hasn't been
@@ -609,7 +631,7 @@ class F2000Old(SolixBLEDevice):
         if self.telemetry.external_battery.percentage > 0:
             return self.telemetry.external_battery.percentage
         else:
-            return DEFAULT_METADATA_INT
+            return None
 
     @property
     def temperature(self) -> int:
@@ -617,16 +639,16 @@ class F2000Old(SolixBLEDevice):
         return self.telemetry.internal_battery.temperature
 
     @property
-    def temperature_expansion(self) -> int:
+    def temperature_expansion(self) -> int | None:
         """Temperature of the expansion battery
         
         Similar to the expansion battery percentage we'll assume if percentage is
         zero, we do not have an external battery.
         """
-        if self.telemetry.external_battery.percentage > 0:
+        if self.battery_percentage_expansion is not None:
             return self.telemetry.external_battery.temperature
         else:
-            return DEFAULT_METADATA_INT
+            return None
 
     @property
     def battery_health(self) -> int:
@@ -779,9 +801,9 @@ class F2000Old(SolixBLEDevice):
             return PortStatus(value=PortStatus.NOT_CONNECTED)
 
     @property
-    def display_mode(self) -> LightStatus:
-        """Display screen brightness"""
-        return self.telemetry.screen_brightness
+    def charging_status(self) -> ChargingStatus:
+        """What state the device is in, charging/discharging/etc"""
+        return self.telemetry.charging_status
 
     @property
     def software_version(self) -> str:
@@ -793,11 +815,24 @@ class F2000Old(SolixBLEDevice):
         """Serial number of the unit"""
         return self.telemetry.device_serial
 
+    @property
+    def power_saving_mode_enabled(self) -> bool | None:
+        if self.telemetry.power_save_status != DEFAULT_METADATA_BOOL:
+            return (self.telemetry.power_save_status == 1)
+        return self.telemetry.power_save_status
+
+    @property
+    def screen_timeout(self) -> int | None:
+        return self.telemetry.screen_timeout
+
+    @property
+    def screen_brightness(self) -> LightStatus:
+        return self.telemetry.screen_brightness
+
     async def send_command(self, command: Command) -> None:
         """Send a command to the unit"""
         if not self.connected:
             raise ConnectionError(f"Not connected to '{self.name}', could not send command {type(command)}")
-
         await self._client.write_gatt_char(self.UUID_COMMAND, command.to_bytes(), response=False)
 
     async def set_light_mode(self, mode: LightStatus) -> None:
@@ -806,6 +841,7 @@ class F2000Old(SolixBLEDevice):
         await self.send_command(command=command)
         # optimistically set the light here because it doesn't update in the nominal telemetry
         self.telemetry.led_light_level = mode
+        await self.send_poll_extended()
 
     async def send_poll_extended(self) -> None:
         """Send the unit a request for the extended data
@@ -813,5 +849,65 @@ class F2000Old(SolixBLEDevice):
         This is a one shot request
         """
         command = PollExtendedCommand()
-        _LOGGER.warning(f"send poll bytes: {command.to_bytes()}")
+        await self.send_command(command=command)
+
+    async def turn_power_saving_mode_on(self) -> None:
+        """Turn the power saving mode on"""
+        command = PowerSaveCommand(is_on=1)
+        await self.send_command(command=command)
+        self.telemetry.power_save_status = 1
+        await self.send_poll_extended()
+
+    async def turn_power_saving_mode_off(self) -> None:
+        """Turn the power saving mode on"""
+        command = PowerSaveCommand(is_on=0)
+        await self.send_command(command=command)
+        self.telemetry.power_save_status = 0
+        await self.send_poll_extended()
+
+    async def set_screen_brightness(self, brightness: LightStatus) -> None:
+        """Set screen brightness"""
+        command = ScreenBrightnessCommand(brightness=brightness.value)
+        await self.send_command(command=command)
+        self.telemetry.screen_brightness = brightness
+        await self.send_poll_extended()
+
+    async def set_ac_power_in_limit(self, limit: int) -> None:
+        """Set the limit of the AC input power in watts"""
+        command = RechargePowerCommand(power=limit)
+        await self.send_command(command=command)
+        self.telemetry.recharge_power_limit=limit
+        await self.send_poll_extended()
+
+    async def turn_dc_on(self) -> None:
+        """Turn the DC (12V) output on"""
+        command = TwelveVoltOutputCommand(is_on=1)
+        await self.send_command(command=command)
+
+    async def turn_dc_off(self) -> None:
+        """Turn the DC (12V) output off"""
+        command = TwelveVoltOutputCommand(is_on=0)
+        await self.send_command(command=command)
+
+    async def turn_ac_on(self) -> None:
+        """Turn the ac output on"""
+        command = AcOutputCommand(is_on=1)
+        await self.send_command(command=command)
+
+    async def turn_ac_off(self) -> None:
+        """Turn the ac output off"""
+        command = AcOutputCommand(is_on=0)
+        await self.send_command(command=command)
+
+    async def set_screen_timeout(self, seconds: int) -> None:
+        """Set the timeout for the screen in seconds"""
+        command = ScreenTimeoutCommand(seconds=seconds)
+        await self.send_command(command=command)
+        self.telemetry.screen_timeout = seconds
+        await self.send_poll_extended()
+
+    async def set_dc_timer(self, duration: timedelta) -> None:
+        """Set a timer which will turn off the DC output when elapsed"""
+        seconds = int(duration.total_seconds())
+        command = TwelveVoltTimerCommand(seconds=seconds)
         await self.send_command(command=command)
