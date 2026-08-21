@@ -52,6 +52,10 @@ _LOGGER = logging.getLogger(__name__)
 class SolixBLEDevice:
     """Solix BLE device object."""
 
+    #: Pull some constants into the class because they may change with inherited versions
+    UUID_TELEMETRY = UUID_TELEMETRY
+    UUID_COMMAND = UUID_COMMAND
+
     #: Command codes (hex) that carry telemetry for this device. Subclasses can
     #: override this if their model uses different telemetry command codes
     #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
@@ -102,7 +106,7 @@ class SolixBLEDevice:
     async def _initiate_negotiations(self) -> None:
         """Send the negotiation initiation command."""
         await self._client.write_gatt_char(
-            UUID_COMMAND,
+            self.UUID_COMMAND,
             bytes.fromhex(NEGOTIATION_COMMAND_0),
             response=True,
         )
@@ -155,7 +159,7 @@ class SolixBLEDevice:
         try:
             _LOGGER.debug(f"Subscribing to notifications from device '{self.name}'!")
             await self._client.start_notify(
-                UUID_TELEMETRY, partial(self._process_notification, self._client)
+                self.UUID_TELEMETRY, partial(self._process_notification, self._client)
             )
         except BleakError:
             _LOGGER.exception(f"Error subscribing/negotiating with '{self.name}'!")
@@ -743,7 +747,7 @@ class SolixBLEDevice:
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
                 _LOGGER.debug("Sending stage 1 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_1)
+                    self.UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_1)
                 )
 
             # Negotiation stage 2
@@ -755,7 +759,7 @@ class SolixBLEDevice:
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
                 _LOGGER.debug("Sending stage 2 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_2)
+                    self.UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_2)
                 )
 
             # Negotiation stage 3
@@ -768,7 +772,7 @@ class SolixBLEDevice:
                 self._negotiation_timestamp = time.time()
                 _LOGGER.debug("Sending stage 3 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_3)
+                    self.UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_3)
                 )
 
             # Negotiation stage 4
@@ -780,7 +784,7 @@ class SolixBLEDevice:
                 _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters)}")
                 _LOGGER.debug("Sending stage 4 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_4)
+                    self.UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_4)
                 )
 
             # Negotiation stage 5
@@ -810,7 +814,7 @@ class SolixBLEDevice:
 
                 _LOGGER.debug("Sending stage 5 response message...")
                 return await self._client.write_gatt_char(
-                    UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_5)
+                    self.UUID_COMMAND, bytes.fromhex(NEGOTIATION_COMMAND_5)
                 )
 
             # Negotiation stage 6 (Optional)
@@ -890,7 +894,7 @@ class SolixBLEDevice:
         _LOGGER.debug(f"Sending encrypted packet: {packet.hex()}")
 
         # Send packet
-        await self._client.write_gatt_char(UUID_COMMAND, packet)
+        await self._client.write_gatt_char(self.UUID_COMMAND, packet)
 
     def _register_future(
         self, future: asyncio.Future, pattern: bytes, cmd: bytes

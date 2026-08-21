@@ -11,7 +11,10 @@ UUID_TELEMETRY = "8c850003-0302-41c5-b46e-cf057c562025"
 UUID_COMMAND = "8c850002-0302-41c5-b46e-cf057c562025"
 
 #: GATT Service UUID for identifying Solix/Prime devices (Tested on C300X, C1000, and Prime 160w Charger).
-UUID_IDENTIFIER = "0000ff09-0000-1000-8000-00805f9b34fb"
+UUID_IDENTIFIERS = (
+    "0000ff09-0000-1000-8000-00805f9b34fb",
+    "00001780-0000-1000-8000-00805f9b34fb",
+)
 
 #: Time to wait before re-connecting on an unexpected disconnect.
 RECONNECT_DELAY = 3
