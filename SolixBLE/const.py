@@ -76,3 +76,6 @@ NEGOTIATION_COMMAND_5 = "ff095a000300014022580bc0532a53c739adf3da7b994a7b5f221bc
 #: reason this has to be done at all is because Anker power stations no longer
 #: support sending telemetry in plain text after the latest firmware update.
 PRIVATE_KEY = "7dfbea61cd95cee49c458ad7419e817f1ade9a66136de3c7d5787af1458e39f4"
+
+# POSIX timezone to use if determining the system time zone fails
+FALLBACK_TZ = "GMT0BST,M3.5.0/1,M10.5.0"

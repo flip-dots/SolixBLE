@@ -5,10 +5,12 @@
 """
 
 import asyncio
+import importlib.resources as resources
 import inspect
 import logging
 from typing import Callable
 
+import tzlocal
 from bleak import BleakScanner, BLEDevice
 
 from .const import UUID_IDENTIFIER
@@ -83,3 +85,21 @@ def _to_bytes(data: bytes | str | int | Callable | None, **kwargs: dict) -> byte
     if isinstance(data, Callable):
         return _to_bytes(data(*[kwargs[x] for x in data.__code__.co_varnames]), **kwargs)
     raise ValueError(f"Unable to convert '{type(data)}' to bytes!")
+
+def get_posix_tz() -> str | None:
+    """Return the current time zone as a POSIX timezone string.
+
+    Examples: `EST5EDT,M3.2.0,M11.1.0`, `GMT0BST,M3.5.0/1,M10.5.0`
+
+    :returns: String of the systems timezone in POSIX format or None if unable.
+    """
+
+    try:
+        local_zone = tzlocal.get_localzone_name()
+
+        # The POSIX tz string is present on the last line of the tz db
+        with resources.files("tzdata.zoneinfo").joinpath(local_zone).open("rb") as f:
+            lines = f.readlines()
+            return lines[-1].decode("ascii").strip()
+    except Exception:
+        _LOGGER.exception("Unable to determine system time zone!")

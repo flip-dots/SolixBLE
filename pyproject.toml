@@ -6,7 +6,9 @@ dependencies = [
   "cryptography",
   "pycryptodome",
   "bleak-retry-connector",
-  "construct"
+  "construct",
+  "tzdata",
+  "tzlocal"
 ]
 requires-python = ">= 3.11"
 authors = [

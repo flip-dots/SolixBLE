@@ -15,9 +15,10 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
     derive_private_key,
 )
 
-from SolixBLE.const import NEGOTIATION_PATTERN
+from SolixBLE.const import FALLBACK_TZ, NEGOTIATION_PATTERN
 from SolixBLE.constructs import Parameters
 from SolixBLE.device import SolixBLEDevice
+from SolixBLE.utilities import get_posix_tz
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -267,7 +268,7 @@ class PrimeDevice(SolixBLEDevice):
                         }, "a5": {
                             "key": bytes.fromhex("a5"),
                             "type": None,
-                            "value": bytes.fromhex("474d54304253542c4d332e352e302f312c4d31302e352e30"),
+                            "value": (get_posix_tz() or FALLBACK_TZ).encode(),
                         },
                     },
                 )
