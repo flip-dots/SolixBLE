@@ -28,12 +28,13 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 from cryptography.hazmat.primitives.padding import PKCS7
 
 from SolixBLE.constructs import FragmentedPayload, Packet, ParameterDict, Parameters
-from SolixBLE.utilities import _to_bytes
+from SolixBLE.utilities import _to_bytes, get_posix_tz
 
 from .const import (
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
     DISCONNECT_TIMEOUT,
+    FALLBACK_TZ,
     NEGOTIATION_PATTERN,
     NEGOTIATION_RESPONSE_TIMEOUT,
     NEGOTIATION_TIMEOUT,
@@ -802,7 +803,7 @@ class SolixBLEDevice:
                         }, "a5": {
                             "key": bytes.fromhex("a5"),
                             "type": None,
-                            "value": bytes.fromhex("474d54304253542c4d332e352e302f312c4d31302e352e30"),
+                            "value": (get_posix_tz() or FALLBACK_TZ).encode(),
                         },
                     },
                 )
