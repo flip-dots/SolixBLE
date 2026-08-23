@@ -138,10 +138,8 @@ class PrimeDevice(SolixBLEDevice):
 
         decrypted_payload = self._decrypt_payload(payload)
         _LOGGER.debug(f"Decrypted payload: {decrypted_payload.hex()}")
-        parameters = Parameters.parse(decrypted_payload).to_legacy()
-        _LOGGER.debug(
-            f"Parameters: {self._parameters_to_str(parameters, types=True)}",
-        )
+        parameters = Parameters.parse(decrypted_payload)
+        _LOGGER.debug(f"Parameters: {parameters.to_str(verbose=True, types=False)}")
 
         match cmd.hex():
 
@@ -180,6 +178,8 @@ class PrimeDevice(SolixBLEDevice):
                 _LOGGER.debug(
                     "Entered negotiation stage 2 due to response from device!",
                 )
+                self._mtu = int.from_bytes(parameters["a2"].value_legacy, byteorder="little")
+                _LOGGER.debug(f"MTU of device: {self._mtu}")
                 await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="4029",
                     parameters={ "a1": {
                         "key": bytes.fromhex("a1"),
@@ -240,7 +240,7 @@ class PrimeDevice(SolixBLEDevice):
                 self._negotiation_timestamp = time.time()
 
                 # Extract public key of device from payload
-                device_public_key_bytes = bytes.fromhex("04") + parameters["a1"]
+                device_public_key_bytes = bytes.fromhex("04") + parameters["a1"].value_legacy
                 _LOGGER.debug(f"Public key of device: {device_public_key_bytes.hex()}")
                 device_public_key = EllipticCurvePublicKey.from_encoded_point(
                     SECP256R1(), device_public_key_bytes,
@@ -343,7 +343,7 @@ class PrimeDevice(SolixBLEDevice):
 
             case _:
                 _LOGGER.warning(
-                    f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{self._parameters_to_str(parameters, types=True)}'"
+                    f"Received unexpected negotiation request response from device! cmd: '{cmd}'"
                 )
 
     #####################

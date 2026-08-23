@@ -7,15 +7,17 @@ decoding the packet format used by Anker devices.
 
 """
 
+import json
 import operator
 from functools import reduce
-from typing import Any
+from typing import Any, Self
 
 from construct import (
     BitStruct,
     Bytes,
     Checksum,
     Const,
+    Container,
     ExprAdapter,
     GreedyBytes,
     GreedyRange,
@@ -155,28 +157,80 @@ Usage:
 
 """
 
-Parameter = Struct(
 
-    # The key of the parameter (e.g a1, a2, ...)
-    "key" / Hex(Bytes(1)),
+class ParameterContainer(Container):
+    """Subclass to allow for direct action on the parameter type."""
 
-    # The length of the parameter excluding the key
-    "length" / Rebuild(
-        Int8ul,
-        lambda p: (1 if p.get("type") is not None else 0) + len(p.get("value") or b""),
+    @property
+    def value_legacy(self) -> bytes:
+        """Return the type byte prepended to the value bytes for non-typed values."""
+        type_byte = self.type.to_bytes(1) if self.get("type") is not None else b""
+        val_bytes = self.get("value") or b""
+        return type_byte + val_bytes
+
+    def to_dict(self, types: bool | None = None) -> dict[str, str]:  # noqa: FBT001
+        """Return possible representations of the parameter in dict form.
+
+        :param: Parameter to be interpreted.
+        :types: Display parameter with type information (T=y, F=n, N=both).
+        :returns: Dictionary of encodings to decoded values.
+        """
+        representation: dict[str, str] = {}
+
+        # Representation where no type info is encoded
+        p_bytes = self.value_legacy
+
+        # Representation where first byte encodes type information
+        p_bytes_t = bytes(self.value)
+
+        if types is not True:
+            representation.update({
+                "bytes": str(p_bytes),
+                "hex": p_bytes.hex(),
+                "int": int.from_bytes(p_bytes, byteorder="little", signed=True),
+                "uint": int.from_bytes(p_bytes, byteorder="little", signed=False),
+                "length": len(p_bytes),
+            })
+
+        if types is not False:
+            representation.update({
+                "type (t)": self.type,
+                "bytes (t)": str(p_bytes_t),
+                "hex (t)": p_bytes_t.hex(),
+                "int (t)": int.from_bytes(p_bytes_t, byteorder="little", signed=True),
+                "uint (t)": int.from_bytes(p_bytes_t, byteorder="little", signed=False),
+                "length (t)": len(p_bytes_t),
+             })
+
+        return representation
+
+
+Parameter = ExprAdapter(
+    Struct(
+
+        # The key of the parameter (e.g a1, a2, ...)
+        "key" / Hex(Bytes(1)),
+
+        # The length of the parameter excluding the key
+        "length" / Rebuild(
+            Int8ul,
+            lambda p: (1 if p.get("type") is not None else 0) + len(p.get("value") or b""),
+        ),
+
+        # Optional type of the parameter
+        "type" / If(
+            lambda p: p.get("type") is not None if p._building else p.length > 1,
+            Int8ul,
+        ),
+
+        # Optional content of the parameter
+        "value" / If(
+            lambda p: (p.length - (1 if p.type is not None else 0)) > 0,
+            HexDump(Bytes(lambda p: p.length - (1 if p.type is not None else 0))),
+        ),
     ),
-
-    # Optional type of the parameter
-    "type" / If(
-        lambda p: p.get("type") is not None if p._building else p.length > 1,
-        Int8ul,
-    ),
-
-    # Optional content of the parameter
-    "value" / If(
-        lambda p: (p.length - (1 if p.type is not None else 0)) > 0,
-        HexDump(Bytes(lambda p: p.length - (1 if p.type is not None else 0))),
-    ),
+    decoder=lambda obj, _: ParameterContainer(obj),
+    encoder=lambda obj, _: obj,
 )
 """
 Individual parameter of a payload of an Anker packet.
@@ -194,33 +248,68 @@ modifying, encoding, and decoding payloads.
 
 
 class ParameterDict(dict):
-    """
-    Subclass to allow for direct action on the paramaters type.
-
-    This is used to allow for the new parameters type to be
-    converted to the legacy type for backwards compatibility.
-
-    Usage:
-
-        .. code-block:: python
-           :linenos:
-
-            parameters = Parameters.parse(complete_payload)
-            old_parameters = parameters.to_legacy()
-
-    """
+    """Subclass to allow for direct action on the paramaters type."""
 
     def __init__(self, *args, prefix: bytes | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.prefix = prefix
 
-    def to_legacy(self) -> dict[str, bytes]:
-        """Return legacy format of paramaters."""
-        return {k:
-            (v.type.to_bytes(1) if v is not None and v.type is not None else b"") +
-            (v.value or b"")
-        for k, v in self.items()}
+    def diff(self, old: Self, types: bool | None = None) -> str:  # noqa: FBT001
+        """
+        Return changes from previous parameters to this in string representation.
 
+        :param old: Previous entry to compare against.
+        :param types: Display parameter with type information (T=y, F=n, N=both).
+        """
+        differences: dict[str, str] = {}
+
+        changed = {k for k in old.keys() & self.keys() if old[k] != self[k]}
+        added = self.keys() - old.keys()
+        removed = old.keys() - self.keys()
+
+        for k in sorted(changed | added | removed):
+
+            # Parameter modified
+            if k in changed:
+                old_p = old[k].to_dict(types=types)
+                new_p = self[k].to_dict(types=types)
+
+                differences[k] = {
+                    "state": "~",
+                    **{f: f"{old_p[f]} -> {new_p[f]}" for f in old_p},
+                }
+
+            # Parameter added
+            elif k in added:
+                differences[k] = {
+                    "state": "+",
+                    **self[k].to_dict(types=types),
+                }
+
+            # Parameter removed
+            elif k in removed:
+                differences[k] = {
+                    "state": "-",
+                    **old[k].to_dict(types=types),
+                }
+
+        return json.dumps(differences, indent=4)
+
+    def to_str(self, verbose: bool = False, types: bool | None = None) -> str:
+        """
+        Return string representation of potential parameter encodings.
+
+        :param verbose: Return possible representations instead of plain bytes.
+        :param types: Display parameter with type information (T=y, F=n, N=both).
+        :returns: String representation of parameters.
+        """
+        if verbose:
+            return json.dumps({k: p.to_dict(types) for k, p in self.items()}, indent=4)
+        return str({k: v.value_legacy.hex() for k, v in self.items()})
+
+    def __str__(self) -> str:
+        """Return string representation of potential parameter encodings."""
+        return self.to_str()
 
 Parameters = ExprAdapter(
     Struct(

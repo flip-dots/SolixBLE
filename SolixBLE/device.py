@@ -7,7 +7,6 @@
 import asyncio
 import copy
 import inspect
-import json
 import logging
 import time
 from collections.abc import Callable
@@ -60,7 +59,7 @@ class SolixBLEDevice:
     _TELEMETRY_COMMANDS: tuple[str, ...] = ("c402", "4300", "c405")
 
     #: The maximum packet size an Anker device is able to send
-    _MAX_PACKET_SIZE = 253
+    _mtu = 253
 
     def __init__(self, ble_device: BLEDevice) -> None:
         """Initialise device object. Does not connect automatically."""
@@ -73,7 +72,7 @@ class SolixBLEDevice:
         self._ble_device: BLEDevice = ble_device
         self._client: BleakClient | None = None
         self._fragment_buffers: dict[bytes, list[FragmentedPayload]] = {}
-        self._data: dict[str, bytes] | None = None
+        self._data: ParameterDict | None = None
         self._last_data_timestamp: datetime | None = None
         self._last_packet_timestamp: datetime | None = None
         self._negotiation_timestamp: float | None = None
@@ -361,7 +360,7 @@ class SolixBLEDevice:
         """
         if self._data is None:
             return DEFAULT_METADATA_INT
-        int_bytes = self._data[key][begin:end]
+        int_bytes = self._data[key].value_legacy[begin:end]
         return int.from_bytes(int_bytes, byteorder="little", signed=signed)
 
     def _parse_string(self, key: str, begin: int = None, end: int = None) -> str:
@@ -374,46 +373,9 @@ class SolixBLEDevice:
         :raises UnicodeDecodeError: If bytes are not ASCII text.
         """
         return (
-            self._data[key][begin:end].decode("ascii")
+            self._data[key].value_legacy[begin:end].decode("ascii")
             if self._data
             else DEFAULT_METADATA_STRING
-        )
-
-    def _parameters_to_str(
-        self, parameters: dict[str, bytes], types: bool = False
-    ) -> str:
-        new_value = ""
-        if type(parameters) is ParameterDict:
-            new_value = str(parameters)
-            parameters = parameters.to_legacy()
-        if types:
-            with_types = {
-                k: {
-                    "bytes": f"""{v}""",
-                    "hex": f"""{v.hex()}""",
-                    "uint": f"""{int.from_bytes(v[1:], byteorder="little")}""",
-                    "int": f"""{int.from_bytes(v[1:], byteorder="little", signed=True)}""",
-                }
-                for k, v in parameters.items()
-            }
-            return f"New format: \n{new_value}\nLegacy format:\n" + json.dumps(with_types, indent=4, sort_keys=True)
-        else:
-            return str({k: v.hex() for k, v in parameters.items()})
-
-    def _log_diff(self, old: dict[str, bytes], new: dict[str, bytes]) -> None:
-        """Log any differences between parameters."""
-        differences = {
-            k: {
-                "bytes": f"""{old[k]} -> {new[k]}""",
-                "hex": f"""{old[k].hex()} -> {new[k].hex()}""",
-                "uint": f"""{int.from_bytes(old[k][1:], byteorder="little")} -> {int.from_bytes(new[k][1:], byteorder="little")}""",
-                "int": f"""{int.from_bytes(old[k][1:], byteorder="little", signed=True)} -> {int.from_bytes(new[k][1:], byteorder="little", signed=True)}""",
-            }
-            for k in old.keys() & new.keys()
-            if new[k] != old[k]
-        }
-        _LOGGER.debug(
-            f"Parameter changes: \n{json.dumps(differences, indent=4, sort_keys=True)}"
         )
 
     def _decrypt_payload(self, payload: bytes) -> bytes:
@@ -447,30 +409,17 @@ class SolixBLEDevice:
         )
         return cipher.encrypt(padded_data)
 
-    async def _process_telemetry(self, parameters: Parameters) -> None:
+    async def _process_telemetry(self, parameters: ParameterDict) -> None:
         """Process telemetry data from the device."""
 
-        parameters = parameters.to_legacy()
         state_changed = self._data is None or parameters != self._data
 
         if _LOGGER.isEnabledFor(logging.DEBUG):
-            _LOGGER.debug(
-                f"Telemetry parameters: {self._parameters_to_str(parameters)}"
-            )
+            _LOGGER.debug(f"Telemetry parameters: {parameters.to_str(verbose=True)}")
 
-            # Print state update if changes
-            if state_changed:
-
-                # If we have previous data to compare against log the diff
-                if self._data is not None:
-                    _LOGGER.debug("Parameters have changed since previous update!")
-                    self._log_diff(self._data, parameters)
-
-                # Else log the parameters but with the types
-                else:
-                    _LOGGER.debug(
-                        f"Telemetry parameters: {self._parameters_to_str(parameters, types=True)}"
-                    )
+            # Log state update if changes
+            if state_changed and self._data is not None:
+                _LOGGER.debug(f"Telemetry changes: {parameters.diff(self._data)}")
 
         # Update internal parameters
         self._data = parameters
@@ -556,8 +505,10 @@ class SolixBLEDevice:
             cmd = packet.cmd
             payload = packet.payload_bytes
 
-            # If fragmented re-assemble when all fragments available
-            if (len(data) == self._MAX_PACKET_SIZE or
+            # If packet is maximum size or a previous one of the same
+            # type was, then hand off to the fragment re-assembler which
+            # will re-assemble the payload when all fragments are available
+            if (len(data) == self._mtu or
                 pattern + cmd in self._fragment_buffers):
 
                 payload = self._reassemble(packet)
@@ -633,6 +584,8 @@ class SolixBLEDevice:
         _LOGGER.debug(f"Generated payload parameters: {parameters}")
 
         payload = Parameters.build(parameters)
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(f"Parameters: {Parameters.parse(payload).to_str(verbose=True)}")
         _LOGGER.debug(f"Payload bytes: {payload.hex()}")
         encrypted_payload = self._encrypt_payload(payload)
 
@@ -652,10 +605,8 @@ class SolixBLEDevice:
 
         plain_text_payload = self._decrypt_payload(payload)
         _LOGGER.debug(f"Plain-text payload: {plain_text_payload.hex()}")
-        parameters = Parameters.parse(plain_text_payload).to_legacy()
-        _LOGGER.debug(
-            f"Parameters: {self._parameters_to_str(parameters, types=True)}",
-        )
+        parameters = Parameters.parse(plain_text_payload)
+        _LOGGER.debug(f"Parameters: {parameters.to_str(verbose=True, types=False)}")
 
         match cmd.hex():
 
@@ -697,6 +648,9 @@ class SolixBLEDevice:
                 _LOGGER.debug(
                     "Entered negotiation stage 2 due to response from device!",
                 )
+                self._mtu = int.from_bytes(parameters["a2"].value_legacy, byteorder="little")
+                _LOGGER.debug(f"MTU of device: {self._mtu}")
+
                 _LOGGER.debug("Sending stage 2 response message...")
                 await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="0029",
                     parameters={
@@ -768,7 +722,7 @@ class SolixBLEDevice:
                 )
 
                 # Extract public key of device from payload
-                device_public_key_bytes = bytes.fromhex("04") + parameters["a1"]
+                device_public_key_bytes = bytes.fromhex("04") + parameters["a1"].value_legacy
                 _LOGGER.debug(f"Public key of device: {device_public_key_bytes.hex()}")
                 device_public_key = EllipticCurvePublicKey.from_encoded_point(
                     SECP256R1(), device_public_key_bytes,
@@ -823,7 +777,7 @@ class SolixBLEDevice:
             case _:
                 parameters = Parameters.parse(payload)
                 _LOGGER.warning(
-                    f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{self._parameters_to_str(parameters)}'"
+                    f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{parameters}'"
                 )
 
     def _timestamp(self) -> bytes:

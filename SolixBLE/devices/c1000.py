@@ -7,7 +7,7 @@
 import logging
 from datetime import datetime, timedelta
 
-from SolixBLE.constructs import Parameters
+from SolixBLE.constructs import ParameterDict, Parameters
 
 from ..const import (
     DEFAULT_METADATA_FLOAT,
@@ -460,7 +460,7 @@ class C1000(SolixBLEDevice):
         """
         await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_OFF)
 
-    async def get_status_update(self) -> dict[str, bytes]:
+    async def get_status_update(self) -> ParameterDict:
         """Request and retrieve a status update from the device.
 
         :raises ConnectionError: If not connected to device.
@@ -475,6 +475,6 @@ class C1000(SolixBLEDevice):
         if not payload:
             raise TimeoutError("Timed out waiting for payload!")
 
-        parameters = Parameters.parse(payload).to_legacy()
-        _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters, types=True)}")
+        parameters = Parameters.parse(payload)
+        _LOGGER.debug(f"Parameters: {parameters}")
         return parameters

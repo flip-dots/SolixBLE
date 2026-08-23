@@ -1485,7 +1485,8 @@ async def test_telemetry_packet_processing(  # noqa: PLR0913, PLR0917
             await mock_bluetooth.send_data([bytes.fromhex(packet)])
 
     device_parameters = (
-        device._parameters_to_str(device._data) if device._data else None
+        device._data.to_str(verbose=False)
+        if device._data else None
     )
 
     assert parameters == device_parameters, "Parameters do not match expected!"
@@ -1505,7 +1506,7 @@ async def test_telemetry_packet_processing(  # noqa: PLR0913, PLR0917
             "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
             [
                 "Received non-encrypted telemetry message",
-                "Telemetry parameters: {'a1': '31', 'a2': '024606'",
+                """Telemetry parameters: {\n    "a1": {\n        "bytes": """,
             ],
             id="prime_160w_other",
         ),
@@ -1565,7 +1566,7 @@ async def test_generic_packet_processing(  # noqa: PLR0913, PLR0917
 
             for expected_log_entry in expected_logs:
                 assert (
-                    expected_log_entry in caplog.text
+                    expected_log_entry in str(caplog.text)
                 ), f"Expected to find '{expected_log_entry}' in logs but it was not found!"
 
 

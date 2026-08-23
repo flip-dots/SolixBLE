@@ -8,7 +8,7 @@
 import logging
 from datetime import datetime, timedelta
 
-from SolixBLE.constructs import Parameters
+from SolixBLE.constructs import ParameterDict, Parameters
 
 from ..const import (
     DEFAULT_METADATA_BOOL,
@@ -519,7 +519,7 @@ class F2600(F2000):
             watts=watts,
         )
 
-    async def get_status_update(self) -> dict[str, bytes]:
+    async def get_status_update(self) -> ParameterDict:
         """Request and retrieve a status update from the device.
 
         :raises ConnectionError: If not connected to device.
@@ -535,8 +535,8 @@ class F2600(F2000):
             raise TimeoutError("Timed out waiting for payload!")
 
         parameters = Parameters.parse(payload)
-        _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters, types=True)}")
+        _LOGGER.debug(f"Parameters: {parameters}")
         await self._process_telemetry(
             parameters,
         )  # update the internal parameters as well
-        return parameters.to_legacy()
+        return parameters

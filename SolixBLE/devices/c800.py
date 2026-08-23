@@ -400,6 +400,6 @@ class C800(SolixBLEDevice):
         if not payload:
             raise TimeoutError("Timed out waiting for payload!")
 
-        parameters = Parameters.parse(payload).to_legacy()
-        _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters, types=True)}")
+        parameters = Parameters.parse(payload)
+        _LOGGER.debug(f"Parameters: {parameters}")
         return parameters
