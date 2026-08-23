@@ -41,6 +41,9 @@ AAD = "3322110077665544bbaa9988ffeeddcc"
 #: talking over Bluetooth with a range of like 10m... I don't care.
 PRIVATE_KEY = "754744d72984c378bc4fa77d7fcdf6bbb6d9df119fa9be4948eb8a3b4cd6071f"
 
+#: The UUID sent to the device during negotiation
+UUID_STRING = "79ebed35-dc9c-4904-b40c-72c4e863aa10"
+
 
 
 class PrimeDevice(SolixBLEDevice):
@@ -289,7 +292,7 @@ class PrimeDevice(SolixBLEDevice):
                         }, "a2": {
                             "key": bytes.fromhex("a2"),
                             "type": None,
-                            "value": bytes.fromhex("37396562656433352d646339632d343930342d623430632d373263346538363361613130"),
+                            "value": UUID_STRING.encode(),
                         },
                     },
                 )
@@ -325,7 +328,7 @@ class PrimeDevice(SolixBLEDevice):
                         }, "a3": {
                             "key": bytes.fromhex("a3"),
                             "type": 4,
-                            "value": bytes.fromhex("37396562656433352d646339632d343930342d623430632d373263346538363361613130"),
+                            "value": UUID_STRING.encode(),
                         }, "a5": {
                             "key": bytes.fromhex("a5"),
                             "type": None,

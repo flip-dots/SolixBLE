@@ -47,6 +47,9 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+#: The UUID sent to the device during negotiation
+UUID_STRING = "b2dc0b17-b75d-4abf-ba6e-ec7c997c23e7"
+
 
 class SolixBLEDevice:
     """Solix BLE device object."""
@@ -111,7 +114,7 @@ class SolixBLEDevice:
                 }, "a2": {
                     "key": bytes.fromhex("a2"),
                     "type": None,
-                    "value": bytes.fromhex("62326463306231372d623735642d346162662d626136652d656337633939376332336537"),
+                    "value": UUID_STRING.encode(),
                 },
             },
         )
@@ -676,7 +679,7 @@ class SolixBLEDevice:
                         }, "a2": {
                             "key": bytes.fromhex("a2"),
                             "type": None,
-                            "value": bytes.fromhex("62326463306231372d623735642d346162662d626136652d656337633939376332336537"),
+                            "value": UUID_STRING.encode(),
                         }, "a3": {
                             "key": bytes.fromhex("a3"),
                             "type": None,
@@ -704,7 +707,7 @@ class SolixBLEDevice:
                         }, "a2": {
                             "key": bytes.fromhex("a2"),
                             "type": None,
-                            "value": bytes.fromhex("62326463306231372d623735642d346162662d626136652d656337633939376332336537"),
+                            "value": UUID_STRING.encode(),
                         },
                     },
                 )
@@ -725,7 +728,7 @@ class SolixBLEDevice:
                         }, "a2": {
                             "key": bytes.fromhex("a2"),
                             "type": None,
-                            "value": bytes.fromhex("62326463306231372d623735642d346162662d626136652d656337633939376332336537"),
+                            "value": UUID_STRING.encode(),
                         }, "a3": {
                             "key": bytes.fromhex("a3"),
                             "type": None,
@@ -791,7 +794,7 @@ class SolixBLEDevice:
                         }, "a2": {
                             "key": bytes.fromhex("a2"),
                             "type": None,
-                            "value": bytes.fromhex("62326463306231372d623735642d346162662d626136652d656337633939376332336537"),
+                            "value": UUID_STRING.encode(),
                         }, "a3": {
                             "key": bytes.fromhex("a3"),
                             "type": None,
