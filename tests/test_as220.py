@@ -5,6 +5,7 @@
 
 from SolixBLE import AS220
 from SolixBLE.prime_device import AAD, NEGOTIATION_KEY, NEGOTIATION_NONCE
+from SolixBLE.states import PortStatus
 from tests.const import MOCK_BLE_DEVICE
 
 from Crypto.Cipher import AES
@@ -37,11 +38,16 @@ def test_telemetry_parsing():
     assert s.serial_number == "APCDPTC0G27400469"
     assert s.model == "AS220"
     assert s.battery_percentage == 100
+    assert s.battery_health == 100
     assert s.temperature == 26
     assert s.power_out == 55
+    assert s.ac_input == PortStatus.INPUT  # f0[1]=01 -> charger connected
     assert s.ac_power_in == 55
+    assert s.ac_output == PortStatus.OUTPUT  # a7[1]=01
     assert s.ac_power_out == 55
     assert s.solar_power_in == 0
+    assert s.usb_port_c1 == PortStatus.NOT_CONNECTED  # aa[1]=00
+    assert s.usb_c1_power == 0
     assert s.max_battery_percentage == 100
     assert s.min_battery_percentage == 1
 

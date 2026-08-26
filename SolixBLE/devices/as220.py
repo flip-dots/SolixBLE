@@ -41,6 +41,7 @@ from ..prime_device import (
     NEGOTIATION_PATTERN,
     PrimeDevice,
 )
+from ..states import PortStatus
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -343,21 +344,60 @@ class AS220(PrimeDevice):
         return self._parse_int("a5", begin=3, end=4)
 
     @property
+    def battery_health(self) -> int:
+        """Battery health (%)."""
+        return self._parse_int("a5", begin=4, end=5)
+
+    @property
     def power_out(self) -> int:
-        """Total power out (watts)."""
+        """Total output power (watts) across all ports."""
         return self._parse_int("a6", begin=1, end=3)
 
     @property
+    def ac_input(self) -> PortStatus:
+        """AC input status — whether the wall charger is connected.
+
+        Confirmed live: ``f0[1]`` latches 1 while the charger is plugged in
+        and drops to 0 the moment it is unplugged.
+        """
+        return PortStatus.from_input_only(self._parse_int("f0", begin=1, end=2))
+
+    @property
     def ac_power_in(self) -> int:
+        """AC input / charging power (watts).
+
+        Confirmed live: ``a6[3:5]`` tracks the wall charger and falls to 0 when
+        it is unplugged, while the AC output power keeps flowing from battery.
+        """
         return self._parse_int("a6", begin=3, end=5)
 
     @property
+    def ac_output(self) -> PortStatus:
+        """AC output port status (on/off).
+
+        Layout inherited from the C1000G2; the S2000 AC output was left on
+        throughout the capture, so the off state has not been observed here.
+        """
+        return PortStatus(self._parse_int("a7", begin=1, end=2))
+
+    @property
     def ac_power_out(self) -> int:
+        """AC output power (watts)."""
         return self._parse_int("a7", begin=2, end=4)
 
     @property
     def solar_power_in(self) -> int:
         return self._parse_int("a8", begin=2)
+
+    @property
+    def usb_port_c1(self) -> PortStatus:
+        """USB-C 1 port status (on/off)."""
+        return PortStatus(self._parse_int("aa", begin=1, end=2))
+
+    @property
+    def usb_c1_power(self) -> int:
+        """USB-C 1 output power (watts)."""
+        return self._parse_int("aa", begin=2)
 
     @property
     def max_battery_percentage(self) -> int:
