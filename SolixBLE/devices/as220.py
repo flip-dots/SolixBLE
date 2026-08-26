@@ -41,7 +41,7 @@ from ..prime_device import (
     NEGOTIATION_PATTERN,
     PrimeDevice,
 )
-from ..states import PortStatus
+from ..states import ChargingStatus, PortStatus
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -347,6 +347,16 @@ class AS220(PrimeDevice):
     def battery_health(self) -> int:
         """Battery health (%)."""
         return self._parse_int("a5", begin=4, end=5)
+
+    @property
+    def charging_status(self) -> ChargingStatus:
+        """Battery power-flow state.
+
+        Confirmed live: ``a5[2]`` reads 0 idle, 1 discharging, 2 charging.
+        Observed 2 while charging (96->99%), 1 while running a load off battery,
+        and 0 once full with the charger still attached (no net battery flow).
+        """
+        return ChargingStatus(self._parse_int("a5", begin=2, end=3))
 
     @property
     def power_out(self) -> int:
