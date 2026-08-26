@@ -46,10 +46,19 @@ def test_telemetry_parsing():
     assert s.ac_output == PortStatus.OUTPUT  # a7[1]=01
     assert s.ac_power_out == 55
     assert s.solar_power_in == 0
-    assert s.usb_port_c1 == PortStatus.NOT_CONNECTED  # aa[1]=00
-    assert s.usb_c1_power == 0
+    assert s.usb_output == PortStatus.NOT_CONNECTED  # aa[1]=00 (aggregate USB)
+    assert s.usb_power == 0
+    assert s.time_remaining == 0.0  # a6[7:9]=00 while charging at 100%
     assert s.max_battery_percentage == 100
     assert s.min_battery_percentage == 1
+
+
+def test_time_remaining_tenths_of_hours():
+    """time_remaining is a6[7:9] in tenths of an hour (verified live: 275 -> 27.5h)."""
+    s = AS220(MOCK_BLE_DEVICE)
+    # a6[7:9] = 1301 (little-endian 0x0113 = 275) captured at a real 27.5h estimate
+    s._data = {"a6": bytes.fromhex("043d000000000013016401000000")}
+    assert s.time_remaining == 27.5
 
 
 def test_missing_tlv_is_defensive():

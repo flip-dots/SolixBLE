@@ -354,6 +354,18 @@ class AS220(PrimeDevice):
         return self._parse_int("a6", begin=1, end=3)
 
     @property
+    def time_remaining(self) -> float:
+        """Estimated time remaining, in hours.
+
+        Time-to-empty while discharging (and time-to-full while charging).
+        Confirmed live against the unit's own display: ``a6[7:9]`` holds
+        tenths of an hour and tracked the estimate through load changes
+        (167 -> 16.7 h, 275 -> 27.5 h). Returns the default int when absent.
+        """
+        raw = self._parse_int("a6", begin=7, end=9)
+        return raw / 10 if raw != DEFAULT_METADATA_INT else float(raw)
+
+    @property
     def ac_input(self) -> PortStatus:
         """AC input status — whether the wall charger is connected.
 
@@ -390,13 +402,21 @@ class AS220(PrimeDevice):
         return self._parse_int("a8", begin=2)
 
     @property
-    def usb_port_c1(self) -> PortStatus:
-        """USB-C 1 port status (on/off)."""
+    def usb_output(self) -> PortStatus:
+        """USB output status (on/off) — aggregate across all USB ports.
+
+        Confirmed live: ``aa`` is a single TOTAL figure, not per-port. Loads on
+        both a USB-A and a USB-C port summed into ``aa`` (5 W + ~43 W -> ~48 W),
+        so the S2000 does not report USB power per port.
+        """
         return PortStatus(self._parse_int("aa", begin=1, end=2))
 
     @property
-    def usb_c1_power(self) -> int:
-        """USB-C 1 output power (watts)."""
+    def usb_power(self) -> int:
+        """Total USB output power (watts), summed across all USB ports.
+
+        See :attr:`usb_output` — the S2000 reports one aggregate USB figure.
+        """
         return self._parse_int("aa", begin=2)
 
     @property
