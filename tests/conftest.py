@@ -51,6 +51,7 @@ def fake_time() -> Generator[None, None, None]:
 
     with (
         mock.patch.object(SolixBLEDevice, "_timestamp", new=_mocked_timestamp),
-        mock.patch("SolixBLE.utilities.get_posix_tz", return_value=FALLBACK_TZ),
+        mock.patch("SolixBLE.device.get_posix_tz", return_value=FALLBACK_TZ),
+        mock.patch("SolixBLE.prime_device.get_posix_tz", return_value=FALLBACK_TZ),
     ):
         yield
