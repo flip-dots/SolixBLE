@@ -18,6 +18,7 @@ from SolixBLE import (
     C800,
     C1000,
     C1000G2,
+    F2000Old,
     F2600,
     ChargingStatus,
     DisplayTimeout,
@@ -33,6 +34,19 @@ from SolixBLE import (
     SolixBLEDevice,
     TemperatureUnit,
 )
+from SolixBLE.devices.f2000_old import (
+    AcOutputCommand,
+    AcTimerCommand,
+    CommandAck,
+    CommandType,
+    Header,
+    Output,
+    PollExtendedCommand,
+    PowerSaveCommand,
+    StateAck,
+    Telemetry,
+    TwelveVoltOutputCommand,
+)
 from SolixBLE.devices.f3800 import F3800
 from SolixBLE.devices.solarbank2 import MaxLoadSB2
 from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
@@ -42,6 +56,10 @@ from tests.const import (
     NEGOTIATION_RESPONSES_SOLIX,
 )
 from tests.helpers import MockDevice
+
+
+F2000_OLD_TELEMETRY = "09ff0000010149660000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c00000064006400000000000000000000000030313032303330343035303630373038a2"
+F2000_OLD_EXTENDED = "09ff00000101017a0000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c0000006400640000000000000000000000003031303230333034303530363037303858023c001e003c00010001000100023c00000100a0"
 
 
 @pytest.mark.asyncio
@@ -1029,6 +1047,371 @@ async def test_values(
         assert (
             getattr(device, class_property) == expected_value
         ), f"Mismatch for property '{class_property}'!"
+
+
+@pytest.mark.parametrize(
+    ("payload", "mapping"),
+    [
+        pytest.param(
+            F2000_OLD_TELEMETRY,
+            {
+                "days_remaining": 185,
+                "hours_remaining": 9.0,
+                "time_remaining": 4449.0,
+                "ac_power_in": 0,
+                "ac_power_out": 462,
+                "ac_output": PortStatus.OUTPUT,
+                "solar_power_in": 0,
+                "power_in": 0,
+                "power_out": 462,
+                "dc_power_out": 0,
+                "dc_output": PortStatus.NOT_CONNECTED,
+                "usb_c1_power": 0,
+                "usb_c2_power": 0,
+                "usb_c3_power": 0,
+                "usb_a1_power": 0,
+                "usb_a2_power": 0,
+                "temperature": 28,
+                "temperature_expansion": None,
+                "battery_percentage": 100,
+                "battery_percentage_expansion": None,
+                "battery_health": 100,
+                "charging_status": ChargingStatus.IDLE,
+                "software_version": "2.1.5",
+                "serial_number": "0102030405060708",
+            },
+            id="f2000_old_ac_load",
+        ),
+        pytest.param(
+            F2000_OLD_EXTENDED,
+            {
+                "ac_power_in_limit": 600,
+                "screen_timeout": 30,
+                "screen_brightness": LightStatus.MEDIUM,
+                "power_saving_mode_enabled": False,
+                "light": LightStatus.OFF,
+                "serial_number": "0102030405060708",
+            },
+            id="f2000_old_extended",
+        ),
+    ],
+)
+def test_f2000_old_values(payload: str, mapping: dict[str, Any]) -> None:
+    """Test real F2000 telemetry with its device serial anonymized."""
+    device = F2000Old(MOCK_BLE_DEVICE)
+    # Telemetry is a class attribute in F2000Old, so isolate each test case.
+    device.telemetry = Telemetry()
+    device.telemetry.from_bytes(bytes.fromhex(payload))
+
+    for class_property, expected_value in mapping.items():
+        assert (
+            getattr(device, class_property) == expected_value
+        ), f"Mismatch for property '{class_property}'!"
+
+
+def test_f2000_old_state_and_command_ack() -> None:
+    """Test state updates and command acknowledgements captured from an F2000."""
+    device = F2000Old(MOCK_BLE_DEVICE)
+    device.telemetry = Telemetry()
+    device.telemetry.from_bytes(
+        bytes.fromhex(F2000_OLD_EXTENDED),
+    )
+    assert device.telemetry.temperature_unit == TemperatureUnit.FAHRENHEIT
+
+    # AC and DC on, power saving off, and the light at its lowest level.
+    device.telemetry.from_bytes(bytes.fromhex("09ff00000101480e000101000062"))
+    assert device.ac_output == PortStatus.OUTPUT
+    assert device.dc_output == PortStatus.OUTPUT
+    assert device.power_saving_mode_enabled is False
+    assert device.light == LightStatus.OFF
+
+    device.telemetry.from_bytes(bytes.fromhex("09ff00000102870a009c"))
+    assert device.telemetry.last_command_type == CommandType.TWELVE_VOLT_OUTPUT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "args", "commands"),
+    [
+        pytest.param("turn_ac_on", (), ["08ee00000002860b00018a"], id="ac_on"),
+        pytest.param("turn_ac_off", (), ["08ee00000002860b000089"], id="ac_off"),
+        pytest.param("turn_dc_on", (), ["08ee00000002870b00018b"], id="dc_on"),
+        pytest.param("turn_dc_off", (), ["08ee00000002870b00008a"], id="dc_off"),
+        pytest.param(
+            "set_light_mode",
+            (LightStatus.HIGH,),
+            ["08ee000000028b0b000391", "08ee00000001010a0002"],
+            id="light_high",
+        ),
+        pytest.param(
+            "turn_power_saving_mode_on",
+            (),
+            ["08ee000000028a0b00018e", "08ee00000001010a0002"],
+            id="power_saving_on",
+        ),
+        pytest.param(
+            "turn_power_saving_mode_off",
+            (),
+            ["08ee000000028a0b00008d", "08ee00000001010a0002"],
+            id="power_saving_off",
+        ),
+        pytest.param(
+            "set_screen_brightness",
+            (LightStatus.MEDIUM,),
+            ["08ee00000002880b00028d", "08ee00000001010a0002"],
+            id="screen_brightness",
+        ),
+        pytest.param(
+            "set_ac_power_in_limit",
+            (600,),
+            ["08ee00000002800c005802de", "08ee00000001010a0002"],
+            id="ac_power_in_limit",
+        ),
+        pytest.param(
+            "set_screen_timeout",
+            (30,),
+            ["08ee00000002820c001e00a4", "08ee00000001010a0002"],
+            id="screen_timeout",
+        ),
+        pytest.param(
+            "set_dc_timer",
+            (timedelta(minutes=30),),
+            ["08ee00000002030e000807000018"],
+            id="dc_timer",
+        ),
+    ],
+)
+async def test_f2000_old_control_commands(
+    method: str, args: tuple[Any, ...], commands: list[str],
+) -> None:
+    """Test that F2000 control methods dispatch their checksummed commands."""
+    device = F2000Old(MOCK_BLE_DEVICE)
+    device.telemetry = Telemetry()
+    device.send_command = mock.AsyncMock()
+
+    await getattr(device, method)(*args)
+
+    actual = [
+        call.kwargs["command"].to_bytes().hex()
+        for call in device.send_command.await_args_list
+    ]
+    assert actual == commands
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "args"),
+    [
+        pytest.param("set_light_mode", (LightStatus.UNKNOWN,), id="light_unknown"),
+        pytest.param(
+            "set_screen_brightness",
+            (LightStatus.UNKNOWN,),
+            id="screen_brightness_unknown",
+        ),
+        pytest.param("set_ac_power_in_limit", (199,), id="ac_limit_too_low"),
+        pytest.param("set_ac_power_in_limit", (1441,), id="ac_limit_too_high"),
+        pytest.param("set_screen_timeout", (-1,), id="screen_timeout_negative"),
+        pytest.param(
+            "set_dc_timer",
+            (timedelta(seconds=65536),),
+            id="dc_timer_too_long",
+        ),
+    ],
+)
+async def test_f2000_old_invalid_commands(
+    method: str, args: tuple[Any, ...],
+) -> None:
+    """Test that invalid F2000 commands are rejected before transmission."""
+    device = F2000Old(MOCK_BLE_DEVICE)
+    device.send_command = mock.AsyncMock()
+
+    with pytest.raises(ValueError, match=r"must be"):
+        await getattr(device, method)(*args)
+
+    device.send_command.assert_not_awaited()
+
+
+def test_f2000_old_command_validation_and_ac_timer() -> None:
+    """Test command-only validation branches and AC timer encoding."""
+    assert AcTimerCommand(seconds=3600).to_bytes().hex() == (
+        "08ee00000002020e00100e000026"
+    )
+
+    invalid_commands = (
+        lambda: PowerSaveCommand(is_on=2),
+        lambda: AcOutputCommand(is_on=-1),
+        lambda: TwelveVoltOutputCommand(is_on=2),
+        lambda: AcTimerCommand(seconds=65536),
+    )
+    for make_command in invalid_commands:
+        with pytest.raises(ValueError, match=r"must be"):
+            make_command()
+
+
+def test_f2000_old_packet_errors_and_command_telemetry(caplog) -> None:
+    """Test short, command-tagged, and malformed telemetry packets."""
+    with pytest.raises(ValueError, match="Data length not correct"):
+        Header.from_bytes(b"short")
+    with pytest.raises(ValueError, match="Data not long enough"):
+        Telemetry().from_bytes(b"short")
+
+    command_telemetry = bytearray.fromhex(F2000_OLD_TELEMETRY)
+    command_telemetry[6] = CommandType.AC_OUTPUT.value
+    command_telemetry[-1] = sum(command_telemetry[:-1]) & 0xFF
+    telemetry = Telemetry()
+    telemetry.from_bytes(command_telemetry)
+    assert telemetry.last_command_type == CommandType.AC_OUTPUT
+    assert telemetry.total_output_watts == 462
+
+    unknown_charging_state = bytearray.fromhex(F2000_OLD_TELEMETRY)
+    unknown_charging_state[68] = 3
+    unknown_charging_state[-1] = sum(unknown_charging_state[:-1]) & 0xFF
+    telemetry.from_bytes(unknown_charging_state)
+    assert telemetry.charging_status == ChargingStatus.UNKNOWN
+
+    invalid_state_ack = bytearray.fromhex("09ff00000101480e00010100ff61")
+    invalid_state_ack[-1] = sum(invalid_state_ack[:-1]) & 0xFF
+    telemetry.from_bytes(invalid_state_ack)
+    assert "255 is not a valid LightStatus" in caplog.text
+
+
+def test_f2000_old_ack_pretty_print_helpers() -> None:
+    """Test the JSON encoders used by acknowledgment diagnostics."""
+    acknowledgements = (
+        (CommandAck(CommandType.AC_OUTPUT), CommandType.AC_OUTPUT),
+        (
+            StateAck(
+                ac_outlet_on=True,
+                twelve_volt_on=False,
+                power_save_on=True,
+                light_status=LightStatus.HIGH,
+            ),
+            LightStatus.HIGH,
+        ),
+    )
+
+    for acknowledgement, enum_value in acknowledgements:
+        with (
+            mock.patch(
+                "SolixBLE.devices.f2000_old.json.dumps", return_value="encoded",
+            ) as dumps,
+            mock.patch("builtins.print") as print_mock,
+        ):
+            acknowledgement.pretty_print()
+
+        print_mock.assert_called_once_with("encoded")
+        encoder = dumps.call_args.kwargs["default"]
+        assert encoder(enum_value) == str(enum_value)
+        with pytest.raises(TypeError, match="is not JSON serializable"):
+            encoder(object())
+
+
+def test_f2000_old_optional_properties_and_output_states() -> None:
+    """Test expansion battery, timers, timestamps, and all output states."""
+    device = F2000Old(MOCK_BLE_DEVICE)
+    device.telemetry = Telemetry()
+
+    device.telemetry.external_battery.percentage = 75
+    device.telemetry.external_battery.temperature = 27
+    assert device.battery_percentage_expansion == 75
+    assert device.temperature_expansion == 27
+
+    device.telemetry.charging_status = ChargingStatus.IDLE
+    assert device.timestamp_remaining is None
+    device.telemetry.charging_status = ChargingStatus.DISCHARGING
+    device.telemetry.battery_remaining = timedelta(minutes=30)
+    timestamp = device.timestamp_remaining
+    assert timestamp is not None
+    assert timedelta(minutes=29) < timestamp - datetime.now() < timedelta(minutes=31)
+
+    device.telemetry.ac_outlet = Output(is_on=False, watts=100)
+    device.telemetry.twelve_volt_1 = Output(is_on=False, watts=10)
+    device.telemetry.twelve_volt_2 = Output(is_on=False, watts=20)
+    assert device.ac_output == PortStatus.NOT_CONNECTED
+    assert device.dc_output == PortStatus.NOT_CONNECTED
+    assert device.dc_1_power_out == 10
+    assert device.dc_2_power_out == 20
+    assert device.dc_timer_remaining == -1
+    assert device.dc_timer is None
+
+    device.telemetry.twelve_volt_1.time_remaining = timedelta(minutes=15)
+    assert device.dc_timer_remaining == 900
+    dc_timer = device.dc_timer
+    assert dc_timer is not None
+    assert timedelta(minutes=14) < dc_timer - datetime.now() < timedelta(minutes=16)
+
+    usb_outputs = (
+        "usb_c_1",
+        "usb_c_2",
+        "usb_c_3",
+        "usb_a_1",
+        "usb_a_2",
+    )
+    usb_properties = (
+        "usb_port_c1",
+        "usb_port_c2",
+        "usb_port_c3",
+        "usb_port_a1",
+        "usb_port_a2",
+    )
+    for output_name, property_name in zip(usb_outputs, usb_properties, strict=True):
+        setattr(device.telemetry, output_name, Output(is_on=False, watts=0))
+        assert getattr(device, property_name) == PortStatus.NOT_CONNECTED
+        getattr(device.telemetry, output_name).is_on = True
+        assert getattr(device, property_name) == PortStatus.OUTPUT
+
+    device.telemetry.power_save_status = None
+    assert device.power_saving_mode_enabled is None
+
+
+@pytest.mark.asyncio
+async def test_f2000_old_notification_routing() -> None:
+    """Test current-client filtering, callbacks, polling, and parse failures."""
+    device = F2000Old(MOCK_BLE_DEVICE)
+    device.telemetry = Telemetry()
+    client = mock.MagicMock()
+    client.is_connected = True
+    device._client = client
+    callback = mock.Mock()
+    device.add_callback(callback)
+    device.send_poll_extended = mock.AsyncMock()
+
+    await device._process_notification(mock.MagicMock(), 0, bytearray(b"ignored"))
+    callback.assert_not_called()
+
+    await device._process_notification(
+        client, 0, bytearray.fromhex(F2000_OLD_TELEMETRY),
+    )
+    assert device.negotiated is True
+    assert device.available is True
+    assert device._last_data_timestamp is not None
+    callback.assert_called_once_with()
+    device.send_poll_extended.assert_awaited_once_with()
+
+    await device._process_notification(client, 0, bytearray(b"short"))
+    assert callback.call_count == 2
+    device.send_poll_extended.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_f2000_old_send_command_connection_states() -> None:
+    """Test direct command transmission and its disconnected guard."""
+    device = F2000Old(MOCK_BLE_DEVICE)
+    command = PollExtendedCommand()
+
+    with pytest.raises(ConnectionError, match="Not connected"):
+        await device.send_command(command)
+
+    client = mock.MagicMock()
+    client.is_connected = True
+    client.write_gatt_char = mock.AsyncMock()
+    device._client = client
+    await device.send_command(command)
+    client.write_gatt_char.assert_awaited_once_with(
+        device.UUID_COMMAND,
+        command.to_bytes(),
+        response=False,
+    )
 
 
 @pytest.mark.asyncio
