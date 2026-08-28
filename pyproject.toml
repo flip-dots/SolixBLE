@@ -5,7 +5,10 @@ dependencies = [
   "bleak>=0.19.0",
   "cryptography",
   "pycryptodome",
-  "bleak-retry-connector"
+  "bleak-retry-connector",
+  "construct",
+  "tzdata",
+  "tzlocal"
 ]
 requires-python = ">= 3.11"
 authors = [

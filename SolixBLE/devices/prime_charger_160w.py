@@ -11,18 +11,33 @@ from ..states import PortStatus
 CMD_USB_OUTPUT = "4207"
 CMD_USB_TIMER = "4209"
 
-PAYLOAD_USB_C1_ON = "a10121a2020100a3020101"
-PAYLOAD_USB_C1_OFF = "a10121a2020100a3020100"
-PAYLOAD_USB_C1_TIMER = "a10121a2020100a30504"
+PARAMETERS_ON_OFF = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": lambda port: port - 1,
+    }, "a3": {
+        "type": 1,
+        "value": lambda on: 1 if on else 0,
+    },
+}
 
-PAYLOAD_USB_C2_ON = "a10121a2020101a3020101"
-PAYLOAD_USB_C2_OFF = "a10121a2020101a3020100"
-PAYLOAD_USB_C2_TIMER = "a10121a2020101a30504"
-
-PAYLOAD_USB_C3_ON = "a10121a2020102a3020101"
-PAYLOAD_USB_C3_OFF = "a10121a2020102a3020100"
-PAYLOAD_USB_C3_TIMER = "a10121a2020102a30504"
-
+PARAMETERS_TIMER = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": lambda port: port - 1,
+    }, "a3": {
+        "type": 4,
+        "value": lambda seconds: seconds.to_bytes(
+            length=4,
+            byteorder="little",
+            signed=False,
+        ),
+    },
+}
 
 class PrimeCharger160w(PrimeDevice):
     """
@@ -162,8 +177,10 @@ class PrimeCharger160w(PrimeDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_USB_OUTPUT),
-            payload=bytes.fromhex(PAYLOAD_USB_C1_ON),
+            cmd=CMD_USB_OUTPUT,
+            parameters=PARAMETERS_ON_OFF,
+            port=1,
+            on=True,
         )
 
     async def turn_usb_c1_off(self) -> None:
@@ -173,8 +190,10 @@ class PrimeCharger160w(PrimeDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_USB_OUTPUT),
-            payload=bytes.fromhex(PAYLOAD_USB_C1_OFF),
+            cmd=CMD_USB_OUTPUT,
+            parameters=PARAMETERS_ON_OFF,
+            port=1,
+            on=False,
         )
 
     async def set_timer_usb_c1(self, time: int) -> None:
@@ -185,9 +204,10 @@ class PrimeCharger160w(PrimeDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_USB_TIMER),
-            payload=bytes.fromhex(PAYLOAD_USB_C1_TIMER)
-            + time.to_bytes(4, byteorder="little"),
+            cmd=CMD_USB_TIMER,
+            parameters=PARAMETERS_TIMER,
+            port=1,
+            seconds=time,
         )
 
     async def turn_usb_c2_on(self) -> None:
@@ -197,8 +217,10 @@ class PrimeCharger160w(PrimeDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_USB_OUTPUT),
-            payload=bytes.fromhex(PAYLOAD_USB_C2_ON),
+            cmd=CMD_USB_OUTPUT,
+            parameters=PARAMETERS_ON_OFF,
+            port=2,
+            on=True,
         )
 
     async def turn_usb_c2_off(self) -> None:
@@ -208,8 +230,10 @@ class PrimeCharger160w(PrimeDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_USB_OUTPUT),
-            payload=bytes.fromhex(PAYLOAD_USB_C2_OFF),
+            cmd=CMD_USB_OUTPUT,
+            parameters=PARAMETERS_ON_OFF,
+            port=2,
+            on=False,
         )
 
     async def set_timer_usb_c2(self, time: int) -> None:
@@ -220,9 +244,10 @@ class PrimeCharger160w(PrimeDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_USB_TIMER),
-            payload=bytes.fromhex(PAYLOAD_USB_C2_TIMER)
-            + time.to_bytes(4, byteorder="little"),
+            cmd=CMD_USB_TIMER,
+            parameters=PARAMETERS_TIMER,
+            port=2,
+            seconds=time,
         )
 
     async def turn_usb_c3_on(self) -> None:
@@ -232,8 +257,10 @@ class PrimeCharger160w(PrimeDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_USB_OUTPUT),
-            payload=bytes.fromhex(PAYLOAD_USB_C3_ON),
+            cmd=CMD_USB_OUTPUT,
+            parameters=PARAMETERS_ON_OFF,
+            port=3,
+            on=True,
         )
 
     async def turn_usb_c3_off(self) -> None:
@@ -243,8 +270,10 @@ class PrimeCharger160w(PrimeDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_USB_OUTPUT),
-            payload=bytes.fromhex(PAYLOAD_USB_C3_OFF),
+            cmd=CMD_USB_OUTPUT,
+            parameters=PARAMETERS_ON_OFF,
+            port=3,
+            on=False,
         )
 
     async def set_timer_usb_c3(self, time: int) -> None:
@@ -255,7 +284,8 @@ class PrimeCharger160w(PrimeDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_USB_TIMER),
-            payload=bytes.fromhex(PAYLOAD_USB_C3_TIMER)
-            + time.to_bytes(4, byteorder="little"),
+            cmd=CMD_USB_TIMER,
+            parameters=PARAMETERS_TIMER,
+            port=3,
+            seconds=time,
         )

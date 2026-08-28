@@ -7,10 +7,13 @@
 import logging
 from datetime import datetime, timedelta
 
+from SolixBLE.constructs import Parameters
+
 from ..const import (
     DEFAULT_METADATA_FLOAT,
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
+    TELEMETRY_PATTERN_A,
 )
 from ..device import SolixBLEDevice
 from ..states import DisplayTimeout, LightStatus, PortStatus
@@ -21,11 +24,55 @@ CMD_LIGHT_MODE = "404f"
 CMD_DISPLAY_MODE = "404c"
 CMD_DISPLAY_TIMEOUT = "4046"
 CMD_DISPLAY_ON_OFF = "4052"
+CMD_GET_STATUS = "4040"
 
-PAYLOAD_ON = "a10121a2020101"
-PAYLOAD_OFF = "a10121a2020100"
-PAYLOAD_LIGHT_MODE = "a10121a20201"
-PAYLOAD_TIMEOUT_TIME = "a10121a20302"
+CMD_RESPONSE_GET_STATUS = "c840"
+
+PARAMETERS_ON = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 1,
+    },
+}
+
+PARAMETERS_OFF = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 0,
+    },
+}
+
+PARAMETERS_LIGHT_MODE = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": lambda mode: mode.value,
+    },
+}
+
+PARAMETERS_TIMEOUT_TIME = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 2,
+        "value": lambda time: time.value.to_bytes(
+            length=2,
+            byteorder="little",
+            signed=False,
+        ),
+    },
+}
+
+PARAMETERS_GET_STATUS = {
+    "a1": {
+        "value": "21",
+    },
+}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -245,9 +292,7 @@ class C800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_ON)
 
     async def turn_ac_off(self) -> None:
         """Turn the AC output off.
@@ -255,9 +300,7 @@ class C800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_OFF)
 
     async def turn_dc_on(self) -> None:
         """Turn the DC output on.
@@ -265,9 +308,7 @@ class C800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_ON)
 
     async def turn_dc_off(self) -> None:
         """Turn the DC output off.
@@ -275,9 +316,7 @@ class C800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_OFF)
 
     async def set_light_mode(self, mode: LightStatus) -> None:
         """Set the light mode of the LED bar.
@@ -290,8 +329,9 @@ class C800(SolixBLEDevice):
         if mode is LightStatus.UNKNOWN:
             raise ValueError("You cannot set the light status to unknown")
         await self._send_command(
-            cmd=bytes.fromhex(CMD_LIGHT_MODE),
-            payload=bytes.fromhex(PAYLOAD_LIGHT_MODE) + mode.value.to_bytes(),
+            cmd=CMD_LIGHT_MODE,
+            parameters=PARAMETERS_LIGHT_MODE,
+            mode=mode,
         )
 
     async def set_display_mode(self, mode: LightStatus) -> None:
@@ -307,8 +347,9 @@ class C800(SolixBLEDevice):
         if mode is LightStatus.SOS:
             raise ValueError("You cannot set the display brightness status to SOS")
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_MODE),
-            payload=bytes.fromhex(PAYLOAD_LIGHT_MODE) + mode.value.to_bytes(),
+            cmd=CMD_DISPLAY_MODE,
+            parameters=PARAMETERS_LIGHT_MODE,
+            mode=mode,
         )
 
     async def set_display_timeout(self, timeout: DisplayTimeout) -> None:
@@ -323,9 +364,9 @@ class C800(SolixBLEDevice):
         if timeout is DisplayTimeout.UNKNOWN:
             raise ValueError("You cannot set the display timeout to unknown")
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_TIMEOUT),
-            payload=bytes.fromhex(PAYLOAD_TIMEOUT_TIME)
-            + timeout.value.to_bytes(length=2, byteorder="little", signed=False),
+            cmd=CMD_DISPLAY_TIMEOUT,
+            parameters=PARAMETERS_TIMEOUT_TIME,
+            time=timeout,
         )
 
     async def turn_display_on(self) -> None:
@@ -334,9 +375,7 @@ class C800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_ON)
 
     async def turn_display_off(self) -> None:
         """Turn the display off.
@@ -344,9 +383,7 @@ class C800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_OFF)
 
     async def get_status_update(self) -> dict[str, bytes]:
         """Request and retrieve a status update from the device.
@@ -356,26 +393,13 @@ class C800(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         :returns: Dictionary containing telemetry parameters.
         """
-        await self._send_command(
-            cmd=bytes.fromhex("4040"),
-            payload=bytes.fromhex("a10121"),
+        await self._send_command(cmd=CMD_GET_STATUS, parameters=PARAMETERS_GET_STATUS)
+        payload = await self._listen_for_packet(
+            bytes.fromhex(TELEMETRY_PATTERN_A), bytes.fromhex(CMD_RESPONSE_GET_STATUS),
         )
+        if not payload:
+            raise TimeoutError("Timed out waiting for payload!")
 
-        packet_1 = await self._listen_for_packet(
-            bytes.fromhex("03010f"), bytes.fromhex("c840")
-        )
-        if not packet_1:
-            raise TimeoutError("Timed out waiting for packet 1!")
-
-        packet_2 = await self._listen_for_packet(
-            bytes.fromhex("03010f"), bytes.fromhex("c840")
-        )
-        if not packet_2:
-            raise TimeoutError("Timed out waiting for packet 2!")
-
-        # We need to ignore the first byte of each packet with these types
-        new_payload = packet_1[1:] + packet_2[1:]
-        decrypted_payload = self._decrypt_payload(new_payload)
-        parameters = self._parse_payload(decrypted_payload)
-        _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters, types=True)}")
+        parameters = Parameters.parse(payload)
+        _LOGGER.debug(f"Parameters: {parameters}")
         return parameters

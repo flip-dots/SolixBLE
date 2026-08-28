@@ -8,12 +8,14 @@
 import logging
 from datetime import datetime, timedelta
 
+from SolixBLE.constructs import ParameterDict, Parameters
+
 from ..const import (
     DEFAULT_METADATA_BOOL,
     DEFAULT_METADATA_INT,
+    TELEMETRY_PATTERN_A,
 )
 from ..states import ChargingStatus, DisplayTimeout, LightStatus, PortStatus
-
 from . import F2000
 
 CMD_AC_TIMER = "4042"
@@ -26,13 +28,81 @@ CMD_DC_OUTPUT = "404b"
 CMD_DISPLAY_MODE = "404c"
 CMD_POWER_SAVING_MODE = "404e"
 CMD_LIGHT_MODE = "404f"
+CMD_GET_STATUS = "4040"
 
-PAYLOAD_ON = "a10121a2020101"
-PAYLOAD_OFF = "a10121a2020100"
-PAYLOAD_LIGHT_MODE = "a10121a20201"
-PAYLOAD_TIMEOUT_TIME = "a10121a20302"
-PAYLOAD_AC_CHARGING_POWER = "a10121a20302"
-PAYLOAD_TIMER = "a10121a20502"
+CMD_RESPONSE_GET_STATUS = "c840"
+
+PARAMETERS_ON = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 1,
+    },
+}
+
+PARAMETERS_OFF = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 0,
+    },
+}
+
+PARAMETERS_LIGHT_MODE = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": lambda mode: mode.value,
+    },
+}
+
+PARAMETERS_TIMEOUT_TIME = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 2,
+        "value": lambda time: time.value.to_bytes(
+            length=2,
+            byteorder="little",
+            signed=False,
+        ),
+    },
+}
+
+PARAMETERS_CHARGE_POWER = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 2,
+        "value": lambda watts: watts.to_bytes(
+            length=2,
+            byteorder="little",
+            signed=False,
+        ),
+    },
+}
+
+PARAMETERS_TIMER = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 2,
+        "value": lambda seconds: seconds.to_bytes(
+            length=4,
+            byteorder="little",
+            signed=False,
+        ),
+    },
+}
+
+PARAMETERS_GET_STATUS = {
+    "a1": {
+        "value": "21",
+    },
+}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -295,9 +365,7 @@ class F2600(F2000):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_ON)
 
     async def turn_ac_off(self) -> None:
         """Turn the AC output off.
@@ -305,9 +373,7 @@ class F2600(F2000):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_OFF)
 
     async def turn_dc_on(self) -> None:
         """Turn the DC output on.
@@ -315,9 +381,7 @@ class F2600(F2000):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_ON)
 
     async def turn_dc_off(self) -> None:
         """Turn the DC output off.
@@ -325,9 +389,7 @@ class F2600(F2000):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_OFF)
 
     async def set_ac_timer(self, seconds: int) -> None:
         """Set the AC auto-off timer.
@@ -337,9 +399,9 @@ class F2600(F2000):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_TIMER),
-            payload=bytes.fromhex(PAYLOAD_TIMER)
-            + seconds.to_bytes(length=4, byteorder="little", signed=False),
+            cmd=CMD_AC_TIMER,
+            parameters=PARAMETERS_TIMER,
+            seconds=seconds,
         )
 
     async def set_dc_timer(self, seconds: int) -> None:
@@ -350,9 +412,9 @@ class F2600(F2000):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_TIMER),
-            payload=bytes.fromhex(PAYLOAD_TIMER)
-            + seconds.to_bytes(length=4, byteorder="little", signed=False),
+            cmd=CMD_DC_TIMER,
+            parameters=PARAMETERS_TIMER,
+            seconds=seconds,
         )
 
     async def set_light_mode(self, mode: LightStatus) -> None:
@@ -366,8 +428,9 @@ class F2600(F2000):
         if mode is LightStatus.UNKNOWN:
             raise ValueError("You cannot set the light status to unknown")
         await self._send_command(
-            cmd=bytes.fromhex(CMD_LIGHT_MODE),
-            payload=bytes.fromhex(PAYLOAD_LIGHT_MODE) + mode.value.to_bytes(),
+            cmd=CMD_LIGHT_MODE,
+            parameters=PARAMETERS_LIGHT_MODE,
+            mode=mode,
         )
 
     async def set_display_mode(self, mode: LightStatus) -> None:
@@ -383,8 +446,9 @@ class F2600(F2000):
         if mode is LightStatus.SOS:
             raise ValueError("You cannot set the display brightness status to SOS")
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_MODE),
-            payload=bytes.fromhex(PAYLOAD_LIGHT_MODE) + mode.value.to_bytes(),
+            cmd=CMD_DISPLAY_MODE,
+            parameters=PARAMETERS_LIGHT_MODE,
+            mode=mode,
         )
 
     async def set_display_timeout(self, timeout: DisplayTimeout) -> None:
@@ -399,9 +463,9 @@ class F2600(F2000):
         if timeout is DisplayTimeout.UNKNOWN:
             raise ValueError("You cannot set the display timeout to unknown")
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_TIMEOUT),
-            payload=bytes.fromhex(PAYLOAD_TIMEOUT_TIME)
-            + timeout.value.to_bytes(length=2, byteorder="little", signed=False),
+            cmd=CMD_DISPLAY_TIMEOUT,
+            parameters=PARAMETERS_TIMEOUT_TIME,
+            time=timeout,
         )
 
     async def turn_display_on(self) -> None:
@@ -410,9 +474,7 @@ class F2600(F2000):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_ON)
 
     async def turn_display_off(self) -> None:
         """Turn the display off.
@@ -420,9 +482,7 @@ class F2600(F2000):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_OFF)
 
     async def turn_power_saving_mode_on(self) -> None:
         """Turn the power saving mode on.
@@ -430,10 +490,7 @@ class F2600(F2000):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_POWER_SAVING_MODE),
-            payload=bytes.fromhex(PAYLOAD_ON),
-        )
+        await self._send_command(cmd=CMD_POWER_SAVING_MODE, parameters=PARAMETERS_ON)
 
     async def turn_power_saving_mode_off(self) -> None:
         """Turn the power saving mode off.
@@ -441,10 +498,7 @@ class F2600(F2000):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_POWER_SAVING_MODE),
-            payload=bytes.fromhex(PAYLOAD_OFF),
-        )
+        await self._send_command(cmd=CMD_POWER_SAVING_MODE, parameters=PARAMETERS_OFF)
 
     async def set_ac_charging_power(self, watts: int) -> None:
         """Set the AC charging power limit in watts.
@@ -460,12 +514,12 @@ class F2600(F2000):
             raise ValueError("AC charging power must be between 100 and 1440 W")
 
         await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_CHARGING_POWER),
-            payload=bytes.fromhex(PAYLOAD_AC_CHARGING_POWER)
-            + watts.to_bytes(length=2, byteorder="little", signed=False),
+            cmd=CMD_AC_CHARGING_POWER,
+            parameters=PARAMETERS_CHARGE_POWER,
+            watts=watts,
         )
 
-    async def get_status_update(self) -> dict[str, bytes]:
+    async def get_status_update(self) -> ParameterDict:
         """Request and retrieve a status update from the device.
 
         :raises ConnectionError: If not connected to device.
@@ -473,29 +527,16 @@ class F2600(F2000):
         :raises BleakError: If command transmission fails.
         :returns: Dictionary containing telemetry parameters.
         """
-        await self._send_command(
-            cmd=bytes.fromhex("4040"),
-            payload=bytes.fromhex("a10121"),
+        await self._send_command(cmd=CMD_GET_STATUS, parameters=PARAMETERS_GET_STATUS)
+        payload = await self._listen_for_packet(
+            bytes.fromhex(TELEMETRY_PATTERN_A), bytes.fromhex(CMD_RESPONSE_GET_STATUS),
         )
+        if not payload:
+            raise TimeoutError("Timed out waiting for payload!")
 
-        packet_1 = await self._listen_for_packet(
-            bytes.fromhex("03010f"), bytes.fromhex("c840")
-        )
-        if not packet_1:
-            raise TimeoutError("Timed out waiting for packet 1!")
-
-        packet_2 = await self._listen_for_packet(
-            bytes.fromhex("03010f"), bytes.fromhex("c840")
-        )
-        if not packet_2:
-            raise TimeoutError("Timed out waiting for packet 2!")
-
-        # We need to ignore the first byte of each packet with these types
-        new_payload = packet_1[1:] + packet_2[1:]
-        decrypted_payload = self._decrypt_payload(new_payload)
-        parameters = self._parse_payload(decrypted_payload)
-        _LOGGER.debug(f"Parameters: {self._parameters_to_str(parameters, types=True)}")
+        parameters = Parameters.parse(payload)
+        _LOGGER.debug(f"Parameters: {parameters}")
         await self._process_telemetry(
-            parameters
+            parameters,
         )  # update the internal parameters as well
         return parameters

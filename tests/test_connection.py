@@ -19,18 +19,21 @@ from tests.helpers import MockDevice
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "device_class,negotiation",
+    ("device_class", "negotiation"),
     [
         pytest.param(C300, NEGOTIATION_RESPONSES_SOLIX, id="solix"),
         pytest.param(PrimeCharger160w, NEGOTIATION_RESPONSES_PRIME, id="prime"),
     ],
 )
 async def test_automatic_retry(
-    fast_sleep, fast_timeouts, device_class: type[SolixBLEDevice], negotiation: dict
-):
+    fake_time,  # noqa: ANN001, ARG001
+    fast_sleep,  # noqa: ANN001, ARG001
+    fast_timeouts,  # noqa: ANN001, ARG001
+    device_class: type[SolixBLEDevice],
+    negotiation: dict,
+) -> None:
     """
-    Test the automatic retrying of a lost connection when the
-    reconnection happens within the timeout.
+    Test automatic retry of lost connection within timeout period.
 
     This test expects the module to connect the the mock device
     and then the mock device drops the connection and we expect
@@ -98,14 +101,14 @@ async def test_automatic_retry(
     ],
 )
 async def test_automatic_retry_timeout(
-    fast_sleep,
-    fast_timeouts,
+    fake_time,  # noqa: ANN001, ARG001
+    fast_sleep,  # noqa: ANN001, ARG001
+    fast_timeouts,  # noqa: ANN001, ARG001
     device_class: type[SolixBLEDevice],
     negotiation: dict,
-):
+) -> None:
     """
-    Test the automatic retrying of a lost connection when
-    the reconnection takes longer than the timeout.
+    Test automatic retry of lost connection outside of timeout period.
 
     This test expects the module to connect the the mock device
     and then the mock device drops the connection and we expect
@@ -188,13 +191,16 @@ async def test_automatic_retry_timeout(
     ],
 )
 async def test_disconnect(
-    fast_timeouts,
-    fast_sleep,
+    fake_time,  # noqa: ANN001, ARG001
+    fast_sleep,  # noqa: ANN001, ARG001
+    fast_timeouts,  # noqa: ANN001, ARG001
     device_class: type[SolixBLEDevice],
     negotiation: dict,
-):
+) -> None:
     """
-    Test the mock device is disconnected and no automatic
+    Test disconnecting the device.
+
+    We expect that the mock device is disconnected and no automatic
     reconnection attempts are executed when disconnect is called.
 
     We also expect no callbacks to be run and multiple calls

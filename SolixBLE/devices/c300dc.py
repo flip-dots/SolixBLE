@@ -28,10 +28,45 @@ CMD_LIGHT_MODE = "404f"
 CMD_DISPLAY_TIMEOUT = "4046"
 CMD_DISPLAY_MODE = "404c"
 
-PAYLOAD_ON = "a10121a2020101"
-PAYLOAD_OFF = "a10121a2020100"
-PAYLOAD_LIGHT_MODE = "a10121a20201"
-PAYLOAD_TIMEOUT_TIME = "a10121a20302"
+PARAMETERS_ON = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 1,
+    },
+}
+
+PARAMETERS_OFF = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 0,
+    },
+}
+
+PARAMETERS_LIGHT_MODE = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": lambda mode: mode.value,
+    },
+}
+
+PARAMETERS_TIMEOUT_TIME = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 2,
+        "value": lambda time: time.value.to_bytes(
+            length=2,
+            byteorder="little",
+            signed=False,
+        ),
+    },
+}
 
 class C300DC(SolixBLEDevice):
     """
@@ -296,7 +331,7 @@ class C300DC(SolixBLEDevice):
         return PortStatus(self._parse_int("be", begin=1))
 
     @property
-    def dc_port(self) -> PortStatus:
+    def dc_output(self) -> PortStatus:
         """DC Port Status.
 
         :returns: Status of the DC port.
@@ -405,9 +440,7 @@ class C300DC(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_ON)
 
     async def turn_dc_off(self) -> None:
         """Turn the DC output off.
@@ -415,9 +448,7 @@ class C300DC(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_OFF)
 
     async def turn_display_on(self) -> None:
         """Turn the display on.
@@ -425,9 +456,7 @@ class C300DC(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_ON)
 
     async def turn_display_off(self) -> None:
         """Turn the display off.
@@ -435,9 +464,7 @@ class C300DC(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_ON_OFF), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_OFF)
 
     async def set_light_mode(self, mode: LightStatus) -> None:
         """Set the light mode of the LED bar.
@@ -450,8 +477,9 @@ class C300DC(SolixBLEDevice):
         if mode is LightStatus.UNKNOWN:
             raise ValueError("You cannot set the light status to unknown")
         await self._send_command(
-            cmd=bytes.fromhex(CMD_LIGHT_MODE),
-            payload=bytes.fromhex(PAYLOAD_LIGHT_MODE) + mode.value.to_bytes(),
+            cmd=CMD_LIGHT_MODE,
+            parameters=PARAMETERS_LIGHT_MODE,
+            mode=mode,
         )
 
     async def set_display_timeout(self, timeout: DisplayTimeout) -> None:
@@ -466,9 +494,9 @@ class C300DC(SolixBLEDevice):
         if timeout is DisplayTimeout.UNKNOWN:
             raise ValueError("You cannot set the display timeout to unknown")
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_TIMEOUT),
-            payload=bytes.fromhex(PAYLOAD_TIMEOUT_TIME)
-            + timeout.value.to_bytes(length=2, byteorder="little", signed=False),
+            cmd=CMD_DISPLAY_TIMEOUT,
+            parameters=PARAMETERS_TIMEOUT_TIME,
+            time=timeout,
         )
 
     async def set_display_mode(self, mode: LightStatus) -> None:
@@ -484,6 +512,7 @@ class C300DC(SolixBLEDevice):
         if mode is LightStatus.SOS:
             raise ValueError("You cannot set the display brightness status to SOS")
         await self._send_command(
-            cmd=bytes.fromhex(CMD_DISPLAY_MODE),
-            payload=bytes.fromhex(PAYLOAD_LIGHT_MODE) + mode.value.to_bytes(),
+            cmd=CMD_DISPLAY_MODE,
+            parameters=PARAMETERS_LIGHT_MODE,
+            mode=mode,
         )

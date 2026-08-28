@@ -16,9 +16,24 @@ from ..states import ChargingStatusF3800, PortStatus
 
 CMD_AC_OUTPUT = "404a"
 CMD_DC_OUTPUT = "404b"
-PAYLOAD_ON = "a10121a2020101"
-PAYLOAD_OFF = "a10121a2020100"
 
+PARAMETERS_ON = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 1,
+    },
+}
+
+PARAMETERS_OFF = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 0,
+    },
+}
 
 class F3800(SolixBLEDevice):
     """
@@ -343,9 +358,7 @@ class F3800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON),
-        )
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_ON)
 
     async def turn_ac_off(self) -> None:
         """Turn the AC output off.
@@ -353,9 +366,7 @@ class F3800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF),
-        )
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_OFF)
 
     async def turn_dc_on(self) -> None:
         """Turn the DC output on.
@@ -363,9 +374,7 @@ class F3800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON),
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_ON)
 
     async def turn_dc_off(self) -> None:
         """Turn the DC output off.
@@ -373,6 +382,4 @@ class F3800(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF),
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_OFF)

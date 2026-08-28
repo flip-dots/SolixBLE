@@ -15,9 +15,23 @@ SUBSCRIBE_PAYLOAD = "a10121"
 CMD_AC_OUTPUT = "4101"
 CMD_DC_OUTPUT = "4102"
 
-PAYLOAD_ON = "a10121a2020101"
-PAYLOAD_OFF = "a10121a2020100"
+PARAMETERS_ON = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 1,
+    },
+}
 
+PARAMETERS_OFF = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 0,
+    },
+}
 
 class C1000G2(SolixBLEDevice):
     """
@@ -56,9 +70,7 @@ class C1000G2(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_ON)
 
     async def turn_ac_off(self) -> None:
         """Turn the AC output off.
@@ -66,33 +78,23 @@ class C1000G2(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_AC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_OFF)
 
     async def turn_dc_on(self) -> None:
-        """Turn the DC (12 V) output on.
-
-        Confirmed on real hardware: the 12 V port physically switched and the
-        ``b2`` status byte latched on. The Gen 2 reuses the AC on/off payload on
-        a different command code (``4102``).
+        """Turn the DC output on.
 
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_ON)
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_ON)
 
     async def turn_dc_off(self) -> None:
-        """Turn the DC (12 V) output off.
+        """Turn the DC output off.
 
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=bytes.fromhex(CMD_DC_OUTPUT), payload=bytes.fromhex(PAYLOAD_OFF)
-        )
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_OFF)
 
     @property
     def serial_number(self) -> str:
