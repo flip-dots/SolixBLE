@@ -7,6 +7,7 @@ Tests for the Anker Prime specific functionality.
 import pytest
 
 from SolixBLE import prime_device
+from SolixBLE.constructs import Packet
 from SolixBLE.prime_device import PrimeDevice
 from tests.const import MOCK_BLE_DEVICE
 
@@ -16,25 +17,25 @@ from tests.const import MOCK_BLE_DEVICE
     [
         pytest.param(
             "ff094000030001402257ec69586f3500c8f858e0ba047f237f4e2ed8c50d2f39ba3587e4010275bea22242936f08788849272fb3f4cf7493be4a60bb9c9f0693",
-            prime_device.NEGOTIATION_COMMAND_5_PAYLOAD,
+            "a104f079b569a30400000000a518474d54304253542c4d332e352e302f312c4d31302e352e30",
             "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
             id="stage_5_response",
         ),
         pytest.param(
             "ff094600030001402757ec69586f3501e8cf6185d8c4035707377af9af3a2e40b02b86e7531974f1c22440de6e43705566b77cf940e235b65abf4d413ece5f2c3781712f3742",
-            prime_device.NEGOTIATION_COMMAND_6_PAYLOAD,
+            "a104f079b569a22437396562656433352d646339632d343930342d623430632d373263346538363361613130",
             "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
             id="stage_6_response",
         ),
         pytest.param(
             "ff09230003000f420057e9b8dfdeacda7991d3eb7f12093e55ff002aa9799bcc9216e3",
-            prime_device.NEGOTIATION_COMMAND_7_PAYLOAD,
+            "a10121fe04f079b569",
             "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
             id="stage_7a_response",
         ),
         pytest.param(
             "ff09530003000f420a57e9b883d958e48e5b7de48d980206577e2dafbb3d604dea3686f3011969f0db2311906d142b5730ee2bfb11e3fbbe7485aac8877995310669156ec74645c962b419e579b385fd079967",
-            prime_device.NEGOTIATION_COMMAND_8_PAYLOAD,
+            "a10121a203044742a3250437396562656433352d646339632d343930342d623430632d373263346538363361613130a5020101fe04f079b569",
             "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
             id="stage_7b_response",
         ),
@@ -64,7 +65,7 @@ def test_negotiation_encryption_session(
 
     prime = PrimeDevice(MOCK_BLE_DEVICE)
 
-    _, _, payload = prime._split_packet(bytes.fromhex(packet))
+    payload = Packet.parse(bytes.fromhex(packet)).payload_bytes
     prime._shared_secret = bytes.fromhex(shared_secret)
 
     decrypted = prime._decrypt_payload(payload)

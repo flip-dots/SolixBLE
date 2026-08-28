@@ -5,5 +5,8 @@ bleak
 cryptography
 pycryptodome
 bleak-retry-connector
+construct
+tzdata
+tzlocal
 ruff
 mypy

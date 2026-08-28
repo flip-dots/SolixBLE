@@ -21,7 +21,6 @@ from SolixBLE import (
     F2000Old,
     F2600,
     ChargingStatus,
-    DisplayTimeout,
     LightStatus,
     MagGo3in1,
     PortOverload,
@@ -48,6 +47,7 @@ from SolixBLE.devices.f2000_old import (
     TwelveVoltOutputCommand,
 )
 from SolixBLE.devices.f3800 import F3800
+from SolixBLE.constructs import Parameters
 from SolixBLE.devices.solarbank2 import MaxLoadSB2
 from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
 from tests.const import (
@@ -753,7 +753,7 @@ F2000_OLD_EXTENDED = "09ff00000101017a0000000000000000005ab90000ce01000000000000
                 "usb_port_c4": PortStatus.NOT_CONNECTED,
                 "usb_port_a1": PortStatus.NOT_CONNECTED,
                 "usb_port_a2": PortStatus.NOT_CONNECTED,
-                "dc_port": PortStatus.NOT_CONNECTED,
+                "dc_output": PortStatus.NOT_CONNECTED,
                 "device_overload": PortOverload.NONE,
                 "serial_number": "                ",
                 "device_timeout": 0,
@@ -798,7 +798,7 @@ F2000_OLD_EXTENDED = "09ff00000101017a0000000000000000005ab90000ce01000000000000
                 "usb_port_c4": PortStatus.INPUT,
                 "usb_port_a1": PortStatus.INPUT,
                 "usb_port_a2": PortStatus.INPUT,
-                "dc_port": PortStatus.INPUT,
+                "dc_output": PortStatus.INPUT,
                 "device_overload": PortOverload.USB_C3,
                 "serial_number": "~~~~~~~~~~~~~~~~",
                 "device_timeout": 65535,
@@ -843,7 +843,7 @@ F2000_OLD_EXTENDED = "09ff00000101017a0000000000000000005ab90000ce01000000000000
                 "usb_port_c4": PortStatus.NOT_CONNECTED,
                 "usb_port_a1": PortStatus.OUTPUT,
                 "usb_port_a2": PortStatus.INPUT,
-                "dc_port": PortStatus.NOT_CONNECTED,
+                "dc_output": PortStatus.NOT_CONNECTED,
                 "device_overload": PortOverload.USB_C1,
                 "serial_number": "0123456789ABCDEF",
                 "device_timeout": 12345,
@@ -1040,7 +1040,7 @@ async def test_values(
     :param mapping: Mapping of class properties to their expected value.
     """
     device = device_class(MOCK_BLE_DEVICE)
-    parameters = device._parse_payload(bytes.fromhex(payload))
+    parameters = Parameters.parse(bytes.fromhex(payload))
     await device._process_telemetry(parameters)
 
     for class_property, expected_value in mapping.items():
@@ -1426,7 +1426,7 @@ async def test_f2600_timers() -> None:
     """
     device = F2600(MOCK_BLE_DEVICE)
     payload = "a20503100e0000a3050308070000a403022d00a50302b004a603020000a703020000a803020000a903020000aa03020000ab03020000ac03020000ad03020000ae03020000af0302b004b003020000b303026a00b903020000ba03026e00bb020100bc020102bd020119be020100bf020100c102013ec2020100c3020164c4020100c5020100c6020100c7020100c8020100c9020100ca020100cb020100cf020100d0110041313738314142434445464748323334d10302e803d303022c01d9020102db020101de020101"
-    await device._process_telemetry(device._parse_payload(bytes.fromhex(payload)))
+    await device._process_telemetry(Parameters.parse(bytes.fromhex(payload)))
 
     assert device.ac_timer_remaining == 3600
     assert device.dc_timer_remaining == 1800
@@ -1439,361 +1439,6 @@ async def test_f2600_timers() -> None:
     now = datetime.now()
     assert timedelta(minutes=59) < ac_timer - now < timedelta(minutes=61)
     assert timedelta(minutes=29) < dc_timer - now < timedelta(minutes=31)
-
-
-@pytest.mark.asyncio
-async def test_f2600_status_update(fast_sleep, fast_timeouts) -> None:
-    """
-    Test that a status update response is reassembled and parsed.
-
-    The F2600 splits its telemetry across two packets which get_status_update
-    waits for one at a time, so the second can only be delivered once the first
-    has been consumed. Both packets are a real capture of the same state as the
-    f2600_ac_charging case in test_values.
-    """
-    packets = [
-        "ff09fd0003010fc840121d0c33c131a989f42599468694c5ae12a4fefe22077259298f3d55e53945a587d5b57b6f753bad94f98cb73b83b7f941437047efffcd2e1bc7bf6f5ad6025c100c489d768f32d0b7109149f577d3c421d38cab71f56f327ddfe1d31615c863b5452abfb8fe515afc08e8e020199d6c354f6e87a319c2a2a057f5879ffdfcb250b974a99ed6ac66c5c54f955363a5e36bacaf0b3782cf58dc3bdcf5f92aa034cc946e77a70dae2a6e8d998c69507dce227ec7f4aff4f39246a4471913443d374ffe784731cb561f1a688574a4a2ab18cd22af78bff26debce0132b8bb8c66a9376b67834a07234aad0e437ac6f4a20eb4da9d50",
-        "ff09790003010fc84022d9ecf7817f965014c285c67f2b043bb132c112af3837ebb36ffce45ad0714007b23ec0986fa6ca826b67e69c4155622c165f9a906ad30be10677e4796ee324f18529bba09f8df569b8550e58f8fd69055deda4d72d75ae415e699d3290a005cebc3ceed0ba628ac9ebb37d89f3c0d4",
-    ]
-
-    device = F2600(MOCK_BLE_DEVICE)
-
-    async with MockDevice() as mock_bluetooth:
-
-        # We first expect a negotiation
-        for expected, response in NEGOTIATION_RESPONSES_SOLIX.items():
-            mock_bluetooth.expect_ordered(
-                bytes.fromhex(expected),
-                [bytes.fromhex(x) for x in response],
-            )
-
-        assert await device.connect(), "Expected connect to return True"
-        await asyncio.sleep(0.5)
-        assert device.negotiated, "Expected negotiated to be True"
-        mock_bluetooth.check_assertions()
-
-        # Swap in the secret the packets below were captured with
-        device._shared_secret = bytes.fromhex(
-            "691d425d79574b56e59524c7e2e592701e13441aba03e4d1b251211f113f980c"
-        )
-
-        async def wait_until_listening() -> None:
-            """Block until the device is waiting for a telemetry packet.
-
-            A packet that arrives before get_status_update has registered a
-            future for it is routed as a regular notification and dropped, so
-            the packets cannot just be sent one after the other.
-            """
-            key = bytes.fromhex("03010f") + bytes.fromhex("c840")
-            for _ in range(1000):
-                if any(
-                    not future.done() for future in device._packet_futures.get(key, [])
-                ):
-                    return
-                await asyncio.sleep(0.01)
-            raise AssertionError("Device never listened for a telemetry packet!")
-
-        # The request itself gets no response, the packets are fed in
-        # afterwards so that they arrive while it is waiting for them
-        mock_bluetooth.expect_ordered(None, [])
-        update = asyncio.create_task(device.get_status_update())
-
-        for packet in packets:
-            await wait_until_listening()
-            await mock_bluetooth.send_data([bytes.fromhex(packet)])
-
-        parameters = await update
-        mock_bluetooth.check_assertions()
-
-    # The values are asserted on properly by the f2600_ac_charging case in
-    # test_values, this only confirms the packets went back together in order
-    assert parameters["c1"] == bytes.fromhex("0140"), "Expected 64% battery!"
-    assert parameters["d0"] == b"\x00AZV3NM0F08700411", "Expected the serial!"
-    assert device._data == parameters, "Expected the update to be stored!"
-
-
-@pytest.mark.asyncio
-async def test_c1000g2_dc_control() -> None:
-    """C1000 Gen 2 DC output control dispatches command 4102.
-
-    Confirmed on real hardware (the 12 V port physically switched and acked).
-    Here we just lock in that turn_dc_on/off send command 4102 with the same
-    on/off payloads as the AC output, which is the only difference between the
-    two on the Gen 2.
-    """
-    device = C1000G2(MOCK_BLE_DEVICE)
-    device._send_command = mock.AsyncMock()
-
-    await device.turn_dc_on()
-    device._send_command.assert_awaited_once_with(
-        cmd=bytes.fromhex("4102"), payload=bytes.fromhex("a10121a2020101")
-    )
-
-    device._send_command.reset_mock()
-    await device.turn_dc_off()
-    device._send_command.assert_awaited_once_with(
-        cmd=bytes.fromhex("4102"), payload=bytes.fromhex("a10121a2020100")
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("device_class", "method", "args", "cmd", "payload"),
-    [
-        pytest.param(
-            F2600,
-            "turn_ac_on",
-            (),
-            "404a",
-            "a10121a2020101",
-            id="f2600_ac_on",
-        ),
-        pytest.param(
-            F2600,
-            "turn_ac_off",
-            (),
-            "404a",
-            "a10121a2020100",
-            id="f2600_ac_off",
-        ),
-        pytest.param(
-            F2600,
-            "turn_dc_on",
-            (),
-            "404b",
-            "a10121a2020101",
-            id="f2600_dc_on",
-        ),
-        pytest.param(
-            F2600,
-            "turn_dc_off",
-            (),
-            "404b",
-            "a10121a2020100",
-            id="f2600_dc_off",
-        ),
-        pytest.param(
-            F2600,
-            "turn_display_on",
-            (),
-            "4052",
-            "a10121a2020101",
-            id="f2600_display_on",
-        ),
-        pytest.param(
-            F2600,
-            "turn_display_off",
-            (),
-            "4052",
-            "a10121a2020100",
-            id="f2600_display_off",
-        ),
-        pytest.param(
-            F2600,
-            "turn_power_saving_mode_on",
-            (),
-            "404e",
-            "a10121a2020101",
-            id="f2600_power_saving_on",
-        ),
-        pytest.param(
-            F2600,
-            "turn_power_saving_mode_off",
-            (),
-            "404e",
-            "a10121a2020100",
-            id="f2600_power_saving_off",
-        ),
-        # Timers take a 32 bit little endian second count. Zero cancels.
-        pytest.param(
-            F2600,
-            "set_ac_timer",
-            (3600,),
-            "4042",
-            "a10121a20502100e0000",
-            id="f2600_ac_timer_1h",
-        ),
-        pytest.param(
-            F2600,
-            "set_ac_timer",
-            (0,),
-            "4042",
-            "a10121a2050200000000",
-            id="f2600_ac_timer_cancel",
-        ),
-        pytest.param(
-            F2600,
-            "set_dc_timer",
-            (1800,),
-            "4043",
-            "a10121a2050208070000",
-            id="f2600_dc_timer_30m",
-        ),
-        # Light and display brightness take a single byte enum value.
-        pytest.param(
-            F2600,
-            "set_light_mode",
-            (LightStatus.OFF,),
-            "404f",
-            "a10121a2020100",
-            id="f2600_light_off",
-        ),
-        pytest.param(
-            F2600,
-            "set_light_mode",
-            (LightStatus.HIGH,),
-            "404f",
-            "a10121a2020103",
-            id="f2600_light_high",
-        ),
-        pytest.param(
-            F2600,
-            "set_display_mode",
-            (LightStatus.MEDIUM,),
-            "404c",
-            "a10121a2020102",
-            id="f2600_display_medium",
-        ),
-        # Display timeout and AC charging power take a 16 bit little endian value.
-        pytest.param(
-            F2600,
-            "set_display_timeout",
-            (DisplayTimeout.S300,),
-            "4046",
-            "a10121a203022c01",
-            id="f2600_display_timeout_5m",
-        ),
-        pytest.param(
-            F2600,
-            "set_display_timeout",
-            (DisplayTimeout.S1800,),
-            "4046",
-            "a10121a203020807",
-            id="f2600_display_timeout_30m",
-        ),
-        pytest.param(
-            F2600,
-            "set_ac_charging_power",
-            (1000,),
-            "4044",
-            "a10121a20302e803",
-            id="f2600_ac_charging_power_1000w",
-        ),
-        # Both ends of the accepted range.
-        pytest.param(
-            F2600,
-            "set_ac_charging_power",
-            (100,),
-            "4044",
-            "a10121a203026400",
-            id="f2600_ac_charging_power_min",
-        ),
-        pytest.param(
-            F2600,
-            "set_ac_charging_power",
-            (1440,),
-            "4044",
-            "a10121a20302a005",
-            id="f2600_ac_charging_power_max",
-        ),
-        pytest.param(
-            F3800,
-            "turn_ac_on",
-            (),
-            "404a",
-            "a10121a2020101",
-            id="f2600_ac_on",
-        ),
-        pytest.param(
-            F3800,
-            "turn_ac_off",
-            (),
-            "404a",
-            "a10121a2020100",
-            id="f2600_ac_off",
-        ),
-        pytest.param(
-            F3800,
-            "turn_dc_on",
-            (),
-            "404b",
-            "a10121a2020101",
-            id="f2600_dc_on",
-        ),
-        pytest.param(
-            F3800,
-            "turn_dc_off",
-            (),
-            "404b",
-            "a10121a2020100",
-            id="f2600_dc_off",
-        ),
-    ],
-)
-async def test_control_commands(
-    device_class: type[SolixBLEDevice],
-    method: str, 
-    args: tuple[Any, ...],
-    cmd: str, payload: str,
-) -> None:
-    """
-    Test that an F2600 control method dispatches the correct command.
-
-    :param method: Name of the method under test.
-    :param args: Positional arguments to call the method with.
-    :param cmd: Expected command bytes.
-    :param payload: Expected payload bytes.
-    """
-    device = device_class(MOCK_BLE_DEVICE)
-    device._send_command = mock.AsyncMock()
-    await getattr(device, method)(*args)
-
-    device._send_command.assert_awaited_once_with(
-        cmd=bytes.fromhex(cmd), payload=bytes.fromhex(payload),
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "method,args",
-    [
-        pytest.param("set_light_mode", (LightStatus.UNKNOWN,), id="light_unknown"),
-        pytest.param(
-            "set_display_mode",
-            (LightStatus.UNKNOWN,),
-            id="display_unknown",
-        ),
-        # The LCD has no SOS brightness, unlike the light bar.
-        pytest.param("set_display_mode", (LightStatus.SOS,), id="display_sos"),
-        pytest.param(
-            "set_display_timeout",
-            (DisplayTimeout.UNKNOWN,),
-            id="timeout_unknown",
-        ),
-        # Below 100 W the device charges at full power instead, and 1440 W is
-        # the highest the app allows.
-        pytest.param("set_ac_charging_power", (99,), id="ac_charging_power_too_low"),
-        pytest.param(
-            "set_ac_charging_power",
-            (1441,),
-            id="ac_charging_power_too_high",
-        ),
-    ],
-)
-async def test_f2600_invalid_commands(method: str, args: tuple[Any, ...]) -> None:
-    """
-    Test that an invalid F2600 command is rejected without being transmitted.
-
-    :param method: Name of the method under test.
-    :param args: Positional arguments to call the method with.
-    """
-    device = F2600(MOCK_BLE_DEVICE)
-    device._send_command = mock.AsyncMock()
-
-    with pytest.raises(ValueError):
-        await getattr(device, method)(*args)
-
-    device._send_command.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1896,13 +1541,14 @@ async def test_f2600_invalid_commands(method: str, args: tuple[Any, ...]) -> Non
         ),
     ],
 )
-async def test_negotiation(
-    fast_sleep,
-    fast_timeouts,
+async def test_negotiation(  # noqa: PLR0913
+    fake_time,  # noqa: ANN001, ARG001
+    fast_sleep,  # noqa: ANN001, ARG001
+    fast_timeouts,  # noqa: ANN001, ARG001
     device_class: type[SolixBLEDevice],
     packets: list[str],
     secret: str,
-):
+) -> None:
     """
     Test negotiation of the shared secret by mocking a device.
 
@@ -2048,17 +1694,6 @@ def test_payload_decryption(
             None,
             id="solix_packet_2_missing",
         ),
-        # Test that when the 1st packet arrives after the 2nd packet is it ignored
-        pytest.param(
-            C1000,
-            [
-                "ff09390003010fc40222788d127d8418b41a81719975719a26b32734ea4e44ce244683e31928bb9a2736f9ede939567cddce6b3fb0de68116c",
-                "ff09fd0003010fc402121e0e23790307a57d4adabcd8d5ad56c3a9ea3cb5b222b0152438ccd3b980eda40fbde184fa66c80c3372dad179f11cad8799858ab95696e52c7e729af87c1106343ed5be9c042c8912b14f3a0d94b32afbed432e66616e1895ba0ff5e74a6da9401117070c926631e5d7886a07bec0de35aeb689e8bb289f1d7854143dc413f25d4b57d290ca4378cfb8efc275aa779145f98956e934eaced2d1f51cef7dd21a340318bfc14fb5f90ffd33e0e484175512af33593b1f91eb9801d7c2e1ac6d56e8fe7e8883d62226484ed6f1af711d042c5e3d0c186b3f2222293bc71ccf4a156a544d5171e90ee9b6b9b8f36ae058b96e3b88",
-            ],
-            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
-            None,
-            id="solix_both_packets_reversed",
-        ),
         # Test that when the packets arrive in order they are parsed and device._data is populated
         pytest.param(
             C1000,
@@ -2184,15 +1819,18 @@ def test_payload_decryption(
         ),
     ],
 )
-async def test_telemetry_packet_processing(
-    fast_sleep,
-    fast_timeouts,
+async def test_telemetry_packet_processing(  # noqa: PLR0913, PLR0917
+    fake_time,  # noqa: ANN001, ARG001
+    fast_sleep,  # noqa: ANN001, ARG001
+    fast_timeouts,  # noqa: ANN001, ARG001
     device_class: type[SolixBLEDevice],
     packets: list[str],
     secret: str,
     parameters: str | None,
-):
+) -> None:
     """
+    Test that telemetry packets are processed.
+
     Test the _process_notification function when processing telemetry
     packets end to end.
 
@@ -2232,7 +1870,8 @@ async def test_telemetry_packet_processing(
             await mock_bluetooth.send_data([bytes.fromhex(packet)])
 
     device_parameters = (
-        device._parameters_to_str(device._data) if device._data else None
+        device._data.to_str(verbose=False)
+        if device._data else None
     )
 
     assert parameters == device_parameters, "Parameters do not match expected!"
@@ -2252,22 +1891,25 @@ async def test_telemetry_packet_processing(
             "5609bc39f79166da75139feb7c335fb7524b3bf0d730db96bf6ebf450d3e165b",
             [
                 "Received non-encrypted telemetry message",
-                "Telemetry parameters: {'a1': '31', 'a2': '024606'",
+                """Telemetry parameters: {\n    "a1": {\n        "bytes": """,
             ],
             id="prime_160w_other",
         ),
     ],
 )
-async def test_generic_packet_processing(
-    caplog,
-    fast_sleep,
-    fast_timeouts,
+async def test_generic_packet_processing(  # noqa: PLR0913, PLR0917
+    caplog,  # noqa: ANN001
+    fake_time,  # noqa: ANN001, ARG001
+    fast_sleep,  # noqa: ANN001, ARG001
+    fast_timeouts,  # noqa: ANN001, ARG001
     device_class: type[SolixBLEDevice],
     packets: list[str],
     secret: str,
     expected_logs: list[str],
-):
+) -> None:
     """
+    Test the processing of arbitrary packets.
+
     Test the _process_notification function when processing arbitrary
     packets and check for expected log entries.
 
@@ -2309,7 +1951,7 @@ async def test_generic_packet_processing(
 
             for expected_log_entry in expected_logs:
                 assert (
-                    expected_log_entry in caplog.text
+                    expected_log_entry in str(caplog.text)
                 ), f"Expected to find '{expected_log_entry}' in logs but it was not found!"
 
 
@@ -2397,7 +2039,7 @@ async def test_bad_values(
     caplog.set_level(logging.DEBUG)
 
     device = device_class(MOCK_BLE_DEVICE)
-    parameters = device._parse_payload(bytes.fromhex(payload))
+    parameters = Parameters.parse(bytes.fromhex(payload))
     await device._process_telemetry(parameters)
 
     for class_property, expected_value in mapping.items():

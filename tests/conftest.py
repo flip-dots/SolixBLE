@@ -5,9 +5,14 @@
 """
 
 import asyncio
+from collections.abc import Generator
 from unittest import mock
 
 import pytest
+
+from SolixBLE.const import FALLBACK_TZ
+from SolixBLE.device import SolixBLEDevice
+from SolixBLE.prime_device import PrimeDevice
 
 
 @pytest.fixture
@@ -31,4 +36,22 @@ def fast_sleep():
         return await original_sleep(delay / 100)
 
     with mock.patch("asyncio.sleep", side_effect=scaled_sleep):
+        yield
+
+
+@pytest.fixture
+def fake_time() -> Generator[None, None, None]:
+    """Use the timestamp used in the test data for all packets."""
+
+    solix = bytes.fromhex("42ad8c69")
+    prime = bytes.fromhex("ef79b569")
+
+    def _mocked_timestamp(self) -> bytes:  # noqa: ANN001
+        return prime if isinstance(self, PrimeDevice) else solix
+
+    with (
+        mock.patch.object(SolixBLEDevice, "_timestamp", new=_mocked_timestamp),
+        mock.patch("SolixBLE.device.get_posix_tz", return_value=FALLBACK_TZ),
+        mock.patch("SolixBLE.prime_device.get_posix_tz", return_value=FALLBACK_TZ),
+    ):
         yield
