@@ -9,520 +9,148 @@ Thanks to Silverstone-ui and his github.com/Silverstone-ui/SolixBLEF2000 repo fo
 extended packet.
 """
 
-import json
 import logging
-from dataclasses import asdict, dataclass, field
+import time
 from datetime import datetime, timedelta
-from enum import Enum
-from typing import Optional
+from enum import IntEnum
 
 from bleak import BleakClient
+from construct import (
+    Bytes,
+    Checksum,
+    ExprAdapter,
+    Hex,
+    HexDump,
+    Int8ul,
+    Int16ub,
+    Int16ul,
+    RawCopy,
+    Rebuild,
+    Struct,
+    this,
+)
+from construct import Enum as CEnum
 
-from ..const import (
+from SolixBLE.const import (
     DEFAULT_METADATA_BOOL,
     DEFAULT_METADATA_FLOAT,
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
 )
-from ..device import SolixBLEDevice
-from ..states import ChargingStatus, LightStatus, PortStatus, TemperatureUnit
+from SolixBLE.constructs import ParameterContainer, Parameters, _get_val
+from SolixBLE.device import SolixBLEDevice
+from SolixBLE.states import (
+    ChargingStatus,
+    DisplayTimeout,
+    LightStatus,
+    PortStatus,
+    TemperatureUnit,
+)
+from SolixBLE.utilities import _to_bytes
 
 _LOGGER = logging.getLogger(__name__)
 
-class CommandType(Enum):
-    """Various command types supported by the Anker."""
-    POLL_EXTENDED = 0x01
-    AC_TIMER = 0x02
-    TWELVE_VOLT_TIMER = 0x03
-    RECHARGE_POWER = 0x80
-    SCREEN_TIMEOUT = 0x82
-    AC_OUTPUT = 0x86
-    TWELVE_VOLT_OUTPUT = 0x87
-    SCREEN_BRIGHTNESS = 0x88
-    POWER_SAVE = 0x8A
-    LED = 0x8B
-
-
-@dataclass
-class Command:
-    """Generic command class all other commands inherit from."""
-    parameters: bytearray
-    command_id: CommandType
-    length: int
-
-    HEADER = b"\x08\xee\x00\x00\x00\x02"
-
-    def to_bytes(self):
-        """Generate bytes to actually send to the Anker."""
-        output = (
-            self.HEADER
-            + self.command_id.value.to_bytes(1, byteorder="little")
-            + self.length.to_bytes(1, byteorder="little")
-            + self.parameters
-        )
-        checksum = sum(output) & 0xFF
-        command = output + bytes([checksum])
-        return command
-
-@dataclass
-class PollExtendedCommand(Command):
-    """Requests an extended telemetry packet."""
-
-    # overriding the header, apparently that last byte is some undiscovered field
-    HEADER = b"\x08\xee\x00\x00\x00\x01"
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.POLL_EXTENDED)
-    length: int = field(init=False, default=10)
-
-    def __post_init__(self):
-        self.parameters = bytearray(b"\x00")
-
-@dataclass
-class PowerSaveCommand(Command):
-    """Turns Power Save mode on and off."""
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.POWER_SAVE)
-    length: int = field(init=False, default=11)
-    is_on: int
-
-    def __post_init__(self):
-        if 0 <= self.is_on <= 1:
-            self.parameters = bytearray(
-                b"\x00" + self.is_on.to_bytes(1, byteorder="little")
-            )
-        else:
-            raise ValueError(f"is_on must be either 0 to 1. {self.is_on} was given.")
-
-
-@dataclass
-class AcOutputCommand(Command):
-    """Turns the AC output on and off."""
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.AC_OUTPUT)
-    length: int = field(init=False, default=11)
-    is_on: int
-
-    def __post_init__(self):
-        if 0 <= self.is_on <= 1:
-            self.parameters = bytearray(
-                b"\x00" + self.is_on.to_bytes(1, byteorder="little")
-            )
-        else:
-            raise ValueError(f"is_on must be either 0 to 1. {self.is_on} was given.")
-
-
-@dataclass
-class TwelveVoltOutputCommand(Command):
-    """Turns the 12V output on and off."""
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.TWELVE_VOLT_OUTPUT)
-    length: int = field(init=False, default=11)
-    is_on: int
-
-    def __post_init__(self):
-        if 0 <= self.is_on <= 1:
-            self.parameters = bytearray(
-                b"\x00" + self.is_on.to_bytes(1, byteorder="little")
-            )
-        else:
-            raise ValueError(f"is_on must be either 0 to 1. {self.is_on} was given.")
-
-
-@dataclass
-class ScreenBrightnessCommand(Command):
-    """Sets the display screen brightness."""
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.SCREEN_BRIGHTNESS)
-    length: int = field(init=False, default=11)
-    brightness: int
-
-    def __post_init__(self):
-        if 0 <= self.brightness <= 3:
-            self.parameters = bytearray(
-                b"\x00" + self.brightness.to_bytes(1, byteorder="little")
-            )
-        else:
-            raise ValueError(
-                f"brightness must be a value from 0 to 3. {self.brightness} was given."
-            )
-
-
-@dataclass
-class LedCommand(Command):
-    """Sets the long LED strip on the side to various levels."""
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.LED)
-    length: int = field(init=False, default=11)
-    light_level: int
-
-    def __post_init__(self):
-        if 0 <= self.light_level <= 4:
-            self.parameters = bytearray(
-                b"\x00" + self.light_level.to_bytes(1, byteorder="little")
-            )
-        else:
-            raise ValueError(
-                f"light_level must be a value from 0 to 4. {self.light_level} was given."
-            )
-
-
-@dataclass
-class RechargePowerCommand(Command):
-    """
-    Sets the amount of power (in watts) that the battery will draw from the AC input.
-    
-    Note: Not all values have been tested for this and it may be that only the canned values which appear in the Anker application are valid.
-    Those values are: 200, 300, 400, 500, 600, 750, 1440.  "silent" = 749, "high speed" = 1439
-    Note: When the battery is in charging mode, the ac_input_watts value in the Telemetry stream will include both any output wattage +
-    this recharge value.  This is confusing because that value reads zero when the battery is not charging.  This behavior is confirmed
-    working as intended via emails with Anker support.
-    """
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.RECHARGE_POWER)
-    length: int = field(init=False, default=12)
-    power: int
-
-    def __post_init__(self):
-        if 200 <= self.power <= 1440:
-            self.parameters = bytearray(
-                b"\x00" + self.power.to_bytes(2, byteorder="little")
-            )
-        else:
-            raise ValueError(
-                f"power must be a value from 200 to 1440. {self.power} was given."
-            )
-
-
-@dataclass
-class ScreenTimeoutCommand(Command):
-    """Sets the display screen timeout."""
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.SCREEN_TIMEOUT)
-    length: int = field(init=False, default=12)
-    seconds: int
-
-    def __post_init__(self):
-        if 0 <= self.seconds <= 65535:
-            self.parameters = bytearray(
-                b"\x00" + self.seconds.to_bytes(2, byteorder="little")
-            )
-        else:
-            raise ValueError(
-                f"seconds must be a value from 0 to 65,535. {self.seconds} was given."
-            )
-
-
-@dataclass
-class AcTimerCommand(Command):
-    """
-    Sets a timer for the AC output. 
-    
-    The output will turn off after this time expires.  A value of zero disables the timer.  Setting this while the output is off does nothing.
-    """
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.AC_TIMER)
-    length: int = field(init=False, default=14)
-    seconds: int
-
-    def __post_init__(self):
-        if 0 <= self.seconds <= 65535:
-            self.parameters = bytearray(
-                b"\x00" + self.seconds.to_bytes(2, byteorder="little") + b"\x00\x00"
-            )
-        else:
-            raise ValueError(
-                f"seconds must be a value from 0 to 65,535. {self.seconds} was given."
-            )
-
-
-@dataclass
-class TwelveVoltTimerCommand(Command):
-    """
-    Sets a timer for the 12V output. 
-    
-    The output will turn off after this time expires.  A value of zero disables the timer.  Setting this while the output is off does nothing.
-    """
-    parameters: bytearray = field(init=False)
-    command_id: CommandType = field(init=False, default=CommandType.TWELVE_VOLT_TIMER)
-    length: int = field(init=False, default=14)
-    seconds: int
-
-    def __post_init__(self):
-        if 0 <= self.seconds <= 65535:
-            self.parameters = bytearray(
-                b"\x00" + self.seconds.to_bytes(2, byteorder="little") + b"\x00\x00"
-            )
-        else:
-            raise ValueError(
-                f"seconds must be a value from 0 to 65,535. {self.seconds} was given."
-            )
-
-class PacketType(Enum):
-    """All notification data received is either telemetry or an ack from a command sent."""
-    TELEMETRY = 1
-    COMMAND_ACK = 2
-
-
-class TelemetryType(Enum):
-    """When a packet is telemetry it's either a state change or just telemetry."""
-    EXTENDED = 0x01 # Extended telemetry packet (only comes when polled)
-    STATE_ACK = 0x48  # Ack that gets received when command changes an output or the LED.
-    TELEMETRY = 0x49  # Telemetry that gets received when starting the notify service.
-
-
-@staticmethod
-def extract16(data: bytes, index: int) -> int:
-    """
-    Helper function to get a 16 bit integer from an array of bytes.
-
-    Args:
-        data (bytes): Array of bytes
-        index: (int): Index to get the 16 bit int from.
-
-    Returns:
-        int: The 16 bit integer extracted.
-
-    Raises:
-        IndexError: If the index given doesn't allow for a 16 bit int to be extracted.
-    """
-    return int.from_bytes(data[index : index + 2], byteorder="little")
-
-
-@dataclass
-class Header:
-    """
-    Header which contains the header bytes, packet ID, and packet length.
-    """
-
-    packet_type: PacketType
-    packet_length: int
-    telemetry_id: int
-
-    EXPECTED_PACKET_LENGTH = 10
-
-    @staticmethod
-    def from_bytes(data: bytes) -> Optional["Header"]:
-        """
-        Parse a byte sequence into a Header for an incoming Anker PowerHouse packet.
-
-        Args:
-            data (bytes): The raw byte data from the Anker PowerHouse.
-
-        Returns:
-            Header: A Header instance parsed from the given data.
-
-        Raises:
-            ValueError: If the data length is incorrect.
-            ValueError: If the packet_id field does not match a known TelemetryType.
-        """
-        # Make sure there are enough bytes for the smallest packet.
-        if len(data) < Header.EXPECTED_PACKET_LENGTH:
-            raise ValueError(
-                f"Data length not correct expected {Header.EXPECTED_PACKET_LENGTH} got {len(data)}."
-            )
-
-        packet_id = data[5]
-        telemetry_id = data[6]
-        packet_length = int.from_bytes(data[7:9], byteorder="little")
-        packet_type = PacketType(packet_id)
-
-        return Header(
-            packet_type=packet_type,
-            telemetry_id=telemetry_id,
-            packet_length=packet_length,
-        )
-
-
-@dataclass
-class CommandAck:
-    """
-    Received in response to a sent command confirming it was received.
-    """
-
-    command_type: CommandType
-
-    def pretty_print(self):
-        """Prints CommandAck nicely."""
-        command_ack = asdict(self)
-
-        # Custom encoder function for custom types that can't be serialized by json.
-        def custom_encoder(obj):
-            if isinstance(obj, CommandType):
-                return str(obj)
-            raise TypeError(
-                f"Object of type {obj.__class__.__name__} is not JSON serializable"
-            )
-
-        print(json.dumps(command_ack, indent=4, default=custom_encoder))
-
-
-@dataclass
-class StateAck:
-    """
-    Received when various physical buttons are pressed or commands are sent to change the state of the outputs.
-    """
-
-    ac_outlet_on: bool
-    twelve_volt_on: bool
-    power_save_on: bool
-    light_status: LightStatus
-
-    def pretty_print(self):
-        """Prints StateAck nicely."""
-        state_ack = asdict(self)
-
-        # Custom encoder function just for LightStatus
-        def custom_encoder(obj):
-            if isinstance(obj, LightStatus):
-                return str(obj)
-            raise TypeError(
-                f"Object of type {obj.__class__.__name__} is not JSON serializable"
-            )
-
-        print(json.dumps(state_ack, indent=4, default=custom_encoder))
-
-
-@dataclass
-class Output:
-    """Outputs have on/off state, the output wattage, and if supported, timer remaining."""
-
-    is_on: bool
-    watts: int
-    time_remaining: Optional[timedelta] = (
-        None  # If the output supports this, time remaining before this output is turned off.
-    )
-
-
-@dataclass
-class Battery:
-    """Battries have temperature and percentage.  Currently only the internal battery and a single external battery appear to be supported"""
-    temperature: int
-    percentage: int
-
-class Telemetry: # pylint: disable=too-many-instance-attributes
-    """All data received in the notification from the Anker."""
-    def __init__(self):
-            
-        
-        self.battery_remaining = timedelta(0)
-        self.time_remaining = DEFAULT_METADATA_FLOAT
-        self.days_remaining = DEFAULT_METADATA_INT
-        self.hours_remaining = DEFAULT_METADATA_FLOAT
-        self.ac_outlet = Output(is_on=DEFAULT_METADATA_BOOL, watts=DEFAULT_METADATA_INT, time_remaining=None)
-        self.twelve_volt_1 = Output(is_on=DEFAULT_METADATA_BOOL, watts=DEFAULT_METADATA_INT, time_remaining=None)
-        self.twelve_volt_2 = Output(is_on=DEFAULT_METADATA_BOOL, watts=DEFAULT_METADATA_INT, time_remaining=None)
-        self.usb_c_1 = Output(is_on=DEFAULT_METADATA_BOOL, watts=DEFAULT_METADATA_INT, time_remaining=None)
-        self.usb_c_2 = Output(is_on=DEFAULT_METADATA_BOOL, watts=DEFAULT_METADATA_INT, time_remaining=None)
-        self.usb_c_3 = Output(is_on=DEFAULT_METADATA_BOOL, watts=DEFAULT_METADATA_INT, time_remaining=None)
-        self.usb_a_1 = Output(is_on=DEFAULT_METADATA_BOOL, watts=DEFAULT_METADATA_INT, time_remaining=None)
-        self.usb_a_2 = Output(is_on=DEFAULT_METADATA_BOOL, watts=DEFAULT_METADATA_INT, time_remaining=None)
-        self.total_output_watts = DEFAULT_METADATA_INT
-        self.ac_input_watts = DEFAULT_METADATA_INT # Note this is only while charging and includes the output wattage (which is confusing but confirmed by Anker).
-        self.solar_input_watts = DEFAULT_METADATA_INT
-        self.total_input_watts = DEFAULT_METADATA_INT
-        self.internal_battery = Battery(temperature=DEFAULT_METADATA_INT, percentage=DEFAULT_METADATA_INT)
-        self.external_battery = Battery(temperature=DEFAULT_METADATA_INT, percentage=DEFAULT_METADATA_INT)
-        self.charging_status = ChargingStatus.UNKNOWN
-        self.battery_health = DEFAULT_METADATA_INT
-        self.device_serial = DEFAULT_METADATA_STRING
-        self.recharge_power_limit = DEFAULT_METADATA_INT
-        self.screen_timeout = DEFAULT_METADATA_INT
-        self.screen_brightness = LightStatus.UNKNOWN
-        self.power_save_status = DEFAULT_METADATA_INT
-        self.led_light_level = LightStatus.UNKNOWN
-        self.temperature_unit = TemperatureUnit.UNKNOWN
-        self.firmware_version = DEFAULT_METADATA_STRING
-        self.last_command_type = None
-
-    def from_bytes(self, data: bytes) -> None: # pylint: disable=too-many-locals
-        """
-        Parse a byte sequence into a Anker PowerHouse Telemetry instance.
-
-        Args:
-            data (bytes): The raw byte data from the Anker PowerHouse.
-
-        Returns:
-            Telemetry: A Telemetry instance parsed from the given data.
-
-        Raises:
-            ValueError: If the data length is incorrect.
-            ValueError: If Header can't be parsed.
-        """
-
-        if len(data) < Header.EXPECTED_PACKET_LENGTH:
-            raise ValueError(
-                f"Data not long enough, expected at least {Header.EXPECTED_PACKET_LENGTH} got {len(data)}."
-            )
-
-        header = Header.from_bytes(data)
-
-        if header.packet_type == PacketType.TELEMETRY:
-            telemetry_type = TelemetryType.TELEMETRY
-
-            # If a command was issued, the next telemetry packet's telemetry ID is the Command ID
-            # of the last command sent, so just keep it and parse the telemetry as normal.
-            if header.telemetry_id in [t.value for t in TelemetryType]:
-                telemetry_type = TelemetryType(header.telemetry_id)
-            else:
-                self.last_command_type = CommandType(header.telemetry_id)
-
-            try:
-                if telemetry_type in [TelemetryType.TELEMETRY, TelemetryType.EXTENDED]:
-                    self.days_remaining = data[18]
-                    self.hours_remaining = data[17] / 10.0
-                    self.battery_remaining = timedelta(days=self.days_remaining, hours=self.hours_remaining)
-                    self.ac_outlet = Output(is_on=data[63], watts=extract16(data, 21))
-                    self.twelve_volt_1 = Output(
-                            is_on=data[80],
-                            watts=extract16(data, 33),
-                            time_remaining=timedelta(seconds=extract16(data, 13)),
-                        )
-                    self.twelve_volt_2 = Output(
-                            is_on=data[81],
-                            watts=extract16(data, 35),
-                            time_remaining=timedelta(seconds=extract16(data, 13)),
-                        )
-                    self.usb_c_1 = Output(is_on=data[75], watts=extract16(data, 23))
-                    self.usb_c_2 = Output(is_on=data[76], watts=extract16(data, 25))
-                    self.usb_c_3 = Output(is_on=data[77], watts=extract16(data, 27))
-                    self.usb_a_1 = Output(is_on=data[78], watts=extract16(data, 29))
-                    self.usb_a_2 = Output(is_on=data[79], watts=extract16(data, 31))
-                    self.total_output_watts = extract16(data, 41)
-                    self.ac_input_watts = extract16(data, 19)
-                    self.solar_input_watts = extract16(data, 37)
-                    self.total_input_watts = extract16(data, 39)
-                    self.firmware_version = ".".join(str(data[47]))
-                    self.internal_battery = Battery(temperature=data[66], percentage=data[70])
-                    self.external_battery = Battery(temperature=data[67], percentage=data[71])
-                    # There's an odd thing when sending some commands, the charging status briefly goes
-                    # to 3, which is an unknown value at this point.
-                    tmp_charging_status = data[68]
-                    if tmp_charging_status in [c.value for c in ChargingStatus]:
-                        self.charging_status = ChargingStatus(data[68])
-                    else:
-                        self.charging_status = ChargingStatus.UNKNOWN
-                    self.battery_health = data[72]
-                    self.device_serial = data[85:101].decode("utf-8")
-
-                    if telemetry_type == TelemetryType.EXTENDED:
-                        self.recharge_power_limit = extract16(data, 101)
-                        self.screen_timeout = extract16(data, 105)
-                        self.screen_brightness = LightStatus(data[115])
-                        self.power_save_status = data[117]
-                        self.led_light_level = LightStatus(data[118])
-                        self.temperature_unit = TemperatureUnit(data[119])
-
-                if telemetry_type == TelemetryType.STATE_ACK:
-                    self.ac_outlet.is_on = data[9]
-                    self.twelve_volt_1.is_on = data[10]
-                    self.twelve_volt_2.is_on = data[10]
-                    self.power_save_status = data[11]
-                    self.led_light_level = LightStatus(data[12])
-            except Exception as ex:
-                _LOGGER.error(f"{ex}: {header.telemetry_id}: bytes: {data.hex(' ')}")
-            
-        elif header.packet_type == PacketType.COMMAND_ACK:
-            self.last_command_type = CommandType(header.telemetry_id)
+
+CMD_GET_STATUS = "0101"
+CMD_AC_TIMER = "0202"
+CMD_DC_TIMER = "0203"
+CMD_AC_CHARGING_POWER = "0280"
+CMD_DISPLAY_TIMEOUT = "0282"
+CMD_AC_OUTPUT = "0286"
+CMD_DC_OUTPUT = "0287"
+CMD_DISPLAY_MODE = "0288"
+CMD_POWER_SAVING_MODE = "028a"
+CMD_LIGHT_MODE = "028b"
+
+PARAMETERS_INT = {
+    "value": lambda value, length: value.to_bytes(
+        length=length,
+        byteorder="little",
+        signed=False,
+    ),
+}
+
+KEY_NORM = "a1"
+KEY_EXT = "a2"
+
+
+class PacketLegacyHeader(IntEnum):
+    """Packet header in legacy Solix format. Depends on data direction."""
+
+    RECEIVE = 0x09ff
+    TRANSMIT = 0x08ee
+
+PacketLegacy = ExprAdapter(
+
+    # Structure of the packet
+    Struct(
+
+        # Bytes of packet excluding checksum
+        "content" / RawCopy(
+            Struct(
+
+                # Header of the packet
+                "header" / CEnum(Int16ub, PacketLegacyHeader),
+
+                # Pattern of the packet (e.g 000000, 000001)
+                "pattern" / Hex(Bytes(3)),
+
+                # Command of the packet (e.g turn on, off, etc)
+                "cmd" / Hex(Bytes(2)),
+
+                # Length of the entire packet
+                "length" / Rebuild(Int16ul, lambda this: 10 + len(this.payload_bytes)),
+
+                # Payload bytes of the packet (may be encrypted or fragmented)
+                "payload_bytes" / HexDump(Bytes(lambda this: this.length - 10)),
+            ),
+        ),
+
+        # Sum checksum of the packet
+        "checksum" / Hex(Checksum(
+            Int8ul,
+            lambda data: sum(data) & 0xFF,
+            this.content.data,
+        )),
+    ),
+
+    # Encoders and decoders which allow for direct access
+    # (e.g packet.cmd rather than packet.content.cmd)
+    decoder=lambda p, _: p.content.value,
+    encoder=lambda p, _: {
+            "content": {
+                "value": {
+                    "header": _get_val(p, "header", PacketLegacyHeader.TRANSMIT),
+                    "pattern": _to_bytes(_get_val(p, "pattern")),
+                    "cmd": _to_bytes(_get_val(p, "cmd")),
+                    "payload_bytes": _to_bytes(_get_val(p, "payload_bytes", b"")),
+                },
+            },
+    },
+)
+"""
+Legacy Anker device packet.
+
+This class represents a packet of a Legacy Anker device known to be used in
+early variants of the F2000. Packets are made up of a header, pattern, cmd,
+size, payload, and a checksum.
+
+Structure: <Header 2B> <Pattern 3B> <CMD 2B> <Size 2B> <Payload nB> <Checksum 1B>.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        packet = Packet.parse(packet_bytes)
+        print(f"p: {packet.pattern}, c: {packet.cmd}, b: {packet.payload_bytes}")
+
+        packet_bytes = Packet.build({
+            "pattern": "000000",
+            "cmd": "0000",
+            "payload_bytes": "",
+        })
+
+"""
 
 
 class F2000Legacy(SolixBLEDevice):
@@ -538,381 +166,701 @@ class F2000Legacy(SolixBLEDevice):
     UUID_TELEMETRY = "00008888-0000-1000-8000-00805f9b34fb"
     UUID_COMMAND = "00007777-0000-1000-8000-00805f9b34fb"
 
-    telemetry = Telemetry()
+    async def _keep_alive(self) -> int | None:
+        """On connection send a full status update request."""
+        await self.get_status_update()
+        return None
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._data_received = False
+    async def _process_telemetry_legacy(self, data: bytes, key: str) -> None:
+        """Process telemetry data from the device.
+
+        This is modified to work with legacy variants which do not use
+        the same a1, a2, ... data structure.
+
+        :param data: Payload bytes.
+        :param key: The identity of this data (a1 for standard or a2 for extended).
+        """
+        self._last_data_timestamp = time.time()
+
+        new_p = ParameterContainer(key=key, type=None, value=data)
+
+        changed = (self._data is None or self._data.get(key) is None or
+        self._data[key] != new_p)
+
+        if self._data is None:
+            self._data = Parameters.parse(b"")
+
+        if changed:
+            self._data[key] = new_p
+            _LOGGER.debug("State change detected!")
+            _LOGGER.debug(self)
+            self._run_state_changed_callbacks()
 
     async def _process_notification(
-        self, client: BleakClient, handle: int, data: bytearray
+        self, client: BleakClient, handle: int, data: bytearray,
     ) -> None:
         """Process a notification from the device."""
 
-        _LOGGER.debug(f"The client the notification is from: {client}")
+        try:
 
-        if self._client is not client:
-            _LOGGER.debug("Ignoring notification from old client")
-            return
+            _LOGGER.debug(f"The client the notification is from: {client}")
 
-        _LOGGER.debug(
-            f"Received notification from '{self.name}'. length: {len(data)}, packet: '{data.hex()}'"
+            if self._client is not client:
+                _LOGGER.debug("Ignoring notification from old client")
+                return None
+
+            # Log reception of packet
+            _LOGGER.debug(
+                f"Received notification from '{self.name}'. length: {len(data)}, packet: '{data.hex()}'"
+            )
+            self._last_packet_timestamp = time.time()
+
+            # Parse packet
+            packet = PacketLegacy.parse(data)
+            _LOGGER.debug(f"Packet: {packet}")
+            pattern = packet.pattern
+            cmd = packet.cmd
+            payload = packet.payload_bytes
+
+            # If the packet has a future registered then we just trigger that
+            # future instead of processing it here
+            if pattern + cmd in self._packet_futures:
+                _LOGGER.debug(
+                    "Packet has future(s) registered. Triggering future(s) and ignoring packet..."
+                )
+                for future in self._packet_futures[pattern + cmd]:
+
+                    # Decrypt payload
+                    payload = self._decrypt_payload(payload)
+                    future.set_result(payload)
+                return None
+
+            # Match against common message types
+            match cmd.hex():
+
+                # Normal telemetry messages
+                case "0149":
+                    _LOGGER.debug("Received normal telemetry message!")
+                    return await self._process_telemetry_legacy(data, KEY_NORM)
+
+                # Extended telemetry messages
+                case "0101":
+                    _LOGGER.debug("Received extended telemetry message!")
+                    return await self._process_telemetry_legacy(data, KEY_EXT)
+
+                case _:
+                    _LOGGER.warning(
+                        f"Unexpected message '{cmd.hex()}' sent by device! {packet}",
+                    )
+
+        except Exception:
+            _LOGGER.exception(f"Failed to process packet from {self.name}!")
+
+            return None
+
+    async def _send_packet(self, pattern: str, cmd: str, parameters: dict, **kwargs: dict) -> None:
+        """
+        Build and send packet to device.
+
+        Parameter values may use lambda functions which will be executed at
+        this point, where variables may be passed in as keyword arguments.
+        """
+        _LOGGER.debug(f"Building payload with parameters: {parameters}")
+        payload = _to_bytes(data=parameters["value"], **kwargs | { "self": self })
+        _LOGGER.debug(f"Payload bytes: {payload.hex()}")
+
+        _LOGGER.debug(f"Building packet with pattern: {pattern} and cmd: {cmd}...")
+        packet = PacketLegacy.build({
+            "pattern": bytes.fromhex(pattern),
+            "cmd": bytes.fromhex(cmd),
+            "payload_bytes": payload,
+        })
+        _LOGGER.debug(f"Built packet: {packet.hex()}")
+        _LOGGER.debug("Sending packet...")
+        await self._client.write_gatt_char(self.UUID_COMMAND, packet)
+        _LOGGER.debug("Packet sent!")
+
+    async def _send_command(self, cmd: str, parameters: dict, **kwargs: dict) -> None:
+        """Send a command to the device.
+
+        Parameter values may use lambda functions which will be executed at
+        this point, where variables may be passed in as keyword arguments.
+
+        :param cmd: 2 bytes containing command type.
+        :param parameters: Parameter dictionary to send.
+        :raises ConnectionError: If not connected/negotiated to device.
+        """
+        if not self.negotiated:
+            raise ConnectionError("Not connected to device")
+
+        await self._send_packet(
+            pattern="000000",
+            cmd=cmd,
+            parameters=parameters,
+            **kwargs,
         )
 
-        try:
-            self.telemetry.from_bytes(data)
-        except ValueError as ex:
-            _LOGGER.error(f"failed to parse telemetry packet: {ex}")
-
-        self._last_data_timestamp = datetime.now()
-        self._run_state_changed_callbacks()
-
-        # First time around poll for the extended data
-        if not self._data_received:
-            await self.send_poll_extended()
-            self._data_received = True
+    def _parse_int(
+            self,
+            key: str,
+            begin: int | None = None,
+            end: int | None = None,
+            signed: bool = False,  # noqa: FBT001, FBT002
+        ) -> int:
+            if self._data is None or self._data.get(key) is None:
+                return DEFAULT_METADATA_INT
+            return super()._parse_int(key, begin, end, signed)
 
     @property
     def negotiated(self) -> bool:
-        """There's no encryption here so just use connected."""
+        """Not applicable to this device type."""
         return self.connected
 
     @property
     def available(self) -> bool:
-        """We're available once we have data"""
-        return self.connected and self._last_data_timestamp is not None
+        """Connected to device and data is available.
+
+        :returns: True/False if the device is connected and sending telemetry.
+        """
+        return self.negotiated and self._data is not None
 
     @property
     def power_out(self) -> int:
-        """Total output power in watts"""
-        return self.telemetry.total_output_watts
+        """Total Power Out.
+
+        :returns: Total power out or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=41, end=43)
 
     @property
     def light(self) -> LightStatus:
-        """State of the unit's LED light"""
-        return self.telemetry.led_light_level
+        """Light Status.
 
-    @property
-    def time_remaining(self) -> float:
-        """Total time in hours remaining"""
-        return self.telemetry.days_remaining * 24.0 + self.telemetry.hours_remaining
-
-    @property
-    def timestamp_remaining(self) -> datetime | None:
-        """Time remaining as a datetime
-        
-        We only return this if we're actually discharging otheriwse
-        the value jumps around wildly and causes HA to record state changes with
-        every new value.  The value is useless in idle mode anyways.
+        :returns: Status of the light bar.
         """
-        if self.telemetry.charging_status == ChargingStatus.DISCHARGING:
-            return datetime.now() + self.telemetry.battery_remaining
-        else:
-            return None
+        return LightStatus(self._parse_int(KEY_EXT, begin=117, end=118))
 
     @property
     def hours_remaining(self) -> float:
-        """Hours portion of timestamp remaining"""
-        return self.telemetry.hours_remaining
+        """Time remaining to full/empty.
+
+        Note that any hours over 24 are overflowed to the
+        days remaining. Use time_remaining if you want
+        days to be included.
+
+        :returns: Hours remaining or default float value.
+        """
+        return self._parse_int(KEY_NORM, begin=17, end=18) / 10.0
 
     @property
     def days_remaining(self) -> int:
-        """Days portion of timestamp remaining"""
-        return self.telemetry.days_remaining
+        """Time remaining to full/empty.
+
+        Note that any partial days are overflowed into
+        the hours remaining. Use time_remaining if you want
+        hours to be included.
+
+        :returns: Days remaining or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=18, end=19)
+
+    @property
+    def time_remaining(self) -> float:
+        """Time remaining to full/empty in hours.
+
+        :returns: Hours remaining or default float value.
+        """
+        return (
+            (self.days_remaining * 24) + self.hours_remaining
+            if self._data is not None and self._data.get(KEY_NORM) is not None
+            else DEFAULT_METADATA_FLOAT
+        )
+
+    @property
+    def timestamp_remaining(self) -> datetime | None:
+        """Timestamp of when device will be full/empty.
+
+        :returns: Timestamp of when will be full/empty or None.
+        """
+        if self._data is None:
+            return None
+        return datetime.now() + timedelta(hours=self.time_remaining)  # noqa: DTZ005
 
     @property
     def battery_percentage(self) -> int:
-        """Battery percentage remaining"""
-        return self.telemetry.internal_battery.percentage
+        """Battery Percentage.
+
+        :returns: Percentage charge of battery or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=70, end=71)
 
     @property
-    def battery_percentage_expansion(self) -> int | None:
-        """Battery percentage remaining of the expansion battery
-        
-        Whether or not an expansion battery is currently connected still hasn't been
-        discovered, so we just assume if percentage is zero we don't have one
-        connected.  Testing with an actual expansion battery is needed to confirm.
+    def battery_percentage_expansion(self) -> int:
+        """Battery Percentage of the expansion battery.
+
+        :returns: Expansion battery percentage or 0 if not present or default int value.
         """
-        if self.telemetry.external_battery.percentage > 0:
-            return self.telemetry.external_battery.percentage
-        else:
-            return None
+        return self._parse_int(KEY_NORM, begin=71, end=72)
 
     @property
     def temperature(self) -> int:
-        """Temperature of the internal battery"""
-        return self.telemetry.internal_battery.temperature
+        """Temperature of the unit (C).
+
+        :returns: Temperature of the unit in degrees C.
+        """
+        return self._parse_int(KEY_NORM, begin=66, end=67, signed=True)
 
     @property
-    def temperature_expansion(self) -> int | None:
-        """Temperature of the expansion battery
-        
-        Similar to the expansion battery percentage we'll assume if percentage is
-        zero, we do not have an external battery.
+    def temperature_expansion(self) -> int:
+        """Temperature of the expansion battery if present (C).
+
+        :returns: Expansion temp in degrees C or 0 if not present or default int value.
         """
-        if self.battery_percentage_expansion is not None:
-            return self.telemetry.external_battery.temperature
-        else:
-            return None
+        return self._parse_int(KEY_NORM, begin=67, end=68, signed=True)
+
+    @property
+    def temperature_unit(self) -> TemperatureUnit:
+        """Configured temperature unit (returned temperature is always in degrees C).
+
+        :returns: Configured temperature unit or default int value.
+        """
+        return TemperatureUnit(self._parse_int(KEY_EXT, begin=119, end=120))
 
     @property
     def battery_health(self) -> int:
-        """Health of the battery as a percentage
-        
-        This has not been 100% confirmed as the correct value.
+        """Battery health as a percentage.
+
+        :returns: Percentage of battery health or default int value.
         """
-        return self.telemetry.battery_health
+        return self._parse_int(KEY_NORM, begin=72, end=73)
 
     @property
     def power_in(self) -> int:
-        """Total input power in watts"""
-        return self.telemetry.total_input_watts
+        """Total Power In.
+
+        :returns: Total power in or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=39, end=41)
 
     @property
     def ac_power_in(self) -> int:
-        """AC input power in watts"""
-        return self.telemetry.ac_input_watts
+        """AC Power In.
+
+        :returns: Total AC power in or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=19, end=21)
 
     @property
-    def ac_power_in_limit(self) -> int:
-        """AC input power limit in watts"""
-        return self.telemetry.recharge_power_limit
+    def ac_charging_power(self) -> int:
+        """Configured AC charging power limit in watts.
+
+        :returns: AC charging power limit or default int value.
+        """
+        return self._parse_int(KEY_EXT, begin=101, end=103)
 
     @property
     def ac_power_out(self) -> int:
-        """AC output power in watts"""
-        return self.telemetry.ac_outlet.watts
+        """AC Power Out.
+
+        :returns: AC socket output power in watts or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=21, end=23)
 
     @property
     def ac_output(self) -> PortStatus:
-        """AC output status
-        
-        Note this simply maps 0 or 1 on the F2000, which works out in the
-        PortStatus enum.
+        """AC Port Status.
+
+        PortStatus.NOT_CONNECTED signifies off.
+        PortStatus.OUTPUT signifies on.
+
+        :returns: Status of the AC port.
         """
-        if self.telemetry.ac_outlet.is_on:
-            return PortStatus(value=PortStatus.OUTPUT)
-        else:
-            return PortStatus(value=PortStatus.NOT_CONNECTED)
+        return PortStatus(self._parse_int(KEY_NORM, begin=63, end=64))
 
     @property
     def solar_power_in(self) -> int:
-        """Solar power input in watts"""
-        return self.telemetry.solar_input_watts
+        """Solar Power In.
+
+        :returns: Total solar power in or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=37, end=39)
 
     @property
     def dc_power_out(self) -> int:
-        """DC output power in watts
-        
-        We total the two ports to get total DC output watts
+        """DC Power Out.
+
+        :returns: DC power out or default int value.
         """
-        return self.telemetry.twelve_volt_1.watts + self.telemetry.twelve_volt_2.watts
+        return (self.dc_1_power_out + self.dc_2_power_out
+        if self._data is not None and self._data.get(KEY_NORM) is not None
+        else DEFAULT_METADATA_INT)
 
     @property
     def dc_1_power_out(self) -> int:
-        """DC power output for port 1"""
-        return self.telemetry.twelve_volt_1.watts
+        """DC Power out for port 1.
+
+        :returns: DC power out for port 1 or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=33, end=35)
 
     @property
     def dc_2_power_out(self) -> int:
-        """DC power output for port 2"""
-        return self.telemetry.twelve_volt_2.watts    
+        """DC Power out for port 2.
+
+        :returns: DC power out for port 2 or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=35, end=37)
 
     @property
     def dc_output(self) -> PortStatus:
-        """Whether DC output is on or not"""
-        if (self.telemetry.twelve_volt_1.is_on or self.telemetry.twelve_volt_2.is_on):
-            return PortStatus(value=PortStatus.OUTPUT)
-        else:
-            return PortStatus(value=PortStatus.NOT_CONNECTED)
+        """DC Power out for port 1.
+
+        :returns: DC power out for port 1 or default int value.
+        """
+        if (self.dc_output_1 is PortStatus.OUTPUT or
+            self.dc_output_2 is PortStatus.OUTPUT):
+            return PortStatus.OUTPUT
+        if (self.dc_output_1 is PortStatus.NOT_CONNECTED or
+            self.dc_output_2 is PortStatus.NOT_CONNECTED):
+            return PortStatus.NOT_CONNECTED
+
+        return PortStatus.UNKNOWN
+
+    @property
+    def dc_output_1(self) -> PortStatus:
+        """DC Power out for port 1.
+
+        :returns: DC power out for port 1 or default port value.
+        """
+        return PortStatus(self._parse_int(KEY_NORM, begin=80, end=81))
+
+    @property
+    def dc_output_2(self) -> PortStatus:
+        """DC Power out for port 2.
+
+        :returns: DC power out for port 2 or default port value.
+        """
+        return PortStatus(self._parse_int(KEY_NORM, begin=81, end=82))
 
     @property
     def dc_timer_remaining(self) -> int:
-        """Time remaining on DC timer in seconds"""
-        if self.telemetry.twelve_volt_1.time_remaining and self.telemetry.twelve_volt_1.time_remaining.total_seconds() > 0.0:
-            return int(self.telemetry.twelve_volt_1.time_remaining.total_seconds())
-        else:
-            return DEFAULT_METADATA_INT
+        """Time remaining on DC timer.
+
+        :returns: Seconds remaining or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=13, end=15)
 
     @property
     def dc_timer(self) -> datetime | None:
-        """Timestamp of when the DC timer will expire"""
-        if self.dc_timer_remaining > 0.0:
-            return datetime.now() + self.telemetry.twelve_volt_1.time_remaining
-    
+        """Timestamp of DC timer.
+
+        :returns: Timestamp of when DC timer expires or None.
+        """
+        if (
+            self.dc_timer_remaining not in (DEFAULT_METADATA_INT, 0)
+        ):
+            return datetime.now() + timedelta(seconds=self.dc_timer_remaining)  # noqa: DTZ005
+        return None
+
     @property
     def usb_c1_power(self) -> int:
-        """Top USB-C port power in watts"""
-        return self.telemetry.usb_c_1.watts
+        """USB C1 Power.
+
+        :returns: USB port C1 power or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=23, end=25)
 
     @property
     def usb_c2_power(self) -> int:
-        """Middle USB-C port power in watts"""
-        return self.telemetry.usb_c_2.watts
+        """USB C2 Power.
+
+        :returns: USB port C2 power or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=25, end=27)
 
     @property
     def usb_c3_power(self) -> int:
-        """Bottom USB-C port power in watts"""
-        return self.telemetry.usb_c_3.watts
+        """USB C3 Power.
+
+        :returns: USB port C3 power or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=27, end=29)
 
     @property
     def usb_a1_power(self) -> int:
-        """Top USB-A port power in watts"""
-        return self.telemetry.usb_a_1.watts
+        """USB A1 Power.
+
+        :returns: USB port A1 power or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=29, end=31)
 
     @property
     def usb_a2_power(self) -> int:
-        """Bottom USB-A port power in watts"""
-        return self.telemetry.usb_a_2.watts
+        """USB A2 Power.
+
+        :returns: USB port A2 power or default int value.
+        """
+        return self._parse_int(KEY_NORM, begin=31, end=33)
 
     @property
     def usb_port_c1(self) -> PortStatus:
-        """Top USB-C port output status"""
-        if self.telemetry.usb_c_1.is_on:
-            return PortStatus(value=PortStatus.OUTPUT)
-        else:
-            return PortStatus(value=PortStatus.NOT_CONNECTED)
+        """USB C1 Port Status.
+
+        :returns: Status of the USB C1 port.
+        """
+        return PortStatus(self._parse_int(KEY_NORM, begin=75, end=76))
 
     @property
     def usb_port_c2(self) -> PortStatus:
-        """Middle USB-C port output status"""
-        if self.telemetry.usb_c_2.is_on:
-            return PortStatus(value=PortStatus.OUTPUT)
-        else:
-            return PortStatus(value=PortStatus.NOT_CONNECTED)
+        """USB C2 Port Status.
+
+        :returns: Status of the USB C2 port.
+        """
+        return PortStatus(self._parse_int(KEY_NORM, begin=76, end=77))
 
     @property
     def usb_port_c3(self) -> PortStatus:
-        """Bottom USB-C port output status"""
-        if self.telemetry.usb_c_3.is_on:
-            return PortStatus(value=PortStatus.OUTPUT)
-        else:
-            return PortStatus(value=PortStatus.NOT_CONNECTED)
+        """USB C3 Port Status.
+
+        :returns: Status of the USB C3 port.
+        """
+        return PortStatus(self._parse_int(KEY_NORM, begin=77, end=78))
 
     @property
     def usb_port_a1(self) -> PortStatus:
-        """Top USB-A port output status"""
-        if self.telemetry.usb_a_1.is_on:
-            return PortStatus(value=PortStatus.OUTPUT)
-        else:
-            return PortStatus(value=PortStatus.NOT_CONNECTED)
+        """USB A1 Port Status.
+
+        :returns: Status of the USB A1 port.
+        """
+        return PortStatus(self._parse_int(KEY_NORM, begin=78, end=79))
 
     @property
     def usb_port_a2(self) -> PortStatus:
-        """Bottom USB-A port output status"""
-        if self.telemetry.usb_a_2.is_on:
-            return PortStatus(value=PortStatus.OUTPUT)
-        else:
-            return PortStatus(value=PortStatus.NOT_CONNECTED)
+        """USB A2 Port Status.
+
+        :returns: Status of the USB A2 port.
+        """
+        return PortStatus(self._parse_int(KEY_NORM, begin=79, end=80))
 
     @property
     def charging_status(self) -> ChargingStatus:
-        """What state the device is in, charging/discharging/etc"""
-        return self.telemetry.charging_status
+        """Charging status of the device.
+
+        :returns: Status of charging.
+        """
+        return ChargingStatus(self._parse_int(KEY_NORM, begin=68, end=69))
 
     @property
     def software_version(self) -> str:
-        """Firmware version of the unit"""
-        return self.telemetry.firmware_version
+        """Main software version.
+
+        :returns: Firmware version or default str value.
+        """
+        if self._data is None or self._data.get(KEY_NORM) is None:
+            return DEFAULT_METADATA_STRING
+
+        return ".".join(str(self._data[KEY_NORM].value_legacy[47]))
 
     @property
     def serial_number(self) -> str:
-        """Serial number of the unit"""
-        return self.telemetry.device_serial
+        """Serial number.
+
+        :returns: The serial number of the device.
+        """
+        if self._data is None or self._data.get(KEY_NORM) is None:
+            return DEFAULT_METADATA_STRING
+
+        return self._parse_string(KEY_NORM, begin=85, end=101)
 
     @property
     def power_saving_mode_enabled(self) -> bool | None:
-        if self.telemetry.power_save_status != DEFAULT_METADATA_BOOL:
-            return (self.telemetry.power_save_status == 1)
-        return self.telemetry.power_save_status
+        """Whether power saving mode is enabled.
 
-    @property
-    def screen_timeout(self) -> int | None:
-        return self.telemetry.screen_timeout
-
-    @property
-    def screen_brightness(self) -> LightStatus:
-        return self.telemetry.screen_brightness
-
-    async def send_command(self, command: Command) -> None:
-        """Send a command to the unit"""
-        if not self.connected:
-            raise ConnectionError(f"Not connected to '{self.name}', could not send command {type(command)}")
-        await self._client.write_gatt_char(self.UUID_COMMAND, command.to_bytes(), response=False)
-
-    async def set_light_mode(self, mode: LightStatus) -> None:
-        """Set the light bar mode"""
-        command = LedCommand(light_level=mode.value)
-        await self.send_command(command=command)
-        # optimistically set the light here because it doesn't update in the nominal telemetry
-        self.telemetry.led_light_level = mode
-        await self.send_poll_extended()
-
-    async def send_poll_extended(self) -> None:
-        """Send the unit a request for the extended data
-        
-        This is a one shot request
+        :returns: True if enabled, False if disabled, or default bool value.
         """
-        command = PollExtendedCommand()
-        await self.send_command(command=command)
+        return (
+            bool(self._parse_int(KEY_EXT, begin=117, end=118))
+            if self._data is not None and KEY_EXT in self._data
+            else DEFAULT_METADATA_BOOL
+        )
 
-    async def turn_power_saving_mode_on(self) -> None:
-        """Turn the power saving mode on"""
-        command = PowerSaveCommand(is_on=1)
-        await self.send_command(command=command)
-        self.telemetry.power_save_status = 1
-        await self.send_poll_extended()
+    @property
+    def display_timeout(self) -> int:
+        """Display timeout limit in seconds.
 
-    async def turn_power_saving_mode_off(self) -> None:
-        """Turn the power saving mode on"""
-        command = PowerSaveCommand(is_on=0)
-        await self.send_command(command=command)
-        self.telemetry.power_save_status = 0
-        await self.send_poll_extended()
+        :returns: Display timeout in seconds or default int value.
+        """
+        return self._parse_int(KEY_EXT, begin=105, end=107)
 
-    async def set_screen_brightness(self, brightness: LightStatus) -> None:
-        """Set screen brightness"""
-        command = ScreenBrightnessCommand(brightness=brightness.value)
-        await self.send_command(command=command)
-        self.telemetry.screen_brightness = brightness
-        await self.send_poll_extended()
+    @property
+    def display_mode(self) -> LightStatus:
+        """Configured display brightness level.
 
-    async def set_ac_power_in_limit(self, limit: int) -> None:
-        """Set the limit of the AC input power in watts"""
-        command = RechargePowerCommand(power=limit)
-        await self.send_command(command=command)
-        self.telemetry.recharge_power_limit=limit
-        await self.send_poll_extended()
+        :returns: Display brightness as LightStatus (LOW/MEDIUM/HIGH) or UNKNOWN.
+        """
+        if self._data is None or KEY_EXT not in self._data:
+            return LightStatus.UNKNOWN
+        return LightStatus(self._parse_int(KEY_EXT, begin=115, end=116))
 
-    async def turn_dc_on(self) -> None:
-        """Turn the DC (12V) output on"""
-        command = TwelveVoltOutputCommand(is_on=1)
-        await self.send_command(command=command)
+    async def get_status_update(self) -> None:
+        """Request a status update from the device.
 
-    async def turn_dc_off(self) -> None:
-        """Turn the DC (12V) output off"""
-        command = TwelveVoltOutputCommand(is_on=0)
-        await self.send_command(command=command)
+        :raises ConnectionError: If not connected to device.
+        :raises TimeoutError: If no response from device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_GET_STATUS, parameters={"value": b""})
+
+    async def set_ac_timer(self, seconds: int) -> None:
+        """Set the AC auto-off timer.
+
+        :param seconds: Seconds until AC output shuts off. Pass 0 to cancel.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=CMD_AC_TIMER,
+            parameters=PARAMETERS_INT,
+            value=seconds,
+            length=4,
+        )
+
+    async def set_dc_timer(self, seconds: int) -> None:
+        """Set the DC auto-off timer.
+
+        :param seconds: Seconds until DC output shuts off. Pass 0 to cancel.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=CMD_DC_TIMER,
+            parameters=PARAMETERS_INT,
+            value=seconds,
+            length=4,
+        )
+
+    async def set_ac_charging_power(self, watts: int) -> None:
+        """Set the AC charging power limit in watts.
+
+        :param watts: AC charging power limit in watts.
+        :raises ValueError: If power value is out of valid range.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        if watts < 200 or watts > 1440:
+            raise ValueError("AC charging power must be between 100 and 1440 W")
+
+        await self._send_command(
+            cmd=CMD_AC_CHARGING_POWER,
+            parameters=PARAMETERS_INT,
+            value=watts,
+            length=2,
+        )
+        await self.get_status_update()
+
+    async def set_display_timeout(self, timeout: DisplayTimeout) -> None:
+        """Set the status/mode of the LCD display.
+
+        :param mode: Mode/timeout to set display to (30s, 5m, 30m, etc).
+        :raises ValueError: If requested mode is invalid.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+
+        if timeout is DisplayTimeout.UNKNOWN:
+            raise ValueError("You cannot set the display timeout to unknown")
+        await self._send_command(
+            cmd=CMD_DISPLAY_TIMEOUT,
+            parameters=PARAMETERS_INT,
+            value=timeout.value,
+            length=2,
+        )
+        await self.get_status_update()
 
     async def turn_ac_on(self) -> None:
-        """Turn the ac output on"""
-        command = AcOutputCommand(is_on=1)
-        await self.send_command(command=command)
+        """Turn the AC output on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_INT, value=1, length=1)
 
     async def turn_ac_off(self) -> None:
-        """Turn the ac output off"""
-        command = AcOutputCommand(is_on=0)
-        await self.send_command(command=command)
+        """Turn the AC output off.
 
-    async def set_screen_timeout(self, seconds: int) -> None:
-        """Set the timeout for the screen in seconds"""
-        command = ScreenTimeoutCommand(seconds=seconds)
-        await self.send_command(command=command)
-        self.telemetry.screen_timeout = seconds
-        await self.send_poll_extended()
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_INT, value=0, length=1)
 
-    async def set_dc_timer(self, duration: timedelta) -> None:
-        """Set a timer which will turn off the DC output when elapsed"""
-        seconds = int(duration.total_seconds())
-        command = TwelveVoltTimerCommand(seconds=seconds)
-        await self.send_command(command=command)
+    async def turn_dc_on(self) -> None:
+        """Turn the DC output on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_INT, value=1, length=1)
+
+    async def turn_dc_off(self) -> None:
+        """Turn the DC output off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_INT, value=0, length=1)
+
+    async def set_display_mode(self, mode: LightStatus) -> None:
+        """Set the status/mode of the LCD display.
+
+        :param mode: Mode/status to set display to (off/low/med/high).
+        :raises ValueError: If requested mode is invalid.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        if mode is LightStatus.UNKNOWN:
+            raise ValueError("You cannot set the display brightness status to unknown")
+        if mode is LightStatus.SOS:
+            raise ValueError("You cannot set the display brightness status to SOS")
+        await self._send_command(
+            cmd=CMD_DISPLAY_MODE,
+            parameters=PARAMETERS_INT,
+            value=mode.value,
+            length=1,
+        )
+        await self.get_status_update()
+
+    async def turn_power_saving_mode_on(self) -> None:
+        """Turn the power saving mode on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_POWER_SAVING_MODE, parameters=PARAMETERS_INT, value=1, length=1)
+        await self.get_status_update()
+
+    async def turn_power_saving_mode_off(self) -> None:
+        """Turn the power saving mode off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_POWER_SAVING_MODE, parameters=PARAMETERS_INT, value=0, length=1)
+        await self.get_status_update()
+
+    async def set_light_mode(self, mode: LightStatus) -> None:
+        """Set the light mode of the LED bar.
+
+        :param mode: Mode to set light bar to.
+        :raises ValueError: If requested mode is invalid.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        if mode is LightStatus.UNKNOWN:
+            raise ValueError("You cannot set the light status to unknown")
+        await self._send_command(
+            cmd=CMD_LIGHT_MODE,
+            parameters=PARAMETERS_INT,
+            value=mode.value,
+            length=1,
+        )
+        await self.get_status_update()
