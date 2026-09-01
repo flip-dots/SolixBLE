@@ -3,7 +3,7 @@ name = "SolixBLE"
 version = "4.0.0b1"
 dependencies = [
   "bleak>=0.19.0",
-  "cryptography",
+  "cryptography>=43,<47",
   "pycryptodome",
   "bleak-retry-connector",
   "construct",

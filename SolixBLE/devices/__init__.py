@@ -10,6 +10,7 @@ from .c800 import C800
 from .c1000 import C1000
 from .c1000g2 import C1000G2
 from .f2000 import F2000
+from .f2000_legacy import F2000Legacy
 from .f2600 import F2600
 from .f3800 import F3800
 from .generic import Generic
@@ -27,6 +28,7 @@ __all__ = [
     "C1000",
     "C1000G2",
     "F2000",
+    "F2000Legacy",
     "F2600",
     "F3800",
     "Solarbank2",
