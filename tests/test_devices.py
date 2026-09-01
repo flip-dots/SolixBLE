@@ -18,9 +18,9 @@ from SolixBLE import (
     C800,
     C1000,
     C1000G2,
-    F2000Old,
     F2600,
     ChargingStatus,
+    F2000Legacy,
     LightStatus,
     MagGo3in1,
     PortOverload,
@@ -33,7 +33,8 @@ from SolixBLE import (
     SolixBLEDevice,
     TemperatureUnit,
 )
-from SolixBLE.devices.f2000_old import (
+from SolixBLE.constructs import Parameters
+from SolixBLE.devices.f2000_legacy import (
     AcOutputCommand,
     AcTimerCommand,
     CommandAck,
@@ -47,7 +48,6 @@ from SolixBLE.devices.f2000_old import (
     TwelveVoltOutputCommand,
 )
 from SolixBLE.devices.f3800 import F3800
-from SolixBLE.constructs import Parameters
 from SolixBLE.devices.solarbank2 import MaxLoadSB2
 from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
 from tests.const import (
@@ -57,9 +57,8 @@ from tests.const import (
 )
 from tests.helpers import MockDevice
 
-
-F2000_OLD_TELEMETRY = "09ff0000010149660000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c00000064006400000000000000000000000030313032303330343035303630373038a2"
-F2000_OLD_EXTENDED = "09ff00000101017a0000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c0000006400640000000000000000000000003031303230333034303530363037303858023c001e003c00010001000100023c00000100a0"
+F2000_LEGACY_TELEMETRY = "09ff0000010149660000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c00000064006400000000000000000000000030313032303330343035303630373038a2"
+F2000_LEGACY_EXTENDED = "09ff00000101017a0000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c0000006400640000000000000000000000003031303230333034303530363037303858023c001e003c00010001000100023c00000100a0"
 
 
 @pytest.mark.asyncio
@@ -1053,7 +1052,7 @@ async def test_values(
     ("payload", "mapping"),
     [
         pytest.param(
-            F2000_OLD_TELEMETRY,
+            F2000_LEGACY_TELEMETRY,
             {
                 "days_remaining": 185,
                 "hours_remaining": 9.0,
@@ -1080,10 +1079,10 @@ async def test_values(
                 "software_version": "2.1.5",
                 "serial_number": "0102030405060708",
             },
-            id="f2000_old_ac_load",
+            id="f2000_legacy_ac_load",
         ),
         pytest.param(
-            F2000_OLD_EXTENDED,
+            F2000_LEGACY_EXTENDED,
             {
                 "ac_power_in_limit": 600,
                 "screen_timeout": 30,
@@ -1092,14 +1091,14 @@ async def test_values(
                 "light": LightStatus.OFF,
                 "serial_number": "0102030405060708",
             },
-            id="f2000_old_extended",
+            id="f2000_legacy_extended",
         ),
     ],
 )
-def test_f2000_old_values(payload: str, mapping: dict[str, Any]) -> None:
+def test_f2000_legacy_values(payload: str, mapping: dict[str, Any]) -> None:
     """Test real F2000 telemetry with its device serial anonymized."""
-    device = F2000Old(MOCK_BLE_DEVICE)
-    # Telemetry is a class attribute in F2000Old, so isolate each test case.
+    device = F2000Legacy(MOCK_BLE_DEVICE)
+    # Telemetry is a class attribute in F2000Legacy, so isolate each test case.
     device.telemetry = Telemetry()
     device.telemetry.from_bytes(bytes.fromhex(payload))
 
@@ -1109,12 +1108,12 @@ def test_f2000_old_values(payload: str, mapping: dict[str, Any]) -> None:
         ), f"Mismatch for property '{class_property}'!"
 
 
-def test_f2000_old_state_and_command_ack() -> None:
+def test_f2000_legacy_state_and_command_ack() -> None:
     """Test state updates and command acknowledgements captured from an F2000."""
-    device = F2000Old(MOCK_BLE_DEVICE)
+    device = F2000Legacy(MOCK_BLE_DEVICE)
     device.telemetry = Telemetry()
     device.telemetry.from_bytes(
-        bytes.fromhex(F2000_OLD_EXTENDED),
+        bytes.fromhex(F2000_LEGACY_EXTENDED),
     )
     assert device.telemetry.temperature_unit == TemperatureUnit.FAHRENHEIT
 
@@ -1181,11 +1180,11 @@ def test_f2000_old_state_and_command_ack() -> None:
         ),
     ],
 )
-async def test_f2000_old_control_commands(
+async def test_f2000_legacy_control_commands(
     method: str, args: tuple[Any, ...], commands: list[str],
 ) -> None:
     """Test that F2000 control methods dispatch their checksummed commands."""
-    device = F2000Old(MOCK_BLE_DEVICE)
+    device = F2000Legacy(MOCK_BLE_DEVICE)
     device.telemetry = Telemetry()
     device.send_command = mock.AsyncMock()
 
@@ -1218,11 +1217,11 @@ async def test_f2000_old_control_commands(
         ),
     ],
 )
-async def test_f2000_old_invalid_commands(
+async def test_f2000_legacy_invalid_commands(
     method: str, args: tuple[Any, ...],
 ) -> None:
     """Test that invalid F2000 commands are rejected before transmission."""
-    device = F2000Old(MOCK_BLE_DEVICE)
+    device = F2000Legacy(MOCK_BLE_DEVICE)
     device.send_command = mock.AsyncMock()
 
     with pytest.raises(ValueError, match=r"must be"):
@@ -1231,7 +1230,7 @@ async def test_f2000_old_invalid_commands(
     device.send_command.assert_not_awaited()
 
 
-def test_f2000_old_command_validation_and_ac_timer() -> None:
+def test_f2000_legacy_command_validation_and_ac_timer() -> None:
     """Test command-only validation branches and AC timer encoding."""
     assert AcTimerCommand(seconds=3600).to_bytes().hex() == (
         "08ee00000002020e00100e000026"
@@ -1248,14 +1247,14 @@ def test_f2000_old_command_validation_and_ac_timer() -> None:
             make_command()
 
 
-def test_f2000_old_packet_errors_and_command_telemetry(caplog) -> None:
+def test_f2000_legacy_packet_errors_and_command_telemetry(caplog) -> None:
     """Test short, command-tagged, and malformed telemetry packets."""
     with pytest.raises(ValueError, match="Data length not correct"):
         Header.from_bytes(b"short")
     with pytest.raises(ValueError, match="Data not long enough"):
         Telemetry().from_bytes(b"short")
 
-    command_telemetry = bytearray.fromhex(F2000_OLD_TELEMETRY)
+    command_telemetry = bytearray.fromhex(F2000_LEGACY_TELEMETRY)
     command_telemetry[6] = CommandType.AC_OUTPUT.value
     command_telemetry[-1] = sum(command_telemetry[:-1]) & 0xFF
     telemetry = Telemetry()
@@ -1263,7 +1262,7 @@ def test_f2000_old_packet_errors_and_command_telemetry(caplog) -> None:
     assert telemetry.last_command_type == CommandType.AC_OUTPUT
     assert telemetry.total_output_watts == 462
 
-    unknown_charging_state = bytearray.fromhex(F2000_OLD_TELEMETRY)
+    unknown_charging_state = bytearray.fromhex(F2000_LEGACY_TELEMETRY)
     unknown_charging_state[68] = 3
     unknown_charging_state[-1] = sum(unknown_charging_state[:-1]) & 0xFF
     telemetry.from_bytes(unknown_charging_state)
@@ -1275,7 +1274,7 @@ def test_f2000_old_packet_errors_and_command_telemetry(caplog) -> None:
     assert "255 is not a valid LightStatus" in caplog.text
 
 
-def test_f2000_old_ack_pretty_print_helpers() -> None:
+def test_f2000_legacy_ack_pretty_print_helpers() -> None:
     """Test the JSON encoders used by acknowledgment diagnostics."""
     acknowledgements = (
         (CommandAck(CommandType.AC_OUTPUT), CommandType.AC_OUTPUT),
@@ -1293,7 +1292,7 @@ def test_f2000_old_ack_pretty_print_helpers() -> None:
     for acknowledgement, enum_value in acknowledgements:
         with (
             mock.patch(
-                "SolixBLE.devices.f2000_old.json.dumps", return_value="encoded",
+                "SolixBLE.devices.f2000_legacy.json.dumps", return_value="encoded",
             ) as dumps,
             mock.patch("builtins.print") as print_mock,
         ):
@@ -1306,9 +1305,9 @@ def test_f2000_old_ack_pretty_print_helpers() -> None:
             encoder(object())
 
 
-def test_f2000_old_optional_properties_and_output_states() -> None:
+def test_f2000_legacy_optional_properties_and_output_states() -> None:
     """Test expansion battery, timers, timestamps, and all output states."""
-    device = F2000Old(MOCK_BLE_DEVICE)
+    device = F2000Legacy(MOCK_BLE_DEVICE)
     device.telemetry = Telemetry()
 
     device.telemetry.external_battery.percentage = 75
@@ -1365,9 +1364,9 @@ def test_f2000_old_optional_properties_and_output_states() -> None:
 
 
 @pytest.mark.asyncio
-async def test_f2000_old_notification_routing() -> None:
+async def test_f2000_legacy_notification_routing() -> None:
     """Test current-client filtering, callbacks, polling, and parse failures."""
-    device = F2000Old(MOCK_BLE_DEVICE)
+    device = F2000Legacy(MOCK_BLE_DEVICE)
     device.telemetry = Telemetry()
     client = mock.MagicMock()
     client.is_connected = True
@@ -1380,7 +1379,7 @@ async def test_f2000_old_notification_routing() -> None:
     callback.assert_not_called()
 
     await device._process_notification(
-        client, 0, bytearray.fromhex(F2000_OLD_TELEMETRY),
+        client, 0, bytearray.fromhex(F2000_LEGACY_TELEMETRY),
     )
     assert device.negotiated is True
     assert device.available is True
@@ -1394,9 +1393,9 @@ async def test_f2000_old_notification_routing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_f2000_old_send_command_connection_states() -> None:
+async def test_f2000_legacy_send_command_connection_states() -> None:
     """Test direct command transmission and its disconnected guard."""
-    device = F2000Old(MOCK_BLE_DEVICE)
+    device = F2000Legacy(MOCK_BLE_DEVICE)
     command = PollExtendedCommand()
 
     with pytest.raises(ConnectionError, match="Not connected"):

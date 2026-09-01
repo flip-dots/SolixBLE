@@ -9,18 +9,23 @@ Thanks to Silverstone-ui and his github.com/Silverstone-ui/SolixBLEF2000 repo fo
 extended packet.
 """
 
+import json
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional
-import json
-import logging
 
 from bleak import BleakClient
+
+from ..const import (
+    DEFAULT_METADATA_BOOL,
+    DEFAULT_METADATA_FLOAT,
+    DEFAULT_METADATA_INT,
+    DEFAULT_METADATA_STRING,
+)
 from ..device import SolixBLEDevice
 from ..states import ChargingStatus, LightStatus, PortStatus, TemperatureUnit
-from ..const import DEFAULT_METADATA_BOOL, DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_INT, DEFAULT_METADATA_STRING
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -520,7 +525,7 @@ class Telemetry: # pylint: disable=too-many-instance-attributes
             self.last_command_type = CommandType(header.telemetry_id)
 
 
-class F2000Old(SolixBLEDevice):
+class F2000Legacy(SolixBLEDevice):
     """
     F2000 (non-P) Power Station.
 
