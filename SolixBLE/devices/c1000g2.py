@@ -10,7 +10,12 @@ from ..states import PortStatus
 #: Command sent after connecting to start the telemetry stream. Unlike the gen-1
 #: models, the Gen 2 streams nothing until it receives this subscribe command.
 CMD_SUBSCRIBE = "4100"
-SUBSCRIBE_PAYLOAD = "a10121"
+
+PARAMETERS_SUBSCRIBE = {
+    "a1": {
+        "value": "21",
+    },
+}
 
 CMD_AC_OUTPUT = "4101"
 CMD_DC_OUTPUT = "4102"
@@ -60,8 +65,8 @@ class C1000G2(SolixBLEDevice):
         it after every (re)connection.
         """
         await self._send_command(
-            cmd=bytes.fromhex(CMD_SUBSCRIBE),
-            payload=bytes.fromhex(SUBSCRIBE_PAYLOAD),
+            cmd=CMD_SUBSCRIBE,
+            parameters=PARAMETERS_SUBSCRIBE,
         )
 
     async def turn_ac_on(self) -> None:
