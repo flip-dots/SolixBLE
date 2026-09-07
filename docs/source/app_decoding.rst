@@ -239,10 +239,21 @@ The scripts are provided below for convenience in addition to being in the main 
 patch.sh
 ^^^^^^^^
 
-This script automates the patching of the Anker app
+This script automates the patching of the Anker app. This script is
+designed for MacOS and Linux.
 
 .. literalinclude :: ../../scripts/patch.sh
    :language: bash
+
+
+patch.bat
+^^^^^^^^^
+
+This script automates the patching of the Anker app. This script is
+designed for Windows.
+
+.. literalinclude :: ../../scripts/patch.bat
+   :language: bat
 
 
 frida.js
@@ -253,6 +264,18 @@ hooks the shared preferences, encryption, and bluetooth functions to
 log their inputs and outputs.
 
 .. literalinclude :: ../../scripts/frida.js
+   :language: javascript
+
+
+frida_2.js
+^^^^^^^^^^
+
+This is an enhanced version of the frida.js script which includes some
+additional logging functionality and more encryption hooks. If you 
+are having issues with the frida.js script not capturing encryption 
+data, then try using this one.
+
+.. literalinclude :: ../../scripts/frida_2.js
    :language: javascript
 
 

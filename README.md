@@ -50,6 +50,7 @@ See the [support table](https://solixble.readthedocs.io/en/latest) in the docume
 - F2000 (767 PowerHouse)
 - F2600
 - F3800
+- Solarbank 1
 - Solarbank 2
 - Solarbank 3
 - Prime Charger 160w

@@ -4,6 +4,7 @@
 
 """
 
+
 from .c300 import C300
 from .c300dc import C300DC
 from .c800 import C800
@@ -17,6 +18,7 @@ from .maggo_3in1 import MagGo3in1
 from .prime_charger_160w import PrimeCharger160w
 from .prime_charger_250w import PrimeCharger250w
 from .prime_power_bank_20k import PrimePowerBank20k
+from .solarbank1 import Solarbank1
 from .solarbank2 import Solarbank2
 from .solarbank3 import Solarbank3
 
@@ -29,6 +31,7 @@ __all__ = [
     "F2000",
     "F2600",
     "F3800",
+    "Solarbank1",
     "Solarbank2",
     "Solarbank3",
     "PrimeCharger160w",
