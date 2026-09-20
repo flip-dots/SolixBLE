@@ -68,14 +68,11 @@ NEGOTIATION_COMMAND_4 = "ff094c000300010021a140060ea168f232aedb37fb2d120c4918032
 #: Response to receiving 5th negotiation message
 NEGOTIATION_COMMAND_5 = "ff095a000300014022580bc0532a53c739adf3da7b994a7b5f221bcc16bab6392c215cb4faaf41d9d58e2c81c016e474c78eed5569147cb74a1f22ca2b3fad2e209dbbcfbdaca352034a6c479f055f68581b5f1e22348809f526"
 
-#: The private key this program uses to perform the ECDH negotiation to
-#: get a shared secret which is then used as an AES key for encrypting
-#: communications between the program and the power station. Yes I know it
-#: is bad security practice to hardcode keys but its a freaking power station
-#: talking over Bluetooth with a range of like 10m... I don't care, the only
-#: reason this has to be done at all is because Anker power stations no longer
-#: support sending telemetry in plain text after the latest firmware update.
-PRIVATE_KEY = "7dfbea61cd95cee49c458ad7419e817f1ade9a66136de3c7d5787af1458e39f4"
+#: Static AES-GCM key, nonce and additional authenticated data used on the
+#: encrypted negotiation path before the ECDH shared secret exists.
+NEGOTIATION_KEY = "b8ff7422955d4eb6d554a2c470280559"
+NEGOTIATION_NONCE = "6ba3e3f2f3a60f2971ce5d1f"
+NEGOTIATION_AAD = "3322110077665544bbaa9988ffeeddcc"
 
 # POSIX timezone to use if determining the system time zone fails
 FALLBACK_TZ = "GMT0BST,M3.5.0/1,M10.5.0"

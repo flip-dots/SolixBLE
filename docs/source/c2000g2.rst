@@ -1,0 +1,23 @@
+C2000(X) G2
+===========
+
+.. note::
+
+   The C2000 G2 negotiates on the encrypted path (see :doc:`protocols`) and its
+   current firmware requires it.
+
+   Besides the live telemetry stream the device posts a ``c490`` device summary
+   about every nine minutes: a protobuf frame with its own field set, decoded
+   into :attr:`~SolixBLE.C2000G2.summary` against the schema the frame names,
+   with the energy ledgers and the DC input voltage also exposed as properties.
+   The post is gated twice, by the realtime latch this class arms on connect
+   and by a schema map the device only holds after it has reached the vendor
+   cloud, and it cannot be requested. A unit kept off the network may never post
+   one, in which case those properties stay ``None``.
+
+.. autoclass:: SolixBLE.C2000G2
+   :members:
+   :inherited-members: connect, disconnect, add_callback, remove_callback, add_pairing_callback, remove_pairing_callback, connected, available, pairing_required, address, name, supports_telemetry, last_update, last_summary_update, summary, summary_schema
+   :special-members: __init__
+   :member-order: groupwise
+   :no-index:
