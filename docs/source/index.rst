@@ -139,6 +139,7 @@ Total power out          ❌            ❌            ✅
 Port on/off control      ✅            ✅            ❌
 Port protocol control    ❌            ❌            ❌
 Timer control            ✅            ✅            ❌
+Schedule control         ✅            ❌            ❌
 Individual port status   ✅            ✅            ✅
 Individual port voltage  ✅            ✅            ❌
 Individual port current  ✅            ✅            ❌
@@ -186,6 +187,7 @@ Contents
    Home <self>
    examples
    usage
+   protocols
    api
    limitations
    new_devices

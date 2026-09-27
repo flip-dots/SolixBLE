@@ -4,7 +4,101 @@
 
 """
 
+from dataclasses import dataclass
 from enum import Enum
+from typing import Self
+
+
+@dataclass(frozen=True)
+class PortSchedule:
+    """A port's daily on/off schedule.
+
+    The on-time and off-time triggers each carry an enable byte, an hour and
+    minute, and a weekday bitmask where bit 0 is Monday and bit 6 is Sunday
+    (``0x7f`` every day, ``0x00`` no repeat). The enable byte reads 1 when the
+    trigger is armed, 0 when cleared and 255 when it has never been set.
+    """
+
+    #: Whether the on-time trigger is armed.
+    start_switch: int
+
+    #: Hour the port turns on.
+    start_hour: int
+
+    #: Minute the port turns on.
+    start_minute: int
+
+    #: Weekday bitmask of the on-time trigger.
+    start_weekdays: int
+
+    #: Whether the off-time trigger is armed.
+    end_switch: int
+
+    #: Hour the port turns off.
+    end_hour: int
+
+    #: Minute the port turns off.
+    end_minute: int
+
+    #: Weekday bitmask of the off-time trigger.
+    end_weekdays: int
+
+    @classmethod
+    def from_record(cls, block: bytes) -> Self | None:
+        """Decode a schedule from a port's snapshot record.
+
+        :param block: The record's type and value bytes; the on-time trigger is
+            bytes 2-5 and the off-time trigger bytes 6-9, each as switch, hour,
+            minute, weekdays.
+        :returns: The schedule, or None if the record is too short.
+        """
+        if len(block) < 10:
+            return None
+        return cls(
+            start_switch=block[2],
+            start_hour=block[3],
+            start_minute=block[4],
+            start_weekdays=block[5],
+            end_switch=block[6],
+            end_hour=block[7],
+            end_minute=block[8],
+            end_weekdays=block[9],
+        )
+
+
+@dataclass(frozen=True)
+class PortTimer:
+    """A port's auto-off countdown timer.
+
+    A disarmed timer keeps its last configured and remaining seconds, so read
+    them alongside ``switch``.
+    """
+
+    #: Whether the countdown is armed.
+    switch: int
+
+    #: Configured countdown in seconds.
+    seconds: int
+
+    #: Seconds left on the countdown.
+    remaining_seconds: int
+
+    @classmethod
+    def from_record(cls, block: bytes) -> Self | None:
+        """Decode a timer from a port's snapshot record.
+
+        :param block: The record's type and value bytes; ``switch`` is byte 10
+            and the configured and remaining seconds are the little endian
+            32-bit integers at bytes 11 and 15.
+        :returns: The timer, or None if the record is too short.
+        """
+        if len(block) < 19:
+            return None
+        return cls(
+            switch=block[10],
+            seconds=int.from_bytes(block[11:15], "little"),
+            remaining_seconds=int.from_bytes(block[15:19], "little"),
+        )
 
 
 class PortStatus(Enum):
