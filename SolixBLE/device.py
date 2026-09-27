@@ -17,27 +17,34 @@ from bleak import BleakClient, BleakError
 from bleak.backends.client import BaseBleakClient
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import establish_connection
-from Crypto.Cipher import AES
-from cryptography.hazmat.primitives.asymmetric.ec import (
-    ECDH,
-    SECP256R1,
-    EllipticCurvePublicKey,
-    derive_private_key,
-)
-from cryptography.hazmat.primitives.padding import PKCS7
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 
+from SolixBLE.advertisement import CAPABILITY_ENCRYPTED_ECDH
 from SolixBLE.constructs import FragmentedPayload, Packet, ParameterDict, Parameters
-from SolixBLE.utilities import _to_bytes, get_posix_tz
+from SolixBLE.utilities import (
+    _offset_seconds_west,
+    _to_bytes,
+    cbc_decrypt,
+    cbc_encrypt,
+    ecdh_public_bytes,
+    ecdh_shared_secret,
+    gcm_decrypt,
+    gcm_encrypt,
+    generate_ecdh_key,
+    get_posix_tz,
+)
 
 from .const import (
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
     DISCONNECT_TIMEOUT,
     FALLBACK_TZ,
+    NEGOTIATION_AAD,
+    NEGOTIATION_KEY,
+    NEGOTIATION_NONCE,
     NEGOTIATION_PATTERN,
     NEGOTIATION_RESPONSE_TIMEOUT,
     NEGOTIATION_TIMEOUT,
-    PRIVATE_KEY,
     RECONNECT_ATTEMPTS_MAX,
     RECONNECT_DELAY,
     UUID_COMMAND,
@@ -61,8 +68,21 @@ class SolixBLEDevice:
     #: The maximum packet size an Anker device is able to send
     _mtu = 253
 
-    def __init__(self, ble_device: BLEDevice) -> None:
-        """Initialise device object. Does not connect automatically."""
+    #: Whether to negotiate on the encrypted (AES-GCM, ``4xxx``) path when the
+    #: advertised capability byte is not known. A known capability overrides it.
+    _DEFAULT_ENCRYPTED_NEGOTIATION: bool = False
+
+    #: The client identifier sent to the device during negotiation.
+    _UUID_STRING: str = UUID_STRING
+
+    def __init__(self, ble_device: BLEDevice, capability: int | None = None) -> None:
+        """Initialise device object. Does not connect automatically.
+
+        :param ble_device: The bleak device to wrap.
+        :param capability: The capability byte from the device's advertisement,
+            see :func:`SolixBLE.advertisement.capability_from_advertisement`.
+            It selects the negotiation path; None uses the class default.
+        """
 
         _LOGGER.debug(
             f"Initializing Solix device '{ble_device.name}' with"
@@ -83,6 +103,42 @@ class SolixBLEDevice:
         self._disconnect_event: asyncio.Event = asyncio.Event()
         self._connection_attempts: int = 0
         self._shared_secret: bytes | None = None
+        self._capability: int | None = capability
+        self._private_key: EllipticCurvePrivateKey | None = None
+        self._auth_mode: bytes | None = None
+
+    @property
+    def _encrypted_negotiation(self) -> bool:
+        """Whether the negotiation runs on the encrypted (AES-GCM, ``4xxx``) path.
+
+        Chosen from the advertised capability's ECDH bit when known, else the
+        class default.
+        """
+        if self._capability is not None:
+            return bool(self._capability & CAPABILITY_ENCRYPTED_ECDH)
+        return self._DEFAULT_ENCRYPTED_NEGOTIATION
+
+    def _generate_private_key(self) -> EllipticCurvePrivateKey:
+        """Create the ECDH private key used for one negotiation."""
+        return generate_ecdh_key()
+
+    @property
+    def _ecdh_key(self) -> EllipticCurvePrivateKey:
+        """The ECDH private key of the current negotiation, created on demand."""
+        if self._private_key is None:
+            self._private_key = self._generate_private_key()
+        return self._private_key
+
+    def _timezone_offset(self) -> bytes:
+        """Return the local UTC offset sent in the timezone confer, seconds west."""
+        return _offset_seconds_west()
+
+    async def _post_authorize(self) -> None:
+        """Run once the encrypted path reports the link authorized.
+
+        The default implementation does nothing; subclasses can override it to
+        send the commands their firmware expects right after authorization.
+        """
 
     def add_callback(self, function: Callable[[], None]) -> None:
         """Register a callback to be run on state updates.
@@ -103,7 +159,24 @@ class SolixBLEDevice:
         self._state_changed_callbacks.remove(function)
 
     async def _initiate_negotiations(self) -> None:
-        """Send the negotiation initiation command."""
+        """Send the negotiation initiation command.
+
+        A fresh ECDH key is generated for every negotiation. The encrypted path
+        opens with ``4001`` under the static GCM key; the plain-text path opens
+        with ``0001`` carrying the client identifier.
+        """
+        self._private_key = self._generate_private_key()
+
+        if self._encrypted_negotiation:
+            await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="4001",
+                parameters={ "a1": {
+                    "key": bytes.fromhex("a1"),
+                    "type": None,
+                    "value": lambda self: self._timestamp(),
+                }},
+            )
+            return
+
         await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="0001",
             parameters={
                 "a1": {
@@ -113,7 +186,7 @@ class SolixBLEDevice:
                 }, "a2": {
                     "key": bytes.fromhex("a2"),
                     "type": None,
-                    "value": UUID_STRING.encode(),
+                    "value": self._UUID_STRING.encode(),
                 },
             },
         )
@@ -378,36 +451,48 @@ class SolixBLEDevice:
             else DEFAULT_METADATA_STRING
         )
 
+    def _gcm_key_nonce(self) -> tuple[bytes, bytes]:
+        """Return the AES-GCM key and nonce for the encrypted path.
+
+        The first 16 bytes of the shared secret are the key and the next 12 the
+        nonce once negotiated; before that the static negotiation values apply.
+        """
+        if self._shared_secret is not None:
+            return self._shared_secret[:16], self._shared_secret[16:28]
+        return bytes.fromhex(NEGOTIATION_KEY), bytes.fromhex(NEGOTIATION_NONCE)
+
     def _decrypt_payload(self, payload: bytes) -> bytes:
-        """Decrypt payload using negotiated shared secret and IV if available."""
+        """Decrypt payload using negotiated shared secret and IV if available.
+
+        The encrypted path uses AES-GCM throughout (a static key before the
+        shared secret exists); the plain-text path uses AES-CBC once the shared
+        secret is negotiated.
+        """
+        if self._encrypted_negotiation:
+            key, nonce = self._gcm_key_nonce()
+            return gcm_decrypt(key, nonce, bytes.fromhex(NEGOTIATION_AAD), payload)
 
         if self._shared_secret is None:
             _LOGGER.debug("Skipping decryption as key not negotiated...")
             return payload
 
-        cipher = AES.new(
-            self._shared_secret[:16], AES.MODE_CBC, iv=self._shared_secret[16:],
-        )
-        decrypted = cipher.decrypt(payload)
-        unpadder = PKCS7(128).unpadder()
-        unpadded_data = unpadder.update(decrypted)
-        return unpadded_data + unpadder.finalize()
+        return cbc_decrypt(self._shared_secret[:16], self._shared_secret[16:], payload)
 
     def _encrypt_payload(self, payload: bytes) -> bytes:
-        """Encrypt payload using negotiated shared secret if available."""
+        """Encrypt payload using negotiated shared secret if available.
+
+        AES-GCM on the encrypted path with the MAC appended; AES-CBC on the
+        plain-text path.
+        """
+        if self._encrypted_negotiation:
+            key, nonce = self._gcm_key_nonce()
+            return gcm_encrypt(key, nonce, bytes.fromhex(NEGOTIATION_AAD), payload)
 
         if self._shared_secret is None:
             _LOGGER.debug("Skipping encryption as key not negotiated...")
             return payload
 
-        # Pad and encrypt payload
-        padder = PKCS7(128).padder()
-        padded_data = padder.update(payload)
-        padded_data += padder.finalize()
-        cipher = AES.new(
-            self._shared_secret[:16], AES.MODE_CBC, iv=self._shared_secret[16:]
-        )
-        return cipher.encrypt(padded_data)
+        return cbc_encrypt(self._shared_secret[:16], self._shared_secret[16:], payload)
 
     async def _process_telemetry(self, parameters: ParameterDict) -> None:
         """Process telemetry data from the device."""
@@ -605,6 +690,12 @@ class SolixBLEDevice:
 
         plain_text_payload = self._decrypt_payload(payload)
         _LOGGER.debug(f"Plain-text payload: {plain_text_payload.hex()}")
+
+        # The encrypted path has its own stages and status-only replies that
+        # do not parse as parameters, so it branches before the parse below.
+        if self._encrypted_negotiation:
+            await self._process_negotiation_encrypted(cmd, plain_text_payload)
+            return
         parameters = Parameters.parse(plain_text_payload)
         _LOGGER.debug(f"Parameters: {parameters.to_str(verbose=True, types=False)}")
 
@@ -630,7 +721,7 @@ class SolixBLEDevice:
                         }, "a2": {
                             "key": bytes.fromhex("a2"),
                             "type": None,
-                            "value": UUID_STRING.encode(),
+                            "value": self._UUID_STRING.encode(),
                         }, "a3": {
                             "key": bytes.fromhex("a3"),
                             "type": None,
@@ -661,7 +752,7 @@ class SolixBLEDevice:
                         }, "a2": {
                             "key": bytes.fromhex("a2"),
                             "type": None,
-                            "value": UUID_STRING.encode(),
+                            "value": self._UUID_STRING.encode(),
                         },
                     },
                 )
@@ -682,7 +773,7 @@ class SolixBLEDevice:
                         }, "a2": {
                             "key": bytes.fromhex("a2"),
                             "type": None,
-                            "value": UUID_STRING.encode(),
+                            "value": self._UUID_STRING.encode(),
                         }, "a3": {
                             "key": bytes.fromhex("a3"),
                             "type": None,
@@ -710,7 +801,7 @@ class SolixBLEDevice:
                         "a1": {
                             "key": bytes.fromhex("a1"),
                             "type": None,
-                            "value": bytes.fromhex("060ea168f232aedb37fb2d120c49180329ac72ab5ec3eb8fd30a2f252dc5e151dabccd9b1dc1e288704ca760a0d8c918e5c94823a1f609a4bf07fb4c33ee2190"),
+                            "value": ecdh_public_bytes(self._ecdh_key),
                         },
                     },
                 )
@@ -721,21 +812,12 @@ class SolixBLEDevice:
                     "Entered negotiation stage 5 due to response from device!",
                 )
 
-                # Extract public key of device from payload
-                device_public_key_bytes = bytes.fromhex("04") + parameters["a1"].value_legacy
-                _LOGGER.debug(f"Public key of device: {device_public_key_bytes.hex()}")
-                device_public_key = EllipticCurvePublicKey.from_encoded_point(
-                    SECP256R1(), device_public_key_bytes,
-                )
-
-                # Calculate the shared secret
+                # Calculate the shared secret from the device's public key.
                 # The first half of the shared secret is the encryption key
                 # and the second half is the IV
-                private_value = int.from_bytes(
-                    bytes.fromhex(PRIVATE_KEY), byteorder="big",
+                self._shared_secret = ecdh_shared_secret(
+                    self._ecdh_key, parameters["a1"].value_legacy,
                 )
-                private_key = derive_private_key(private_value, SECP256R1())
-                self._shared_secret = private_key.exchange(ECDH(), device_public_key)
                 _LOGGER.debug(f"Shared secret: {self._shared_secret.hex()}")
 
                 _LOGGER.debug("Sending stage 5 response message...")
@@ -748,7 +830,7 @@ class SolixBLEDevice:
                         }, "a2": {
                             "key": bytes.fromhex("a2"),
                             "type": None,
-                            "value": UUID_STRING.encode(),
+                            "value": self._UUID_STRING.encode(),
                         }, "a3": {
                             "key": bytes.fromhex("a3"),
                             "type": None,
@@ -778,6 +860,169 @@ class SolixBLEDevice:
                 parameters = Parameters.parse(payload)
                 _LOGGER.warning(
                     f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{parameters}'"
+                )
+
+    async def _process_negotiation_encrypted(self, cmd: bytes, plaintext: bytes) -> None:
+        """Negotiate encryption with the device on the encrypted path.
+
+        The stages mirror the plain-text path under AES-GCM: ``4001`` to
+        ``4805`` run under the static key, ``4021`` exchanges ECDH public keys,
+        and everything from ``4022`` on runs under the shared secret. ``4803``
+        carries the device's MTU and auth mode, both echoed back in ``4005``.
+        ``4027`` registers the client and ``4827`` reports the result, after
+        which :meth:`_post_authorize` runs.
+
+        :param cmd: The negotiation response command code.
+        :param plaintext: The decrypted response payload.
+        """
+        match cmd.hex():
+
+            # Negotiation stage 1
+            case "4801":
+                _LOGGER.debug(
+                    "Entered negotiation stage 1 due to response from device!",
+                )
+                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="4003",
+                    parameters={
+                        "a1": {
+                            "key": bytes.fromhex("a1"),
+                            "type": None,
+                            "value": lambda self: self._timestamp(),
+                        }, "a3": {
+                            "key": bytes.fromhex("a3"),
+                            "type": None,
+                            "value": bytes.fromhex("20"),
+                        }, "a4": {
+                            "key": bytes.fromhex("a4"),
+                            "type": None,
+                            "value": bytes.fromhex("00f0"),
+                        },
+                    },
+                )
+
+            # Negotiation stage 2
+            case "4803":
+                _LOGGER.debug(
+                    "Entered negotiation stage 2 due to response from device!",
+                )
+                parameters = Parameters.parse(plaintext)
+                self._mtu = int.from_bytes(parameters["a2"].value_legacy, byteorder="little")
+                self._auth_mode = parameters["a5"].value_legacy
+                _LOGGER.debug(f"MTU of device: {self._mtu}, auth mode: {self._auth_mode.hex()}")
+                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="4029",
+                    parameters={ "a1": {
+                        "key": bytes.fromhex("a1"),
+                        "type": None,
+                        "value": lambda self: self._timestamp(),
+                    }},
+                )
+
+            # Negotiation stage 3
+            case "4829":
+                _LOGGER.debug(
+                    "Entered negotiation stage 3 due to response from device!",
+                )
+                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="4005",
+                    parameters={
+                        "a1": {
+                            "key": bytes.fromhex("a1"),
+                            "type": None,
+                            "value": lambda self: self._timestamp(),
+                        }, "a3": {
+                            "key": bytes.fromhex("a3"),
+                            "type": None,
+                            "value": bytes.fromhex("20"),
+                        }, "a4": {
+                            "key": bytes.fromhex("a4"),
+                            "type": None,
+                            "value": self._mtu.to_bytes(2, byteorder="little"),
+                        }, "a5": {
+                            "key": bytes.fromhex("a5"),
+                            "type": None,
+                            "value": bytes.fromhex("44"),
+                        }, "a6": {
+                            "key": bytes.fromhex("a6"),
+                            "type": None,
+                            "value": self._auth_mode or bytes.fromhex("02"),
+                        },
+                    },
+                )
+
+            # Negotiation stage 4
+            case "4805":
+                _LOGGER.debug(
+                    "Entered negotiation stage 4 due to response from device!",
+                )
+                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="4021",
+                    parameters={ "a1": {
+                        "key": bytes.fromhex("a1"),
+                        "type": None,
+                        "value": ecdh_public_bytes(self._ecdh_key),
+                    }},
+                )
+
+            # Negotiation stage 5
+            case "4821":
+                _LOGGER.debug(
+                    "Entered negotiation stage 5 due to response from device!",
+                )
+                self._negotiation_timestamp = time.time()
+                parameters = Parameters.parse(plaintext)
+
+                # The first 16 bytes of the shared secret are the encryption
+                # key and the 12 bytes after that are the nonce
+                self._shared_secret = ecdh_shared_secret(
+                    self._ecdh_key, parameters["a1"].value_legacy,
+                )
+                _LOGGER.debug(f"Shared secret: {self._shared_secret.hex()}")
+
+                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="4022",
+                    parameters={
+                        "a1": {
+                            "key": bytes.fromhex("a1"),
+                            "type": None,
+                            "value": lambda self: self._timestamp(),
+                        }, "a3": {
+                            "key": bytes.fromhex("a3"),
+                            "type": None,
+                            "value": self._timezone_offset(),
+                        }, "a5": {
+                            "key": bytes.fromhex("a5"),
+                            "type": None,
+                            "value": (get_posix_tz() or FALLBACK_TZ).encode(),
+                        },
+                    },
+                )
+
+            # Negotiation stage 6
+            case "4822":
+                _LOGGER.debug(
+                    "Entered negotiation stage 6 due to response from device!"
+                )
+                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="4027",
+                    parameters={
+                        "a1": {
+                            "key": bytes.fromhex("a1"),
+                            "type": None,
+                            "value": lambda self: self._timestamp(),
+                        }, "a2": {
+                            "key": bytes.fromhex("a2"),
+                            "type": None,
+                            "value": self._UUID_STRING.encode(),
+                        },
+                    },
+                )
+
+            # Negotiation stage 7
+            case "4827":
+                _LOGGER.debug(
+                    "Entered negotiation stage 7 due to response from device!",
+                )
+                await self._post_authorize()
+
+            case _:
+                _LOGGER.warning(
+                    f"Received unexpected negotiation request response from device! cmd: '{cmd.hex()}'"
                 )
 
     def _timestamp(self) -> bytes:
@@ -1053,6 +1298,8 @@ class SolixBLEDevice:
         self._fragment_buffers = {}
         self._fragment_totals = {}
         self._shared_secret = None
+        self._private_key = None
+        self._auth_mode = None
         self._last_packet_timestamp = None
         self._negotiation_timestamp = None
         self._packet_futures: dict[bytes, list[asyncio.Future]] = {}

@@ -186,6 +186,7 @@ Contents
    Home <self>
    examples
    usage
+   protocols
    api
    limitations
    new_devices
