@@ -6,7 +6,7 @@ Constants used inside tests.
 
 from bleak import BLEDevice
 
-from SolixBLE import const, prime_device
+from SolixBLE import const
 
 MOCK_DEVICE_NAME = "Mock Device"
 """

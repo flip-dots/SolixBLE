@@ -5,7 +5,7 @@
 """
 
 from ..const import DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_STRING
-from ..device import SolixBLEDevice
+from ..solix_device import SolixBLEDevice
 
 
 class Solarbank3(SolixBLEDevice):

@@ -23,9 +23,9 @@ from SolixBLE import (
     MagGo3in1,
     PortOverload,
     PortStatus,
+    PrimeBLEDevice,
     PrimeCharger160w,
     PrimeCharger250w,
-    PrimeDevice,
     PrimePowerBank20k,
     Solarbank2,
     SolixBLEDevice,
@@ -1459,7 +1459,7 @@ async def test_telemetry_packet_processing(  # noqa: PLR0913, PLR0917
 
     negotiation_responses = (
         NEGOTIATION_RESPONSES_PRIME
-        if issubclass(device_class, PrimeDevice)
+        if issubclass(device_class, PrimeBLEDevice)
         else NEGOTIATION_RESPONSES_SOLIX
     )
 
@@ -1538,7 +1538,7 @@ async def test_generic_packet_processing(  # noqa: PLR0913, PLR0917
 
     negotiation_responses = (
         NEGOTIATION_RESPONSES_PRIME
-        if issubclass(device_class, PrimeDevice)
+        if issubclass(device_class, PrimeBLEDevice)
         else NEGOTIATION_RESPONSES_SOLIX
     )
 

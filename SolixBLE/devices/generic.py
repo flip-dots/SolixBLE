@@ -4,7 +4,7 @@
 
 """
 
-from ..device import SolixBLEDevice
+from ..solix_device import SolixBLEDevice
 
 
 class Generic(SolixBLEDevice):

@@ -5,11 +5,11 @@
 """
 
 from ..const import DEFAULT_METADATA_FLOAT
-from ..prime_device import PrimeDevice
+from ..prime_device import PrimeBLEDevice
 from ..states import PortStatus
 
 
-class PrimePowerBank20k(PrimeDevice):
+class PrimePowerBank20k(PrimeBLEDevice):
     """
     Anker Prime Power Bank 20k (220w) model.
 

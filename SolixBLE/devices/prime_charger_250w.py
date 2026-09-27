@@ -5,7 +5,7 @@
 """
 
 from ..const import DEFAULT_METADATA_FLOAT
-from ..prime_device import PrimeDevice
+from ..prime_device import PrimeBLEDevice
 from ..states import PortStatus
 
 #: Command sent after connecting to start the telemetry stream. This must
@@ -51,7 +51,7 @@ PARAMETERS_KEEP_ALIVE = {
     },
 }
 
-class PrimeCharger250w(PrimeDevice):
+class PrimeCharger250w(PrimeBLEDevice):
     """
     Anker Prime Charger (250W) model.
 

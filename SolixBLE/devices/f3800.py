@@ -11,7 +11,7 @@ from ..const import (
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
 )
-from ..device import SolixBLEDevice
+from ..solix_device import SolixBLEDevice
 from ..states import ChargingStatusF3800, PortStatus
 
 CMD_AC_OUTPUT = "404a"

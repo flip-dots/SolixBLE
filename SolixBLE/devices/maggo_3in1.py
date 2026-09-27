@@ -5,7 +5,7 @@
 """
 
 from ..const import DEFAULT_METADATA_FLOAT
-from ..prime_device import PrimeDevice
+from ..prime_device import PrimeBLEDevice
 from ..states import PortStatus
 
 #: Command sent after connecting to start the telemetry stream. Like the
@@ -15,7 +15,7 @@ CMD_SUBSCRIBE = "4200"
 SUBSCRIBE_PAYLOAD = "a10121"
 
 
-class MagGo3in1(PrimeDevice):
+class MagGo3in1(PrimeBLEDevice):
     """
     Anker MagGo 3-in-1 Wireless Charger.
 

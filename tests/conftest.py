@@ -11,8 +11,9 @@ from unittest import mock
 import pytest
 
 from SolixBLE.const import FALLBACK_TZ
-from SolixBLE.device import SolixBLEDevice
-from SolixBLE.prime_device import PrimeDevice
+from SolixBLE.device import AnkerBLEDevice
+from SolixBLE.prime_device import PrimeBLEDevice
+from SolixBLE.solix_device import SolixBLEDevice
 
 
 @pytest.fixture
@@ -47,11 +48,12 @@ def fake_time() -> Generator[None, None, None]:
     prime = bytes.fromhex("ef79b569")
 
     def _mocked_timestamp(self) -> bytes:  # noqa: ANN001
-        return prime if isinstance(self, PrimeDevice) else solix
+        return prime if isinstance(self, PrimeBLEDevice) else solix
 
     with (
+        mock.patch.object(PrimeBLEDevice, "_timestamp", new=_mocked_timestamp),
         mock.patch.object(SolixBLEDevice, "_timestamp", new=_mocked_timestamp),
-        mock.patch("SolixBLE.device.get_posix_tz", return_value=FALLBACK_TZ),
+        mock.patch("SolixBLE.solix_device.get_posix_tz", return_value=FALLBACK_TZ),
         mock.patch("SolixBLE.prime_device.get_posix_tz", return_value=FALLBACK_TZ),
     ):
         yield

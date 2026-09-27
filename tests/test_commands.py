@@ -11,8 +11,8 @@ from unittest import mock
 
 import pytest
 
-from SolixBLE.device import SolixBLEDevice
-from SolixBLE.prime_device import PrimeDevice
+from SolixBLE.prime_device import PrimeBLEDevice
+from SolixBLE.solix_device import SolixBLEDevice
 from tests.const import MOCK_BLE_DEVICE
 from tests.devices.c300 import (
     C300_TEST_COMMANDS,
@@ -84,7 +84,7 @@ async def test_send_command(
     device._encrypt_payload = lambda x: x
     with (
         mock.patch("SolixBLE.constructs.Packet.build") as mock_build,
-        mock.patch("SolixBLE.SolixBLEDevice.negotiated", return_value=True),
+        mock.patch("SolixBLE.device.AnkerBLEDevice.negotiated", return_value=True),
         pytest.raises(expected) if isinstance(expected, type) else nullcontext(),
     ):
 
@@ -94,7 +94,7 @@ async def test_send_command(
         # The send command function automatically adds a
         # timestamp to the parameters which we need to account for
         timestamp_bytes = (f"fe04{device._timestamp().hex()}"
-            if issubclass(device_class, PrimeDevice)
+            if issubclass(device_class, PrimeBLEDevice)
             else f"fe0503{device._timestamp().hex()}"
         )
 
@@ -146,8 +146,8 @@ async def test_send_command_response(  # noqa: PLR0913, PLR0917
 
     with (
         mock.patch("SolixBLE.constructs.Packet.build") as mock_build,
-        mock.patch("SolixBLE.SolixBLEDevice.negotiated", return_value=True),
-        mock.patch("SolixBLE.SolixBLEDevice._listen_for_packet") as mock_listen,
+        mock.patch("SolixBLE.device.AnkerBLEDevice.negotiated", return_value=True),
+        mock.patch("SolixBLE.device.AnkerBLEDevice._listen_for_packet") as mock_listen,
         pytest.raises(returned) if isinstance(returned, type) else nullcontext(),
     ):
         mock_listen.side_effect = [bytes.fromhex(p[2] or "") for p in listen]
@@ -159,7 +159,7 @@ async def test_send_command_response(  # noqa: PLR0913, PLR0917
         # The send command function automatically adds a
         # timestamp to the parameters which we need to account for
         timestamp_bytes = (f"fe04{device._timestamp().hex()}"
-            if issubclass(device_class, PrimeDevice)
+            if issubclass(device_class, PrimeBLEDevice)
             else f"fe0503{device._timestamp().hex()}"
         )
 

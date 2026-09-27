@@ -18,45 +18,60 @@ from bleak.backends.client import BaseBleakClient
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import establish_connection
 from Crypto.Cipher import AES
-from cryptography.hazmat.primitives.asymmetric.ec import (
-    ECDH,
-    SECP256R1,
-    EllipticCurvePublicKey,
-    derive_private_key,
-)
 from cryptography.hazmat.primitives.padding import PKCS7
 
-from SolixBLE.constructs import FragmentedPayload, Packet, ParameterDict, Parameters
-from SolixBLE.utilities import _to_bytes, get_posix_tz
-
-from .const import (
+from SolixBLE.const import (
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
     DISCONNECT_TIMEOUT,
-    FALLBACK_TZ,
-    NEGOTIATION_PATTERN,
     NEGOTIATION_RESPONSE_TIMEOUT,
     NEGOTIATION_TIMEOUT,
-    PRIVATE_KEY,
     RECONNECT_ATTEMPTS_MAX,
     RECONNECT_DELAY,
     UUID_COMMAND,
     UUID_TELEMETRY,
 )
+from SolixBLE.constructs import FragmentedPayload, Packet, ParameterDict, Parameters
+from SolixBLE.utilities import _to_bytes
 
 _LOGGER = logging.getLogger(__name__)
 
-#: The UUID sent to the device during negotiation
-UUID_STRING = "b2dc0b17-b75d-4abf-ba6e-ec7c997c23e7"
 
-
-class SolixBLEDevice:
-    """Solix BLE device object."""
+class AnkerBLEDevice:
+    """Anker BLE device object."""
 
     #: Command codes (hex) that carry telemetry for this device. Subclasses can
     #: override this if their model uses different telemetry command codes
     #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
     _TELEMETRY_COMMANDS: tuple[str, ...] = ("c402", "4300", "c405")
+
+    #: GATT address used for receiving data from the device.
+    _UUID_TELEMETRY = UUID_TELEMETRY
+
+    #: GATT address used for sending data to the device.
+    _UUID_COMMAND = UUID_COMMAND
+
+    #: Time to allow for encryption negotiations to complete.
+    _NEGOTIATION_TIMEOUT = NEGOTIATION_TIMEOUT
+
+    #: Maximum time to get no response in any negotiation stage before retrying
+    _NEGOTIATION_RESPONSE_TIMEOUT = NEGOTIATION_RESPONSE_TIMEOUT
+
+    #: Maximum number of automatic re-connection attempts the program will make.
+    _RECONNECT_ATTEMPTS_MAX = RECONNECT_ATTEMPTS_MAX
+
+    #: Time to allow for a re-connect before considering the
+    #: device to be disconnected and running state changed callbacks.
+    _DISCONNECT_TIMEOUT = DISCONNECT_TIMEOUT
+
+    #: Time to wait before re-connecting on an unexpected disconnect.
+    _RECONNECT_DELAY = RECONNECT_DELAY
+
+    #: String value for unknown string attributes.
+    _DEFAULT_METADATA_STRING = DEFAULT_METADATA_STRING
+
+    #: Int value for unknown int attributes.
+    _DEFAULT_METADATA_INT = DEFAULT_METADATA_INT
 
     #: The maximum packet size an Anker device is able to send
     _mtu = 253
@@ -65,8 +80,9 @@ class SolixBLEDevice:
         """Initialise device object. Does not connect automatically."""
 
         _LOGGER.debug(
-            f"Initializing Solix device '{ble_device.name}' with"
-            f"address '{ble_device.address}' and details '{ble_device.details}'"
+            f"Initializing device '{ble_device.name}' with "
+            f"address '{ble_device.address}', details '{ble_device.details}', "
+            f"and class '{self.__class__.__name__}'.",
         )
 
         self._ble_device: BLEDevice = ble_device
@@ -104,19 +120,15 @@ class SolixBLEDevice:
 
     async def _initiate_negotiations(self) -> None:
         """Send the negotiation initiation command."""
-        await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="0001",
-            parameters={
-                "a1": {
-                    "key": bytes.fromhex("a1"),
-                    "type": None,
-                    "value": lambda self: self._timestamp(),
-                }, "a2": {
-                    "key": bytes.fromhex("a2"),
-                    "type": None,
-                    "value": UUID_STRING.encode(),
-                },
-            },
-        )
+        return
+
+    def _decrypt_payload(self, payload: bytes) -> bytes:
+        """Decrypt payload using negotiated shared secret and IV if available."""
+        raise NotImplementedError
+
+    def _encrypt_payload(self, payload: bytes) -> bytes:
+        """Encrypt payload using negotiated shared secret if available."""
+        raise NotImplementedError
 
     async def connect(self, max_attempts: int = 3, run_callbacks: bool = True) -> bool:
         """Connect to device.
@@ -166,7 +178,7 @@ class SolixBLEDevice:
         try:
             _LOGGER.debug(f"Subscribing to notifications from device '{self.name}'!")
             await self._client.start_notify(
-                UUID_TELEMETRY, partial(self._process_notification, self._client)
+                self._UUID_TELEMETRY, partial(self._process_notification, self._client)
             )
         except BleakError:
             _LOGGER.exception(f"Error subscribing/negotiating with '{self.name}'!")
@@ -174,7 +186,7 @@ class SolixBLEDevice:
 
         # Negotiate
         try:
-            async with asyncio.timeout(NEGOTIATION_TIMEOUT):
+            async with asyncio.timeout(self._NEGOTIATION_TIMEOUT):
 
                 # While negotiations have not completed
                 while not self.negotiated:
@@ -184,7 +196,7 @@ class SolixBLEDevice:
                     if (
                         self._last_packet_timestamp is None
                         or (time.time() - self._last_packet_timestamp)
-                        > NEGOTIATION_RESPONSE_TIMEOUT
+                        > self._NEGOTIATION_RESPONSE_TIMEOUT
                     ):
 
                         _LOGGER.debug(
@@ -195,7 +207,7 @@ class SolixBLEDevice:
                     # Wait at this long to see if we get any response to
                     # our initial request in stage 0. This weird layout
                     # allows us to exit immediately when negotiation occurs
-                    for _ in range(0, NEGOTIATION_RESPONSE_TIMEOUT):
+                    for _ in range(self._NEGOTIATION_RESPONSE_TIMEOUT):
                         await asyncio.sleep(1)
                         if self.negotiated:
                             break
@@ -244,7 +256,7 @@ class SolixBLEDevice:
         for example, send a subscribe command to start a telemetry stream (see
         :class:`~SolixBLE.devices.c1000g2.C1000G2`).
         """
-        pass
+        return
 
     async def _keep_alive(self) -> int | None:
         """Execute designated keep-alive command periodically after good negotiation.
@@ -264,7 +276,7 @@ class SolixBLEDevice:
 
         :returns: Seconds to wait before calling again or None for not implemented.
         """
-        return None
+        return
 
     async def disconnect(self) -> None:
         """Disconnect from device and reset internal state.
@@ -335,7 +347,7 @@ class SolixBLEDevice:
 
         :returns: The name of the device or default string value.
         """
-        return self._ble_device.name or DEFAULT_METADATA_STRING
+        return self._ble_device.name or self._DEFAULT_METADATA_STRING
 
     @property
     def last_update(self) -> datetime | None:
@@ -359,7 +371,7 @@ class SolixBLEDevice:
         :raises IndexError: If slices invalid.
         """
         if self._data is None:
-            return DEFAULT_METADATA_INT
+            return self._DEFAULT_METADATA_INT
         int_bytes = self._data[key].value_legacy[begin:end]
         return int.from_bytes(int_bytes, byteorder="little", signed=signed)
 
@@ -375,7 +387,7 @@ class SolixBLEDevice:
         return (
             self._data[key].value_legacy[begin:end].decode("ascii")
             if self._data
-            else DEFAULT_METADATA_STRING
+            else self._DEFAULT_METADATA_STRING
         )
 
     def _decrypt_payload(self, payload: bytes) -> bytes:
@@ -597,192 +609,16 @@ class SolixBLEDevice:
         })
         _LOGGER.debug(f"Built packet: {packet.hex()}")
         _LOGGER.debug("Sending packet...")
-        await self._client.write_gatt_char(UUID_COMMAND, packet)
+        await self._client.write_gatt_char(self._UUID_COMMAND, packet)
         _LOGGER.debug("Packet sent!")
 
     async def _process_negotiation(self, cmd: bytes, payload: bytes) -> None:
         """Negotiate encryption with the device."""
-
-        plain_text_payload = self._decrypt_payload(payload)
-        _LOGGER.debug(f"Plain-text payload: {plain_text_payload.hex()}")
-        parameters = Parameters.parse(plain_text_payload)
-        _LOGGER.debug(f"Parameters: {parameters.to_str(verbose=True, types=False)}")
-
-        match cmd.hex():
-
-            # There is a "stage 0" in which we automatically send a negotiation
-            # request as soon as we establish the initial connection. That
-            # should lead to the power station sending a response landing us
-            # in stage 1.
-
-            # Negotiation stage 1
-            case "0801":
-                _LOGGER.debug(
-                    "Entered negotiation stage 1 due to response from device!",
-                )
-                _LOGGER.debug("Sending stage 1 response message...")
-                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="0003",
-                    parameters={
-                        "a1": {
-                            "key": bytes.fromhex("a1"),
-                            "type": None,
-                            "value": lambda self: self._timestamp(),
-                        }, "a2": {
-                            "key": bytes.fromhex("a2"),
-                            "type": None,
-                            "value": UUID_STRING.encode(),
-                        }, "a3": {
-                            "key": bytes.fromhex("a3"),
-                            "type": None,
-                            "value": bytes.fromhex("20"),
-                        }, "a4": {
-                            "key": bytes.fromhex("a4"),
-                            "type": None,
-                            "value": bytes.fromhex("00f0"),
-                        },
-                    },
-                )
-
-            # Negotiation stage 2
-            case "0803":
-                _LOGGER.debug(
-                    "Entered negotiation stage 2 due to response from device!",
-                )
-                self._mtu = int.from_bytes(parameters["a2"].value_legacy, byteorder="little")
-                _LOGGER.debug(f"MTU of device: {self._mtu}")
-
-                _LOGGER.debug("Sending stage 2 response message...")
-                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="0029",
-                    parameters={
-                        "a1": {
-                            "key": bytes.fromhex("a1"),
-                            "type": None,
-                            "value": lambda self: self._timestamp(),
-                        }, "a2": {
-                            "key": bytes.fromhex("a2"),
-                            "type": None,
-                            "value": UUID_STRING.encode(),
-                        },
-                    },
-                )
-
-            # Negotiation stage 3
-            case "0829":
-                _LOGGER.debug(
-                    "Entered negotiation stage 3 due to response from device!",
-                )
-                self._negotiation_timestamp = time.time()
-                _LOGGER.debug("Sending stage 3 response message...")
-                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="0005",
-                    parameters={
-                        "a1": {
-                            "key": bytes.fromhex("a1"),
-                            "type": None,
-                            "value": lambda self: self._timestamp(),
-                        }, "a2": {
-                            "key": bytes.fromhex("a2"),
-                            "type": None,
-                            "value": UUID_STRING.encode(),
-                        }, "a3": {
-                            "key": bytes.fromhex("a3"),
-                            "type": None,
-                            "value": bytes.fromhex("20"),
-                        }, "a4": {
-                            "key": bytes.fromhex("a4"),
-                            "type": None,
-                            "value": bytes.fromhex("00f0"),
-                        }, "a5": {
-                            "key": bytes.fromhex("a5"),
-                            "type": None,
-                            "value": bytes.fromhex("40"),
-                        },
-                    },
-                )
-
-            # Negotiation stage 4
-            case "0805":
-                _LOGGER.debug(
-                    "Entered negotiation stage 4 due to response from device!",
-                )
-                _LOGGER.debug("Sending stage 4 response message...")
-                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="0021",
-                    parameters={
-                        "a1": {
-                            "key": bytes.fromhex("a1"),
-                            "type": None,
-                            "value": bytes.fromhex("060ea168f232aedb37fb2d120c49180329ac72ab5ec3eb8fd30a2f252dc5e151dabccd9b1dc1e288704ca760a0d8c918e5c94823a1f609a4bf07fb4c33ee2190"),
-                        },
-                    },
-                )
-
-            # Negotiation stage 5
-            case "0821":
-                _LOGGER.debug(
-                    "Entered negotiation stage 5 due to response from device!",
-                )
-
-                # Extract public key of device from payload
-                device_public_key_bytes = bytes.fromhex("04") + parameters["a1"].value_legacy
-                _LOGGER.debug(f"Public key of device: {device_public_key_bytes.hex()}")
-                device_public_key = EllipticCurvePublicKey.from_encoded_point(
-                    SECP256R1(), device_public_key_bytes,
-                )
-
-                # Calculate the shared secret
-                # The first half of the shared secret is the encryption key
-                # and the second half is the IV
-                private_value = int.from_bytes(
-                    bytes.fromhex(PRIVATE_KEY), byteorder="big",
-                )
-                private_key = derive_private_key(private_value, SECP256R1())
-                self._shared_secret = private_key.exchange(ECDH(), device_public_key)
-                _LOGGER.debug(f"Shared secret: {self._shared_secret.hex()}")
-
-                _LOGGER.debug("Sending stage 5 response message...")
-                await self._send_packet(pattern=NEGOTIATION_PATTERN, cmd="4022",
-                    parameters={
-                        "a1": {
-                            "key": bytes.fromhex("a1"),
-                            "type": None,
-                            "value": lambda self: self._timestamp(),
-                        }, "a2": {
-                            "key": bytes.fromhex("a2"),
-                            "type": None,
-                            "value": UUID_STRING.encode(),
-                        }, "a3": {
-                            "key": bytes.fromhex("a3"),
-                            "type": None,
-                            "value": bytes.fromhex("20"),
-                        }, "a4": {
-                            "key": bytes.fromhex("a4"),
-                            "type": None,
-                            "value": bytes.fromhex("00000000"),
-                        }, "a5": {
-                            "key": bytes.fromhex("a5"),
-                            "type": None,
-                            "value": (get_posix_tz() or FALLBACK_TZ).encode(),
-                        },
-                    },
-                )
-
-            # Negotiation stage 6 (Optional)
-            # Some devices (e.g C300X) sometimes send an extra message after
-            # stage 5 but others (e.g C1000) do not. No response is needed
-            # but it does not hurt to decrypt it anyway.
-            case "4822":
-                _LOGGER.debug(
-                    "Entered negotiation stage 6 (optional) due to response from device!"
-                )
-
-            case _:
-                parameters = Parameters.parse(payload)
-                _LOGGER.warning(
-                    f"Received unexpected negotiation request response from device! cmd: '{cmd}', parameters: '{parameters}'"
-                )
+        raise NotImplementedError
 
     def _timestamp(self) -> bytes:
         """Unix timestamp in byte form (4B)."""
-        return int(time.time()).to_bytes(length=4, byteorder="little", signed=False)
+        raise NotImplementedError
 
     async def _send_command(self, cmd: str, parameters: dict, **kwargs: dict) -> None:
         """Send a command to the device.
@@ -892,8 +728,8 @@ class SolixBLEDevice:
 
         def _can_retry() -> bool:
             return (
-                self._connection_attempts < RECONNECT_ATTEMPTS_MAX
-                or RECONNECT_ATTEMPTS_MAX == -1
+                self._connection_attempts < self._RECONNECT_ATTEMPTS_MAX
+                or self._RECONNECT_ATTEMPTS_MAX == -1
             )
 
         try:
@@ -925,11 +761,11 @@ class SolixBLEDevice:
                     # Limit on amount of time we can stay disconnected before
                     # we have to trigger callbacks to let subscribers know we
                     # are disconnected
-                    async with asyncio.timeout(DISCONNECT_TIMEOUT):
+                    async with asyncio.timeout(self._DISCONNECT_TIMEOUT):
 
                         while _can_retry():
 
-                            await asyncio.sleep(RECONNECT_DELAY)
+                            await asyncio.sleep(self._RECONNECT_DELAY)
 
                             try:
                                 attempt_number = self._connection_attempts

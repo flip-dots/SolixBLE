@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 
 from SolixBLE.const import FALLBACK_TZ, NEGOTIATION_PATTERN
 from SolixBLE.constructs import Parameters
-from SolixBLE.device import SolixBLEDevice
+from SolixBLE.device import AnkerBLEDevice
 from SolixBLE.utilities import get_posix_tz
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ UUID_STRING = "79ebed35-dc9c-4904-b40c-72c4e863aa10"
 
 
 
-class PrimeDevice(SolixBLEDevice):
+class PrimeBLEDevice(AnkerBLEDevice):
     """
     This is a base class based upon SolixBLEDevice which contains logic
     unique to Anker Prime devices that is designed to be overridden for
@@ -132,6 +132,10 @@ class PrimeDevice(SolixBLEDevice):
                 "value": lambda self: self._timestamp(),
             }},
         )
+
+    def _timestamp(self) -> bytes:
+        """Unix timestamp in byte form (4B)."""
+        return int(time.time()).to_bytes(length=4, byteorder="little", signed=False)
 
     async def _process_negotiation(self, cmd: bytes, payload: bytes) -> None:
         """Negotiate encryption with the device."""

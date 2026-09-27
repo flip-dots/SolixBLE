@@ -4,7 +4,7 @@
 
 """
 
-from .device import SolixBLEDevice
+from .device import AnkerBLEDevice
 from .devices import (
     C300,
     C300DC,
@@ -22,7 +22,8 @@ from .devices import (
     Solarbank2,
     Solarbank3,
 )
-from .prime_device import PrimeDevice
+from .prime_device import PrimeBLEDevice
+from .solix_device import SolixBLEDevice
 from .states import (
     ChargingStatus,
     ChargingStatusF3800,
@@ -35,8 +36,6 @@ from .states import (
 from .utilities import discover_devices
 
 __all__ = [
-    "SolixBLEDevice",
-    "PrimeDevice",
     "C300",
     "C300DC",
     "C800",
@@ -45,19 +44,22 @@ __all__ = [
     "F2000",
     "F2600",
     "F3800",
-    "Solarbank2",
-    "Solarbank3",
-    "PrimeCharger160w",
-    "PrimeCharger250w",
-    "PrimePowerBank20k",
-    "MagGo3in1",
-    "Generic",
+    "AnkerBLEDevice",
     "ChargingStatus",
     "ChargingStatusF3800",
     "DisplayTimeout",
+    "Generic",
     "LightStatus",
-    "PortStatus",
-    "TemperatureUnit",
+    "MagGo3in1",
     "PortOverload",
+    "PortStatus",
+    "PrimeBLEDevice",
+    "PrimeCharger160w",
+    "PrimeCharger250w",
+    "PrimePowerBank20k",
+    "Solarbank2",
+    "Solarbank3",
+    "SolixBLEDevice",
+    "TemperatureUnit",
     "discover_devices",
 ]

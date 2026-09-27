@@ -4,7 +4,7 @@
 
 """
 
-from ..device import SolixBLEDevice
+from ..solix_device import SolixBLEDevice
 from ..states import PortStatus
 
 #: Command sent after connecting to start the telemetry stream. Unlike the gen-1

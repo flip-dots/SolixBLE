@@ -29,9 +29,6 @@ NEGOTIATION_TIMEOUT = 90
 #: Maximum time to get no response in any negotiation stage before retrying
 NEGOTIATION_RESPONSE_TIMEOUT = 15
 
-#: Maximum time to get no response in the 1st negotiation stage before retrying
-NEGOTIATION_RESPONSE_DELAY = 10
-
 #: String value for unknown string attributes.
 DEFAULT_METADATA_STRING = "Unknown"
 

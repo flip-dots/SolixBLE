@@ -12,7 +12,7 @@ from ..const import (
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
 )
-from ..device import SolixBLEDevice
+from ..solix_device import SolixBLEDevice
 from ..states import (
     ChargingStatus,
     DisplayTimeout,

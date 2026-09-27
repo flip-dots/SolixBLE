@@ -11,7 +11,7 @@ from ..const import (
     DEFAULT_METADATA_FLOAT,
     DEFAULT_METADATA_STRING,
 )
-from ..device import SolixBLEDevice
+from ..solix_device import SolixBLEDevice
 from ..states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode, TemperatureUnit
 
 

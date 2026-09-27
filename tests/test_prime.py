@@ -6,9 +6,8 @@ Tests for the Anker Prime specific functionality.
 
 import pytest
 
-from SolixBLE import prime_device
 from SolixBLE.constructs import Packet
-from SolixBLE.prime_device import PrimeDevice
+from SolixBLE.prime_device import PrimeBLEDevice
 from tests.const import MOCK_BLE_DEVICE
 
 
@@ -63,7 +62,7 @@ def test_negotiation_encryption_session(
     the expected one.
     """
 
-    prime = PrimeDevice(MOCK_BLE_DEVICE)
+    prime = PrimeBLEDevice(MOCK_BLE_DEVICE)
 
     payload = Packet.parse(bytes.fromhex(packet)).payload_bytes
     prime._shared_secret = bytes.fromhex(shared_secret)

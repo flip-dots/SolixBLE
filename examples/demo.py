@@ -21,6 +21,7 @@ from SolixBLE import (
     C1000G2,
     F2000,
     F3800,
+    AnkerBLEDevice,
     Generic,
     MagGo3in1,
     PrimeCharger160w,
@@ -28,7 +29,6 @@ from SolixBLE import (
     PrimePowerBank20k,
     Solarbank2,
     Solarbank3,
-    SolixBLEDevice,
     discover_devices,
 )
 
@@ -67,7 +67,7 @@ async def prompt_debug_mode():
             break
 
 
-async def prompt_select_device(devices: list[BLEDevice]) -> SolixBLEDevice:
+async def prompt_select_device(devices: list[BLEDevice]) -> AnkerBLEDevice:
     """
     Prompt the user to select the device and model they want to connect to.
 

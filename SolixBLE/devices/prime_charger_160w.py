@@ -5,7 +5,7 @@
 """
 
 from ..const import DEFAULT_METADATA_FLOAT
-from ..prime_device import PrimeDevice
+from ..prime_device import PrimeBLEDevice
 from ..states import PortStatus
 
 CMD_USB_OUTPUT = "4207"
@@ -39,7 +39,7 @@ PARAMETERS_TIMER = {
     },
 }
 
-class PrimeCharger160w(PrimeDevice):
+class PrimeCharger160w(PrimeBLEDevice):
     """
     Anker Prime Charger (160w) model.
 

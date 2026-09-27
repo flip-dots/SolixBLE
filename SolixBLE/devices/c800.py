@@ -15,7 +15,7 @@ from ..const import (
     DEFAULT_METADATA_STRING,
     TELEMETRY_PATTERN_A,
 )
-from ..device import SolixBLEDevice
+from ..solix_device import SolixBLEDevice
 from ..states import DisplayTimeout, LightStatus, PortStatus
 
 CMD_AC_OUTPUT = "404a"

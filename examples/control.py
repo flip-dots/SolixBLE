@@ -7,13 +7,13 @@
 import asyncio
 import logging
 
-from SolixBLE import C1000, SolixBLEDevice, discover_devices
+from SolixBLE import C1000, AnkerBLEDevice, discover_devices
 from SolixBLE.states import LightStatus
 
 logging.basicConfig(level=logging.DEBUG)
 
 
-async def test_ac_output(device: SolixBLEDevice):
+async def test_ac_output(device: AnkerBLEDevice):
 
     await asyncio.sleep(10)
     await device.turn_ac_on()
@@ -22,7 +22,7 @@ async def test_ac_output(device: SolixBLEDevice):
     await device.turn_ac_off()
 
 
-async def test_light_mode(device: SolixBLEDevice):
+async def test_light_mode(device: AnkerBLEDevice):
 
     await asyncio.sleep(5)
     await device.set_light_mode(LightStatus.LOW)
