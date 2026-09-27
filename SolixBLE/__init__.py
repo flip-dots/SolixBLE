@@ -4,6 +4,7 @@
 
 """
 
+from .advertisement import capability_from_advertisement
 from .device import SolixBLEDevice
 from .devices import (
     C300,
@@ -18,25 +19,29 @@ from .devices import (
     MagGo3in1,
     PrimeCharger160w,
     PrimeCharger250w,
+    PrimeChargingStation240w,
     PrimePowerBank20k,
     Solarbank2,
     Solarbank3,
 )
 from .prime_device import PrimeDevice
 from .states import (
+    AcLightMode,
+    ChargingMode,
     ChargingStatus,
     ChargingStatusF3800,
+    ClockFormat,
     DisplayTimeout,
     LightStatus,
     PortOverload,
+    PortSchedule,
     PortStatus,
+    PortTimer,
     TemperatureUnit,
 )
 from .utilities import discover_devices
 
 __all__ = [
-    "SolixBLEDevice",
-    "PrimeDevice",
     "C300",
     "C300DC",
     "C800",
@@ -45,19 +50,28 @@ __all__ = [
     "F2000",
     "F2600",
     "F3800",
-    "Solarbank2",
-    "Solarbank3",
-    "PrimeCharger160w",
-    "PrimeCharger250w",
-    "PrimePowerBank20k",
-    "MagGo3in1",
-    "Generic",
+    "AcLightMode",
+    "ChargingMode",
     "ChargingStatus",
     "ChargingStatusF3800",
+    "ClockFormat",
     "DisplayTimeout",
+    "Generic",
     "LightStatus",
-    "PortStatus",
-    "TemperatureUnit",
+    "MagGo3in1",
     "PortOverload",
+    "PortSchedule",
+    "PortStatus",
+    "PortTimer",
+    "PrimeCharger160w",
+    "PrimeCharger250w",
+    "PrimeChargingStation240w",
+    "PrimeDevice",
+    "PrimePowerBank20k",
+    "Solarbank2",
+    "Solarbank3",
+    "SolixBLEDevice",
+    "TemperatureUnit",
+    "capability_from_advertisement",
     "discover_devices",
 ]

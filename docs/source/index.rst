@@ -131,22 +131,27 @@ Expansion battery serial number     ❌           ❌
 Prime charger support
 ---------------------
 
-======================= ============= ============= ===================
-Parameter               250w (A2345)  160w (A2687)  MagGo 3in1 (A25X7)
-======================= ============= ============= ===================
-Display status           ❌            ❌            ❌
-Total power out          ❌            ❌            ✅
-Port on/off control      ✅            ✅            ❌
-Port protocol control    ❌            ❌            ❌
-Timer control            ✅            ✅            ❌
-Individual port status   ✅            ✅            ✅
-Individual port voltage  ✅            ✅            ❌
-Individual port current  ✅            ✅            ❌
-Individual port power    ✅            ✅            ✅
-Temperature              ❌            ❌            ❌
-Firmware version         ❌            ❌            ❌
-Serial number            ❌            ❌            ❌
-======================= ============= ============= ===================
+======================= ============= ============= ============= ===================
+Parameter               250w (A2345)  240w (A91B2)  160w (A2687)  MagGo 3in1 (A25X7)
+======================= ============= ============= ============= ===================
+Display status           ❌            ✅            ❌            ❌
+Display control          ❌            ✅            ❌            ❌
+Total power out          ❌            ❌            ❌            ✅
+Port on/off control      ✅            ✅            ✅            ❌
+Port protocol control    ❌            ❌            ❌            ❌
+Timer control            ✅            ✅            ✅            ❌
+Schedule control         ✅            ✅            ❌            ❌
+Individual port status   ✅            ✅            ✅            ✅
+Individual port voltage  ✅            ✅            ✅            ❌
+Individual port current  ✅            ✅            ✅            ❌
+Individual port power    ✅            ✅            ✅            ✅
+AC outlet on/off state   N/A           ✅            N/A           N/A
+AC outlet on/off control N/A           ✅            N/A           N/A
+Charging mode control    ❌            ✅            ❌            ❌
+Temperature              ❌            ❌            ❌            ❌
+Firmware version         ❌            ✅            ❌            ❌
+Serial number            ❌            ✅            ❌            ❌
+======================= ============= ============= ============= ===================
 
 
 Prime power bank support
@@ -186,6 +191,7 @@ Contents
    Home <self>
    examples
    usage
+   protocols
    api
    limitations
    new_devices
