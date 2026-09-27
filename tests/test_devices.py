@@ -8,6 +8,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any
+from unittest import mock
 
 import pytest
 
@@ -19,6 +20,7 @@ from SolixBLE import (
     C1000G2,
     F2600,
     ChargingStatus,
+    F2000Legacy,
     LightStatus,
     MagGo3in1,
     PortOverload,
@@ -32,14 +34,24 @@ from SolixBLE import (
     TemperatureUnit,
 )
 from SolixBLE.constructs import Parameters
+from SolixBLE.devices.f3800 import F3800
 from SolixBLE.devices.solarbank2 import MaxLoadSB2
-from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
+from SolixBLE.states import (
+    DisplayTimeout,
+    GridStatus,
+    LightMode,
+    SBPowerCutoff,
+    SBUsageMode,
+)
 from tests.const import (
     MOCK_BLE_DEVICE,
     NEGOTIATION_RESPONSES_PRIME,
     NEGOTIATION_RESPONSES_SOLIX,
 )
 from tests.helpers import MockDevice
+
+F2000_LEGACY_TELEMETRY = "09ff0000010149660000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c00000064006400000000000000000000000030313032303330343035303630373038a2"
+F2000_LEGACY_EXTENDED =  "09ff00000101017a0000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c0000006400640000000000000000000000003031303230333034303530363037303858023c001e003c00010001000100023c00000100a0"
 
 
 @pytest.mark.asyncio
@@ -1027,6 +1039,238 @@ async def test_values(
         assert (
             getattr(device, class_property) == expected_value
         ), f"Mismatch for property '{class_property}'!"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("packet", "mapping"),
+    [
+        pytest.param(
+            F2000_LEGACY_TELEMETRY,
+            {
+                "days_remaining": 185,
+                "hours_remaining": 9.0,
+                "time_remaining": 4449.0,
+                "ac_power_in": 0,
+                "ac_power_out": 462,
+                "ac_output": PortStatus.OUTPUT,
+                "solar_power_in": 0,
+                "power_in": 0,
+                "power_out": 462,
+                "dc_power_out": 0,
+                "dc_output": PortStatus.NOT_CONNECTED,
+                "usb_c1_power": 0,
+                "usb_c2_power": 0,
+                "usb_c3_power": 0,
+                "usb_a1_power": 0,
+                "usb_a2_power": 0,
+                "temperature": 28,
+                "temperature_expansion": 0,
+                "battery_percentage": 100,
+                "battery_percentage_expansion": 0,
+                "battery_health": 100,
+                "charging_status": ChargingStatus.IDLE,
+                "software_version": "2.1.5",
+                "serial_number": "0102030405060708",
+            },
+            id="f2000_legacy_ac_load",
+        ),
+        pytest.param(
+            F2000_LEGACY_EXTENDED,
+            {
+                "ac_charging_power": 600,
+                "display_timeout": 30,
+                "display_mode": LightStatus.MEDIUM,
+                "power_saving_mode_enabled": False,
+                "light": LightStatus.OFF,
+                "temperature_unit": TemperatureUnit.FAHRENHEIT,
+            },
+            id="f2000_legacy_extended",
+        ),
+    ],
+)
+async def test_f2000_legacy_values(fast_sleep, fast_timeouts, packet: str, mapping: dict[str, Any]) -> None:
+    """Test real F2000 telemetry with its device serial anonymized."""
+
+    async with MockDevice() as mock_bluetooth:
+        device = F2000Legacy(MOCK_BLE_DEVICE)
+
+        # Connect
+        mock_bluetooth.expect_ordered(
+            bytes.fromhex("08ee00000001010a0002"),
+            [bytes.fromhex(packet)],
+        )
+        assert await device.connect(), "Expected connect to return True"
+        await asyncio.sleep(5)
+
+        for class_property, expected_value in mapping.items():
+            assert (
+                getattr(device, class_property) == expected_value
+            ), f"Mismatch for property '{class_property}'!"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "args", "commands"),
+    [
+        pytest.param("turn_ac_on", (), ["08ee00000002860b00018a"], id="ac_on"),
+        pytest.param("turn_ac_off", (), ["08ee00000002860b000089"], id="ac_off"),
+        pytest.param("turn_dc_on", (), ["08ee00000002870b00018b"], id="dc_on"),
+        pytest.param("turn_dc_off", (), ["08ee00000002870b00008a"], id="dc_off"),
+        pytest.param(
+            "set_light_mode",
+            (LightStatus.HIGH,),
+            ["08ee000000028b0b000391", "08ee00000001010a0002"],
+            id="light_high",
+        ),
+        pytest.param(
+            "turn_power_saving_mode_on",
+            (),
+            ["08ee000000028a0b00018e", "08ee00000001010a0002"],
+            id="power_saving_on",
+        ),
+        pytest.param(
+            "turn_power_saving_mode_off",
+            (),
+            ["08ee000000028a0b00008d", "08ee00000001010a0002"],
+            id="power_saving_off",
+        ),
+        pytest.param(
+            "set_display_mode",
+            (LightStatus.MEDIUM,),
+            ["08ee00000002880b00028d", "08ee00000001010a0002"],
+            id="display_brightness",
+        ),
+        pytest.param(
+            "set_ac_charging_power",
+            (600,),
+            ["08ee00000002800c005802de", "08ee00000001010a0002"],
+            id="ac_power_in_limit",
+        ),
+        pytest.param(
+            "set_display_timeout",
+            (DisplayTimeout.S30,),
+            ["08ee00000002820c001e00a4", "08ee00000001010a0002"],
+            id="display_timeout",
+        ),
+        pytest.param(
+            "set_dc_timer",
+            (1800,),
+            ["08ee00000002030e000807000018"],
+            id="dc_timer",
+        ),
+    ],
+)
+async def test_f2000_legacy_control_commands(
+    fast_sleep, fast_timeouts,
+    method: str, args: tuple[Any, ...], commands: list[str],
+) -> None:
+    """Test that F2000 control methods dispatch their checksummed commands."""
+
+    async with MockDevice() as mock_bluetooth:
+        device = F2000Legacy(MOCK_BLE_DEVICE)
+
+        # Connect
+        mock_bluetooth.expect_ordered(bytes.fromhex("08ee00000001010a0002"))
+        assert await device.connect(), "Expected connect to return True"
+        await asyncio.sleep(1)
+
+        # Test command
+        [mock_bluetooth.expect_ordered(bytes.fromhex(cmd)) for cmd in commands]
+        await getattr(device, method)(*args)
+        mock_bluetooth.check_assertions()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "args"),
+    [
+        pytest.param("set_light_mode", (LightStatus.UNKNOWN,), id="light_unknown"),
+        pytest.param(
+            "set_display_mode",
+            (LightStatus.UNKNOWN,),
+            id="display_brightness_unknown",
+        ),
+        pytest.param("set_ac_charging_power", (199,), id="ac_limit_too_low"),
+        pytest.param("set_ac_charging_power", (1441,), id="ac_limit_too_high"),
+        pytest.param("set_display_timeout", (DisplayTimeout.UNKNOWN,), id="display_timeout_unknown"),
+        pytest.param(
+            "set_dc_timer",
+            (99999999999,),
+            id="dc_timer_too_long",
+        ),
+    ],
+)
+async def test_f2000_legacy_invalid_commands(
+    fast_sleep, fast_timeouts,
+    method: str, args: tuple[Any, ...],
+) -> None:
+    """Test that invalid F2000 commands are rejected before transmission."""
+
+    async with MockDevice() as mock_bluetooth:
+        device = F2000Legacy(MOCK_BLE_DEVICE)
+
+        # Connect
+        mock_bluetooth.expect_ordered(bytes.fromhex("08ee00000001010a0002"))
+        assert await device.connect(), "Expected connect to return True"
+        await asyncio.sleep(1)
+
+        # Test command
+        with pytest.raises((ValueError, OverflowError)):
+            await getattr(device, method)(*args)
+
+        mock_bluetooth.check_assertions()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("packet", "error"),
+    [
+        pytest.param("ffff00000101480e00010100ff57", "header = (enum) (unknown) 65535", id="header"),
+        pytest.param("09ff0000010149ff0000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c00000064006400000000000000000000000030313032303330343035303630373038a2", "stream read less than specified amount, expected 245, found 93", id="packet_length"),
+        pytest.param("09ff0000010149660000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c00000064006400000000000000000000000030313032303330343035303630373038a3", "wrong checksum, read 163, computed 162", id="checksum"),
+        pytest.param("09ff0000010149660000000000000000005ab90000ce01000000000000000000000000000000000000ce0100000000d7006a0074006b00000033030000d7000100021c00ff0064006400000000000000000000000030313032303330343035303630373038a1", "ValueError: 255 is not a valid ChargingStatus", id="charge_state"),
+        pytest.param("09ff00000101480e00010100ff61", "Unexpected message '0148' sent by device!", id="state_ack")
+    ],
+)
+async def test_f2000_legacy_packet_errors(fast_sleep, fast_timeouts, caplog, packet: str, error: str) -> None:
+    """Test short, command-tagged, and malformed telemetry packets."""
+
+    caplog.set_level("DEBUG")
+
+    async with MockDevice() as mock_bluetooth:
+        device = F2000Legacy(MOCK_BLE_DEVICE)
+
+        # Connect
+        mock_bluetooth.expect_ordered(bytes.fromhex("08ee00000001010a0002"))
+        assert await device.connect(), "Expected connect to return True"
+        await asyncio.sleep(1)
+
+        await mock_bluetooth.send_data([bytes.fromhex(packet)])
+        assert error in str(caplog.text)
+
+
+@pytest.mark.asyncio
+async def test_f2000_legacy_send_command_connection_states(fast_sleep, fast_timeouts) -> None:
+    """Test direct command transmission and its disconnected guard."""
+
+    async with MockDevice() as mock_bluetooth:
+        device = F2000Legacy(MOCK_BLE_DEVICE)
+
+        # Exception raised if not connected
+        with pytest.raises(ConnectionError, match="Not connected"):
+            await device.get_status_update()
+
+         # Connect
+        mock_bluetooth.expect_ordered(bytes.fromhex("08ee00000001010a0002"))
+        assert await device.connect(), "Expected connect to return True"
+        await asyncio.sleep(1)
+
+        # Test again when connected
+        mock_bluetooth.expect_ordered(bytes.fromhex("08ee00000001010a0002"))
+        await device.get_status_update()
+
+        mock_bluetooth.check_assertions()
 
 
 @pytest.mark.asyncio

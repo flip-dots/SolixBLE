@@ -19,7 +19,7 @@ Mock bluetooth address used to emulate Anker devices for tests.
 """
 
 MOCK_BLE_DEVICE = BLEDevice(
-    address=MOCK_DEVICE_ADDRESS, name=MOCK_DEVICE_NAME, details={}, rssi=-1
+    address=MOCK_DEVICE_ADDRESS, name=MOCK_DEVICE_NAME, details={}
 )
 """
 Mock BLEDevice used to emulate Anker devices for tests.
