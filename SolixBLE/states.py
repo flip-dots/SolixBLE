@@ -109,6 +109,9 @@ class DisplayTimeout(Enum):
     #: The status of the display timeout is unknown.
     UNKNOWN = -1
 
+    #: 10 seconds.
+    S10 = 10
+
     #: 20 seconds.
     S20 = 20
 

@@ -25,6 +25,18 @@ MOCK_BLE_DEVICE = BLEDevice(
 Mock BLEDevice used to emulate Anker devices for tests.
 """
 
+SOLIX_TEST_PRIVATE_KEY = "7dfbea61cd95cee49c458ad7419e817f1ade9a66136de3c7d5787af1458e39f4"
+"""
+ECDH private key the Solix negotiation vectors below were captured with. The
+library generates a fresh key per negotiation; tests pin this one so the
+recorded frames still match.
+"""
+
+PRIME_TEST_PRIVATE_KEY = "754744d72984c378bc4fa77d7fcdf6bbb6d9df119fa9be4948eb8a3b4cd6071f"
+"""
+ECDH private key the Prime negotiation vectors below were captured with.
+"""
+
 
 NEGOTIATION_RESPONSES_PRIME: dict[str, list[str]] = {
     "ff09200003000140010a82d0ab535303e3aa9f0c2f9c868465bc8476f556fb7d": [

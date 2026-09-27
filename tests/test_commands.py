@@ -31,6 +31,7 @@ from tests.devices.c1000 import (
     C1000_TEST_COMMANDS_RESPONSES,
 )
 from tests.devices.c1000g2 import C1000G2_TEST_COMMANDS, C1000G2_TEST_COMMANDS_E2E
+from tests.devices.c2000g2 import C2000G2_TEST_COMMANDS
 from tests.devices.f2600 import (
     F2600_TEST_COMMANDS,
     F2600_TEST_COMMANDS_E2E,
@@ -57,6 +58,7 @@ from tests.helpers import MockDevice
         *C800_TEST_COMMANDS,
         *C1000_TEST_COMMANDS,
         *C1000G2_TEST_COMMANDS,
+        *C2000G2_TEST_COMMANDS,
         *F2600_TEST_COMMANDS,
         *F3800_TEST_COMMANDS,
         *PRIME_CHARGER_160W_TEST_COMMANDS,
@@ -98,12 +100,13 @@ async def test_send_command(
             else f"fe0503{device._timestamp().hex()}"
         )
 
-        for call in expected:
-            mock_build.assert_called_once_with({
-                "pattern": bytes.fromhex("03000f"),
-                "cmd": bytes.fromhex(call[0]),
-                "payload_bytes": bytes.fromhex(call[1] + timestamp_bytes),
-            })
+        # One packet per expected command, in order
+        built = [c.args[0] for c in mock_build.call_args_list]
+        assert built == [{
+            "pattern": bytes.fromhex("03000f"),
+            "cmd": bytes.fromhex(call[0]),
+            "payload_bytes": bytes.fromhex(call[1] + timestamp_bytes),
+        } for call in expected]
 
 
 @pytest.mark.asyncio

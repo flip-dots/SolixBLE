@@ -17,6 +17,7 @@ from SolixBLE import (
     C800,
     C1000,
     C1000G2,
+    C2000G2,
     F2600,
     ChargingStatus,
     LightStatus,
@@ -335,6 +336,108 @@ from tests.helpers import MockDevice
                 "dc_power_out": 6,
             },
             id="c1000g2_dc_on",
+        ),
+        # The two cases below are decrypted "c421" telemetry frames captured from
+        # a real C2000 G2 (A1783), the first on 2026-07-21 with no expansion
+        # battery attached and the second on 2026-08-28 with a BP2000 attached.
+        # They lock in the "c0" (subPackageInfo) decode and, importantly, the
+        # absent case: the block is emitted either way, so with no pack the
+        # fields are padded and carry sentinels -- a 239 (0xEF) temperature and a
+        # 0 percentage -- which is why every expansion property gates on
+        # subPackageConnectionStatus rather than on the tag being present.
+        # Note "c0" is variable width: the serial is 16 bytes when absent and 17
+        # when attached, so the block is 35 vs 44 bytes and every field after the
+        # serial shifts by one. Both length prefixes have to be walked.
+        pytest.param(
+            C2000G2,
+            "a10131a221062011415043444b4b453046333936303030313100054131373833010102010001a30e040000000008070064cc00580200a41b0400000000e8033c000000000000a0052c010200010000015f0500a506041e005f0000a60a040000000000001a0e5fa70704000000010000a80404000000aa0404010000ab0404000000ac0404000000ae0404000000b20404000000c0230410000000000000000000000000000000000100000000ef0000000100000000022020ce2c0410000000000000000000000000000000000111000000000000000000000000000000000000000000000000d91a040000145f050000000000000000000000000000000000000000da18048100000000000000000001e00138047f0101003804e001dc06040000000000f91d0401010201060201000000000006020100020209010000000006000300fa150401010101001f0700000000000000000000000000fd0e0031373834343830313930333432fe050372d35f6a",
+            {
+                "serial_number": "APCDKKE0F39600011",
+                "part_number": "A1783",
+                "charging_status": ChargingStatus.IDLE,
+                "charge_discharge_status": ChargingStatus.IDLE,
+                "firmware_updating": False,
+                "time_remaining": 361.0,
+                "days_remaining": 15,
+                "hours_remaining": 1.0,
+                "ac_frequency": 60,
+                "ac_charging_power": 1000,
+                "max_input_power": 1800,
+                "ac_input_port": PortStatus.INPUT,
+                "ac_timer_remaining": 0,
+                "ac_timer": None,
+                "dc_timer_remaining": 0,
+                "dc_timer": None,
+                "power_saving_mode_enabled": False,
+                "dc_power_saving_mode_enabled": False,
+                # 1440 minutes here against 0 in the later frame -- the setting
+                # was changed between the two captures.
+                "device_timeout": 1440,
+                "ac_fast_charge_enabled": False,
+                "port_memory_enabled": True,
+                "is_display_on": False,
+                "display_mode": LightStatus.MEDIUM,
+                "display_timeout": 300,
+                "software_version": "1.2.1.1",
+                "software_version_controller": "0.1.2.6",
+                "software_version_inverter": "0.1.2.6",
+                "software_version_bms": "1.9.2.2",
+                "software_version_module": "0.3.0.6",
+                "num_expansion": 0,
+                "ac_charged_energy": None,
+                "dc_input_voltage": None,
+                "serial_number_expansion": "Unknown",
+                "temperature_expansion": -1,
+                "battery_percentage_expansion": -1,
+                "battery_health_expansion": -1,
+                "software_version_expansion": "Unknown",
+            },
+            id="c2000g2_no_expansion",
+        ),
+        pytest.param(
+            C2000G2,
+            "a10131a221062011415043444b4b453046333936303030313100054131373833010102010001a30e04000001010807003ccc00580200a41b0400000000e8033c00000000000000002c01020001000001551400a506041a01500000a60a040200000000007b0950a70704010000000000a80404000000aa0404000000ab0404010200ac0404000000ae0404000000b20404000000c02c0411415043444b4a4d3046343832303030393701020209011500130001010001000a41313738335f326b5768ce2c0410000000000000000000000000000000000111000000000000000000000000000000000000000000000000d91a040000195514000000009c9d886aacab886a0000000000000000da18048100000000000000000001e00138047f0101013804e001dc06040000000000f91d0401010201060201000000000006020100020209010202090106000300fa150401010101001f0700000000000000000000000000fd0e0031373837383730333336313035fe05031348916a",
+            {
+                "serial_number": "APCDKKE0F39600011",
+                "part_number": "A1783",
+                # A real instance of the two flow fields disagreeing: the frame
+                # carries 2 W of output, which trips charge_discharge_status but
+                # sits under charging_status' ~11 W threshold.
+                "charging_status": ChargingStatus.IDLE,
+                "charge_discharge_status": ChargingStatus.DISCHARGING,
+                "firmware_updating": False,
+                "time_remaining": 242.7,
+                "days_remaining": 10,
+                "hours_remaining": 2.7,
+                "ac_frequency": 60,
+                "ac_charging_power": 1000,
+                "max_input_power": 1800,
+                "ac_input_port": PortStatus.NOT_CONNECTED,
+                "ac_timer_remaining": 0,
+                "ac_timer": None,
+                "dc_timer_remaining": 0,
+                "dc_timer": None,
+                "power_saving_mode_enabled": False,
+                "dc_power_saving_mode_enabled": False,
+                "device_timeout": 0,
+                "ac_fast_charge_enabled": False,
+                "port_memory_enabled": True,
+                "is_display_on": False,
+                "display_mode": LightStatus.MEDIUM,
+                "display_timeout": 300,
+                "software_version": "1.2.1.1",
+                "software_version_controller": "0.1.2.6",
+                "software_version_inverter": "0.1.2.6",
+                "software_version_bms": "1.9.2.2",
+                "software_version_module": "0.3.0.6",
+                "num_expansion": 1,
+                "serial_number_expansion": "APCDKJM0F48200097",
+                "temperature_expansion": 21,
+                "battery_percentage_expansion": 19,
+                "battery_health_expansion": 0,
+                "software_version_expansion": "1.9.2.2",
+            },
+            id="c2000g2_expansion_attached",
         ),
         pytest.param(
             C300,
