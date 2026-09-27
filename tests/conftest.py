@@ -9,10 +9,16 @@ from collections.abc import Generator
 from unittest import mock
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    SECP256R1,
+    EllipticCurvePrivateKey,
+    derive_private_key,
+)
 
 from SolixBLE.const import FALLBACK_TZ
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.prime_device import PrimeDevice
+from tests.const import PRIME_TEST_PRIVATE_KEY, SOLIX_TEST_PRIVATE_KEY
 
 
 @pytest.fixture
@@ -41,7 +47,12 @@ def fast_sleep():
 
 @pytest.fixture
 def fake_time() -> Generator[None, None, None]:
-    """Use the timestamp used in the test data for all packets."""
+    """Pin everything the recorded test frames depend on.
+
+    The timestamp, timezone and UTC offset, and the ECDH private key are all
+    fixed to the values the test data was captured with, so the frames the
+    library builds match the recorded ones byte for byte.
+    """
 
     solix = bytes.fromhex("42ad8c69")
     prime = bytes.fromhex("ef79b569")
@@ -49,9 +60,22 @@ def fake_time() -> Generator[None, None, None]:
     def _mocked_timestamp(self) -> bytes:  # noqa: ANN001
         return prime if isinstance(self, PrimeDevice) else solix
 
+    def _mocked_private_key(self) -> EllipticCurvePrivateKey:  # noqa: ANN001
+        key = (
+            PRIME_TEST_PRIVATE_KEY
+            if isinstance(self, PrimeDevice)
+            else SOLIX_TEST_PRIVATE_KEY
+        )
+        return derive_private_key(int(key, 16), SECP256R1())
+
     with (
         mock.patch.object(SolixBLEDevice, "_timestamp", new=_mocked_timestamp),
+        mock.patch.object(
+            SolixBLEDevice,
+            "_generate_private_key",
+            new=_mocked_private_key,
+        ),
+        mock.patch.object(SolixBLEDevice, "_timezone_offset", return_value=bytes(4)),
         mock.patch("SolixBLE.device.get_posix_tz", return_value=FALLBACK_TZ),
-        mock.patch("SolixBLE.prime_device.get_posix_tz", return_value=FALLBACK_TZ),
     ):
         yield

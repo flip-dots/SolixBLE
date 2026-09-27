@@ -35,14 +35,14 @@ PRIME_CHARGER_250W_TEST_COMMANDS = [
         PrimeCharger250w,
         "set_timer_usb_c1",
         [300],
-        [("4209", "a10121a2020100a306042c01000000")],
+        [("4209", "a10121a2020100a30604012c010000")],
         id="prime_charger_250w_usb_c1_timer_5m",
     ),
     pytest.param(
         PrimeCharger250w,
         "set_timer_usb_c1",
         [7200],
-        [("4209", "a10121a2020100a30604201c000000")],
+        [("4209", "a10121a2020100a3060401201c0000")],
         id="prime_charger_250w_usb_c1_timer_120m",
     ),
     pytest.param(
@@ -63,14 +63,14 @@ PRIME_CHARGER_250W_TEST_COMMANDS = [
         PrimeCharger250w,
         "set_timer_usb_c2",
         [300],
-        [("4209", "a10121a2020101a306042c01000000")],
+        [("4209", "a10121a2020101a30604012c010000")],
         id="prime_charger_250w_usb_c2_timer_5m",
     ),
     pytest.param(
         PrimeCharger250w,
         "set_timer_usb_c2",
         [7200],
-        [("4209", "a10121a2020101a30604201c000000")],
+        [("4209", "a10121a2020101a3060401201c0000")],
         id="prime_charger_250w_usb_c2_timer_120m",
     ),
     pytest.param(
@@ -91,14 +91,14 @@ PRIME_CHARGER_250W_TEST_COMMANDS = [
         PrimeCharger250w,
         "set_timer_usb_c3",
         [300],
-        [("4209", "a10121a2020102a306042c01000000")],
+        [("4209", "a10121a2020102a30604012c010000")],
         id="prime_charger_250w_usb_c3_timer_5m",
     ),
     pytest.param(
         PrimeCharger250w,
         "set_timer_usb_c3",
         [7200],
-        [("4209", "a10121a2020102a30604201c000000")],
+        [("4209", "a10121a2020102a3060401201c0000")],
         id="prime_charger_250w_usb_c3_timer_120m",
     ),
     pytest.param(
@@ -119,14 +119,14 @@ PRIME_CHARGER_250W_TEST_COMMANDS = [
         PrimeCharger250w,
         "set_timer_usb_c4",
         [300],
-        [("4209", "a10121a2020103a306042c01000000")],
+        [("4209", "a10121a2020103a30604012c010000")],
         id="prime_charger_250w_usb_c4_timer_5m",
     ),
     pytest.param(
         PrimeCharger250w,
         "set_timer_usb_c4",
         [7200],
-        [("4209", "a10121a2020103a30604201c000000")],
+        [("4209", "a10121a2020103a3060401201c0000")],
         id="prime_charger_250w_usb_c4_timer_120m",
     ),
     pytest.param(
@@ -147,14 +147,14 @@ PRIME_CHARGER_250W_TEST_COMMANDS = [
         PrimeCharger250w,
         "set_timer_usb_a1_a2",
         [300],
-        [("4209", "a10121a2020104a306042c01000000")],
+        [("4209", "a10121a2020104a30604012c010000")],
         id="prime_charger_250w_usb_a1_a2_timer_5m",
     ),
     pytest.param(
         PrimeCharger250w,
         "set_timer_usb_a1_a2",
         [7200],
-        [("4209", "a10121a2020104a30604201c000000")],
+        [("4209", "a10121a2020104a3060401201c0000")],
         id="prime_charger_250w_usb_a1_a2_timer_120m",
     ),
 ]
@@ -189,7 +189,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_c1",
         [300],
-        "ff092f0003000f420957e9b883d85da36ffe5cccbba16764cc1ef1e323304e7635b22b4abb99ae19c243af2bf10a43",
+        "ff092f0003000f420957e9b883d85da36ffe5ce196a06764cc1ef1e323303446e2ec2e576dda0f8a17ff2937517a1d",
         id="prime_charger_250w_usb_c1_timer_5m",
     ),
     pytest.param(
@@ -197,7 +197,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_c1",
         [7200],
-        "ff092f0003000f420957e9b883d85da36ffe5cc0a6a16764cc1ef1e32330e8c3b5b4ad83bfbceb74ce3e71421dc968",
+        "ff092f0003000f420957e9b883d85da36ffe5ce19abd6764cc1ef1e32330a726576c28d1a4de2acf7af354e93896a0",
         id="prime_charger_250w_usb_c1_timer_120m",
     ),
     pytest.param(
@@ -221,7 +221,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_c2",
         [300],
-        "ff092f0003000f420957e9b883d85da26ffe5cccbba16764cc1ef1e3233098872c4c67af05a062623fa9a29cdd8212",
+        "ff092f0003000f420957e9b883d85da26ffe5ce196a06764cc1ef1e32330e2b7fb1262b2d3e3c3f1ea1524807df24c",
         id="prime_charger_250w_usb_c2_timer_5m",
     ),
     pytest.param(
@@ -229,7 +229,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_c2",
         [7200],
-        "ff092f0003000f420957e9b883d85da26ffe5cc0a6a16764cc1ef1e323303e32ac4ae1660185270f33d47cf5314139",
+        "ff092f0003000f420957e9b883d85da26ffe5ce19abd6764cc1ef1e3233071d74e9264341ae7e6b48719595e141ef1",
         id="prime_charger_250w_usb_c2_timer_120m",
     ),
     pytest.param(
@@ -253,7 +253,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_c3",
         [300],
-        "ff092f0003000f420957e9b883d85da16ffe5cccbba16764cc1ef1e323302194064eb281c7ea36ee3997b445a81b23",
+        "ff092f0003000f420957e9b883d85da16ffe5ce196a06764cc1ef1e323305ba4d110b79c11a9977dec2b3259086b7d",
         id="prime_charger_250w_usb_c3_timer_5m",
     ),
     pytest.param(
@@ -261,7 +261,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_c3",
         [7200],
-        "ff092f0003000f420957e9b883d85da16ffe5cc0a6a16764cc1ef1e32330872186483448c3cf738335ea6a2c44d808",
+        "ff092f0003000f420957e9b883d85da16ffe5ce19abd6764cc1ef1e32330c8c46490b11ad8adb23881274f876187c0",
         id="prime_charger_250w_usb_c3_timer_120m",
     ),
     pytest.param(
@@ -285,7 +285,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_c4",
         [300],
-        "ff092f0003000f420957e9b883d85da06ffe5cccbba16764cc1ef1e32330f7651fb0fe6479d3fa95c47db9f2849372",
+        "ff092f0003000f420957e9b883d85da06ffe5ce196a06764cc1ef1e323308d55c8eefb79af905b0611c13fee24e32c",
         id="prime_charger_250w_usb_c4_timer_5m",
     ),
     pytest.param(
@@ -293,7 +293,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_c4",
         [7200],
-        "ff092f0003000f420957e9b883d85da06ffe5cc0a6a16764cc1ef1e3233051d09fb678ad7df6bff8c800679b685059",
+        "ff092f0003000f420957e9b883d85da06ffe5ce19abd6764cc1ef1e323301e357d6efdff66947e437ccd42304d0f91",
         id="prime_charger_250w_usb_c4_timer_120m",
     ),
     pytest.param(
@@ -317,7 +317,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_a1_a2",
         [300],
-        "ff092f0003000f420957e9b883d85da76ffe5cccbba16764cc1ef1e3233091b2524b18dc437e9ff635eb99f7432883",
+        "ff092f0003000f420957e9b883d85da76ffe5ce196a06764cc1ef1e32330eb8285151dc1953d3e65e0571febe358dd",
         id="prime_charger_250w_usb_a1_a2_timer_5m",
     ),
     pytest.param(
@@ -325,7 +325,7 @@ PRIME_CHARGER_250W_TEST_COMMANDS_E2E = [
         NEGOTIATION_RESPONSES_PRIME,
         "set_timer_usb_a1_a2",
         [7200],
-        "ff092f0003000f420957e9b883d85da76ffe5cc0a6a16764cc1ef1e323303707d24d9e15475bda9b3996479eafeba8",
+        "ff092f0003000f420957e9b883d85da76ffe5ce19abd6764cc1ef1e3233078e230951b475c391b208d5b62358ab460",
         id="prime_charger_250w_usb_a1_a2_timer_120m",
     ),
 ]

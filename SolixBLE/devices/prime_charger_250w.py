@@ -4,15 +4,24 @@
 
 """
 
-from ..const import DEFAULT_METADATA_FLOAT
+import asyncio
+
+from ..const import DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_STRING
+from ..constructs import Parameters
 from ..prime_device import PrimeDevice
-from ..states import PortStatus
+from ..states import PortSchedule, PortStatus, PortTimer
 
 #: Command sent after connecting to start the telemetry stream. This must
 #: be sent every ~10 seconds or no telemetry will be sent by the device.
 CMD_SUB_AND_KEEP_ALIVE = "420b"
 SUB_AND_KEEP_ALIVE_PAYLOAD = "a10121"
-KEEP_ALIVE_INTERNAL = 10
+KEEP_ALIVE_INTERVAL = 9
+
+#: Command that requests the ca00 snapshot. It is sent with every keep-alive
+#: so the settings the snapshot carries stay fresh, with a pause before the
+#: stream is re-armed so the two replies do not collide.
+CMD_REQUEST_SNAPSHOT = "4200"
+SNAPSHOT_TO_STREAM_DELAY = 0.4
 
 CMD_USB_OUTPUT = "4207"
 CMD_USB_TIMER = "4209"
@@ -29,6 +38,8 @@ PARAMETERS_ON_OFF = {
     },
 }
 
+#: The timer value is an enable byte followed by the seconds as a 32-bit
+#: little endian integer. A duration of 0 disarms the timer.
 PARAMETERS_TIMER = {
     "a1": {
         "value": "21",
@@ -37,10 +48,32 @@ PARAMETERS_TIMER = {
         "value": lambda port: port - 1,
     }, "a3": {
         "type": 4,
-        "value": lambda seconds: seconds.to_bytes(
-            length=5,
+        "value": lambda seconds: bytes([1 if seconds else 0]) + seconds.to_bytes(
+            length=4,
             byteorder="little",
             signed=False,
+        ),
+    },
+}
+
+CMD_USB_SCHEDULE = "4208"
+
+#: One command sets one trigger of a port's daily schedule: a3 selects the
+#: trigger (1 = on-time, 0 = off-time) and a4 carries its enable byte, hour,
+#: minute and weekday bitmask (bit 0 = Monday ... bit 6 = Sunday).
+PARAMETERS_SCHEDULE = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": lambda port: port - 1,
+    }, "a3": {
+        "type": 1,
+        "value": lambda trigger: trigger,
+    }, "a4": {
+        "type": 3,
+        "value": lambda switch, hour, minute, weekdays: bytes(
+            [switch, hour, minute, weekdays],
         ),
     },
 }
@@ -59,14 +92,66 @@ class PrimeCharger250w(PrimeDevice):
     This model is also known as the A2345.
     """
 
-    _TELEMETRY_COMMANDS = ("4303", "ca00")
+    #: The stream carries the six ports at a2-a7.
+    _TELEMETRY_COMMANDS = ("4303",)
+
+    #: The snapshot the device sends on request carries its settings, with the
+    #: per-port schedule and timer records at aa-ae.
+    _SNAPSHOT_COMMANDS = ("ca00",)
+
+    #: Serial number the device reports in negotiation stage 3.
+    _serial_number: bytes | None = None
+
+    async def _process_negotiation_encrypted(self, cmd: bytes, plaintext: bytes) -> None:
+        """Keep the serial number the device reports in negotiation stage 3.
+
+        :param cmd: The command code of the response.
+        :param plaintext: The decrypted response.
+        """
+        if cmd.hex() == "4829":
+            parameters = Parameters.parse(plaintext[1:])
+            if "a4" in parameters:
+                self._serial_number = parameters["a4"].value_legacy
+        await super()._process_negotiation_encrypted(cmd, plaintext)
 
     async def _keep_alive(self) -> int | None:
+        await self._send_command(
+            cmd=CMD_REQUEST_SNAPSHOT,
+            parameters=PARAMETERS_KEEP_ALIVE,
+        )
+        await asyncio.sleep(SNAPSHOT_TO_STREAM_DELAY)
         await self._send_command(
             cmd=CMD_SUB_AND_KEEP_ALIVE,
             parameters=PARAMETERS_KEEP_ALIVE,
         )
-        return KEEP_ALIVE_INTERNAL
+        return KEEP_ALIVE_INTERVAL
+
+    @property
+    def serial_number(self) -> str:
+        """Serial number of the device.
+
+        :returns: Serial number or default str value if not yet negotiated.
+        """
+        if self._serial_number is None:
+            return DEFAULT_METADATA_STRING
+
+        return self._serial_number.decode("ascii")
+
+    @property
+    def software_version(self) -> str:
+        """Software version of the device.
+
+        The snapshot reports it as a 16-bit integer whose decimal digits are
+        the four parts of the version (2116 is version 2.1.1.6).
+
+        :returns: Version string or default str value if no snapshot has been received.
+        """
+        record = self._record("a2")
+        if len(record) < 3:
+            return DEFAULT_METADATA_STRING
+
+        version = int.from_bytes(record[1:3], byteorder="little")
+        return f"{version // 1000}.{version // 100 % 10}.{version // 10 % 10}.{version % 10}"
 
     @property
     def usb_port_c1(self) -> PortStatus:
@@ -314,6 +399,102 @@ class PrimeCharger250w(PrimeDevice):
 
         return self._parse_int("a7", begin=6, end=8) / 100.0
 
+    def _port_schedule(self, key: str) -> PortSchedule | None:
+        """Decode a port's daily on/off schedule from its snapshot record.
+
+        :param key: Key of the port's record (e.g aa, ab, ac, ...).
+        :returns: Schedule of the port or None if no snapshot has been received.
+        """
+        return PortSchedule.from_record(self._record(key))
+
+    def _port_timer(self, key: str) -> PortTimer | None:
+        """Decode a port's auto-off timer from its snapshot record.
+
+        :param key: Key of the port's record (e.g aa, ab, ac, ...).
+        :returns: Timer of the port or None if no snapshot has been received.
+        """
+        return PortTimer.from_record(self._record(key))
+
+    @property
+    def usb_c1_schedule(self) -> PortSchedule | None:
+        """USB C1 Port daily on/off schedule.
+
+        :returns: Schedule of the USB C1 port or None if no snapshot has been received.
+        """
+        return self._port_schedule("aa")
+
+    @property
+    def usb_c1_timer(self) -> PortTimer | None:
+        """USB C1 Port auto-off timer.
+
+        :returns: Timer of the USB C1 port or None if no snapshot has been received.
+        """
+        return self._port_timer("aa")
+
+    @property
+    def usb_c2_schedule(self) -> PortSchedule | None:
+        """USB C2 Port daily on/off schedule.
+
+        :returns: Schedule of the USB C2 port or None if no snapshot has been received.
+        """
+        return self._port_schedule("ab")
+
+    @property
+    def usb_c2_timer(self) -> PortTimer | None:
+        """USB C2 Port auto-off timer.
+
+        :returns: Timer of the USB C2 port or None if no snapshot has been received.
+        """
+        return self._port_timer("ab")
+
+    @property
+    def usb_c3_schedule(self) -> PortSchedule | None:
+        """USB C3 Port daily on/off schedule.
+
+        :returns: Schedule of the USB C3 port or None if no snapshot has been received.
+        """
+        return self._port_schedule("ac")
+
+    @property
+    def usb_c3_timer(self) -> PortTimer | None:
+        """USB C3 Port auto-off timer.
+
+        :returns: Timer of the USB C3 port or None if no snapshot has been received.
+        """
+        return self._port_timer("ac")
+
+    @property
+    def usb_c4_schedule(self) -> PortSchedule | None:
+        """USB C4 Port daily on/off schedule.
+
+        :returns: Schedule of the USB C4 port or None if no snapshot has been received.
+        """
+        return self._port_schedule("ad")
+
+    @property
+    def usb_c4_timer(self) -> PortTimer | None:
+        """USB C4 Port auto-off timer.
+
+        :returns: Timer of the USB C4 port or None if no snapshot has been received.
+        """
+        return self._port_timer("ad")
+
+    @property
+    def usb_a1_a2_schedule(self) -> PortSchedule | None:
+        """USB A1 and A2 Port daily on/off schedule.
+
+        :returns: Schedule of the USB A1 and A2 ports or None if no snapshot has been received.
+        """
+        return self._port_schedule("ae")
+
+    @property
+    def usb_a1_a2_timer(self) -> PortTimer | None:
+        """USB A1 and A2 Port auto-off timer.
+
+        :returns: Timer of the USB A1 and A2 ports or None if no snapshot has been received.
+        """
+        return self._port_timer("ae")
+
     async def turn_usb_c1_on(self) -> None:
         """Turn USB port C1 on.
 
@@ -513,3 +694,77 @@ class PrimeCharger250w(PrimeDevice):
             port=5,
             seconds=time,
         )
+
+    async def _send_schedule(self, port: int, schedule: PortSchedule) -> None:
+        """Send both triggers of a port's daily schedule, on-time then off-time.
+
+        :param port: Port number (1-4 for USB C1-C4, 5 for USB A1 and A2).
+        :param schedule: The schedule to store on the device.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=CMD_USB_SCHEDULE,
+            parameters=PARAMETERS_SCHEDULE,
+            port=port,
+            trigger=1,
+            switch=schedule.start_switch,
+            hour=schedule.start_hour,
+            minute=schedule.start_minute,
+            weekdays=schedule.start_weekdays,
+        )
+        await self._send_command(
+            cmd=CMD_USB_SCHEDULE,
+            parameters=PARAMETERS_SCHEDULE,
+            port=port,
+            trigger=0,
+            switch=schedule.end_switch,
+            hour=schedule.end_hour,
+            minute=schedule.end_minute,
+            weekdays=schedule.end_weekdays,
+        )
+
+    async def set_schedule_usb_c1(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB C1.
+
+        :param schedule: The on-time and off-time triggers to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(port=1, schedule=schedule)
+
+    async def set_schedule_usb_c2(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB C2.
+
+        :param schedule: The on-time and off-time triggers to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(port=2, schedule=schedule)
+
+    async def set_schedule_usb_c3(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB C3.
+
+        :param schedule: The on-time and off-time triggers to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(port=3, schedule=schedule)
+
+    async def set_schedule_usb_c4(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB C4.
+
+        :param schedule: The on-time and off-time triggers to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(port=4, schedule=schedule)
+
+    async def set_schedule_usb_a1_a2(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB A1 and A2.
+
+        :param schedule: The on-time and off-time triggers to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(port=5, schedule=schedule)
