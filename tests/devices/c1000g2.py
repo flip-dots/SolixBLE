@@ -19,6 +19,13 @@ from tests.const import NEGOTIATION_RESPONSES_SOLIX
 C1000G2_TEST_COMMANDS = [
     pytest.param(
         C1000G2,
+        "_post_connect",
+        [],
+        [("4100", "a10121")],
+        id="c1000g2_subscribe",
+    ),
+    pytest.param(
+        C1000G2,
         "turn_ac_on",
         [],
         [("4101", "a10121a2020101")],
