@@ -8,6 +8,7 @@ from .c300 import C300
 from .c300dc import C300DC
 from .c800 import C800
 from .c1000 import C1000
+from .as220 import AS220
 from .c1000g2 import C1000G2
 from .f2000 import F2000
 from .f2600 import F2600
@@ -25,6 +26,7 @@ __all__ = [
     "C300DC",
     "C800",
     "C1000",
+    "AS220",
     "C1000G2",
     "F2000",
     "F2600",

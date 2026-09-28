@@ -52,6 +52,7 @@ See the [support table](https://solixble.readthedocs.io/en/latest) in the docume
 - F3800
 - Solarbank 2
 - Solarbank 3
+- S2000 (AS220)
 - Prime Charger 160w
 - Prime Charger 250w
 - Prime MagGo 3in1 (A25X7)
