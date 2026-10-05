@@ -23,9 +23,13 @@ from .base import (
     CLIENT_ENCRYPT,
     Keys,
     NegotiatedSessionLike,
+    Outer,
     Path,
+    UnsupportedNegotiation,
     client_parameters,
     override,
+    record_identity,
+    send_clock,
 )
 
 if TYPE_CHECKING:
@@ -58,6 +62,19 @@ class EcdhPath(Path):
         self.authorized = False
         self._key: EllipticCurvePrivateKey | None = None
 
+    @classmethod
+    @override
+    def matches(cls, announcement: Container, outer: Outer) -> bool:  # noqa: ARG003  # the protocol's signature
+        """Whether ``x803`` offers ECDH (``a3 & 0x44``) and an auth method (``a5``).
+
+        :param announcement: What the device declared in ``x803``.
+        :param outer: The outer protocol; ECDH runs on either.
+        """
+        return (
+            bool((announcement.encrypt_method or 0) & ECDH_METHODS)
+            and announcement.auth_method is not None
+        )
+
     @override
     async def on_stage(
         self,
@@ -73,37 +90,27 @@ class EcdhPath(Path):
         :param status: The reply's status byte.
         :param parameters: The reply's parameters.
         :raises RuntimeError: If ``x821`` arrives before the client key exists.
+        :raises UnsupportedNegotiation: If the device rejects the method or key.
         """
         announcement = session.announcement
         match msgtype:
             case 0x829:
-                self._record_identity(announcement, parameters)
+                record_identity(announcement, parameters)
                 await session.send(0x005, self._choose_method(session), client_id=True)
             case 0x805:
+                if status != STATUS_OK:
+                    raise UnsupportedNegotiation(
+                        announcement,
+                        f"x805 status {status:02x}",
+                    )
                 self._key = session.link._generate_private_key()
                 await session.send(
                     0x021,
                     client_parameters(a1=ecdh_public_bytes(self._key)),
                 )
             case 0x821:
-                if self._key is None:
-                    msg = "x821 before the client key was generated"
-                    raise RuntimeError(msg)
-                self.keys = Keys.parse(
-                    ecdh_shared_secret(self._key, parameters["a1"].value_legacy),
-                )
-                if session.outer.authorizes_at_key_exchange:
-                    self.authorized = True
-                # The outer adds a2 (the app sends it on the plain outer only).
-                await session.send(
-                    0x022,
-                    client_parameters(
-                        a1=lambda self: self._timestamp(),
-                        a3=session.link._timezone_offset(),
-                        a5=session.link._posix_timezone().encode(),
-                    ),
-                    client_id=True,
-                )
+                self._exchange_keys(announcement, session.outer, parameters)
+                await send_clock(session)
             case 0x822:
                 if not self.authorized:
                     await session.send(
@@ -116,16 +123,30 @@ class EcdhPath(Path):
             case 0x827:
                 self._register(announcement, status, parameters)
 
-    def _record_identity(
+    def _exchange_keys(
         self,
         announcement: Container,
+        outer: Outer,
         parameters: ParameterDict,
     ) -> None:
-        """Record the serial (``a4``) and MAC (``a5``) the device sent in ``x829``."""
-        if "a4" in parameters:
-            announcement.serial = parameters["a4"].value_legacy
-        if "a5" in parameters:
-            announcement.mac = parameters["a5"].value_legacy
+        """Derive the session keys from the device's ``x821`` public point.
+
+        :param announcement: What the device declared so far.
+        :param outer: The outer protocol the session runs on.
+        :param parameters: The ``x821`` reply's parameters.
+        :raises RuntimeError: If ``x821`` arrives before the client key exists.
+        :raises UnsupportedNegotiation: If ``x821`` carries no device key.
+        """
+        if self._key is None:
+            msg = "x821 before the client key was generated"
+            raise RuntimeError(msg)
+        if "a1" not in parameters:
+            raise UnsupportedNegotiation(announcement, "x821 without a device key")
+        self.keys = Keys.parse(
+            ecdh_shared_secret(self._key, parameters["a1"].value_legacy),
+        )
+        if outer.authorizes_at_key_exchange:
+            self.authorized = True
 
     def _register(
         self,

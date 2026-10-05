@@ -26,16 +26,21 @@ from .base import (
     Outer,
     Path,
     Session,
+    UnsupportedNegotiation,
     client_parameters,
     new_announcement,
     override,
 )
 from .ecdh import EcdhPath
+from .legacy import LegacyAesPath
 
 _LOGGER = logging.getLogger(__name__)
 
 #: Status recorded for a reply without a status byte (never a device status byte).
 STATUS_EMPTY = 0xFF
+
+#: Key establishment paths, tried in order against the capability reply.
+PATHS: tuple[type[Path], ...] = (EcdhPath, LegacyAesPath)
 
 
 class NegotiatedSession(NegotiatedSessionLike, Session):
@@ -192,8 +197,17 @@ class NegotiatedSession(NegotiatedSessionLike, Session):
         )
 
     def _choose_path(self) -> Path:
-        """Return the path that follows the capability exchange."""
-        return EcdhPath()
+        """Return the first registered path that handles the capability reply.
+
+        :raises UnsupportedNegotiation: If no registered path handles it.
+        """
+        for path_class in PATHS:
+            if path_class.matches(self.announcement, self.outer):
+                return path_class()
+        raise UnsupportedNegotiation(
+            self.announcement,
+            f"no path for the {self.outer.name} outer",
+        )
 
     @override
     def on_session_push(self) -> None:

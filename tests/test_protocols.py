@@ -6,9 +6,12 @@ firmware v0.3.3.0; the ``x829`` carries a synthetic serial.
 .. moduleauthor:: kb1ibt
 """
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 import pytest
+from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Container,
+)
 
 from SolixBLE.const import FALLBACK_TZ
 from SolixBLE.constructs import ParameterDict
@@ -22,11 +25,6 @@ from SolixBLE.protocols import (
 )
 from SolixBLE.protocols.base import NegotiatedSessionLike, override
 from tests.helpers import RECORDING_CLIENT_ID, RecordingLink
-
-if TYPE_CHECKING:
-    from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
-        Container,
-    )
 
 NEGOTIATION = bytes.fromhex("030001")
 GRANT = bytes.fromhex("030101")
@@ -206,6 +204,11 @@ async def test_status_byte_reaches_the_path() -> None:
         def __init__(self) -> None:
             self.keys: Container | None = None
             self.authorized = False
+
+        @classmethod
+        @override
+        def matches(cls, announcement: Container, outer: Outer) -> bool:  # noqa: ARG003  # the protocol's signature
+            return True
 
         @override
         async def on_stage(

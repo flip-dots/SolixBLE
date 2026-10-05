@@ -371,6 +371,59 @@ first:
    locale's, else ``GB``.
 
 
+Paths
+-----
+
+After the shared opening the device's capability reply (``x803``) picks the
+path that establishes the session keys. Paths are tried in order; the first
+that handles the reply runs the rest of the negotiation.
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``x803``
+     - Path
+     - Outer
+     - Keys
+     - Client authorized at
+   * - ``a3 & 0x44`` (ECDH) and an auth method in ``a5``
+     - ECDH (:py:class:`SolixBLE.protocols.EcdhPath`): ``x005`` states ECDH,
+       ``x021`` / ``x821`` exchange P-256 points, ``x022`` sets the clock,
+       ``4027`` registers the client
+     - plain or encrypted
+     - the shared secret's first 16 bytes; IV the next 16
+     - see `Outer protocols`_
+   * - otherwise ``a1 & 0x02`` (AES), e.g. ``a1 02`` · ``a3 04`` with no
+       ``a5`` on older module builds
+     - Legacy AES (:py:class:`SolixBLE.protocols.LegacyAesPath`): ``0005``
+       states AES (``a5 02``), ``4022`` sets the clock, ``4822`` returns the
+       session key, ``4023`` binds the client
+     - plain only
+     - first the client id's and the serial's first 16 bytes; after ``4822``
+       the key it carries, same IV
+     - ``4822``
+   * - neither
+     - none: ``connect()`` returns ``False`` and logs
+       :py:class:`SolixBLE.UnsupportedNegotiation` naming the values
+     - N/A
+     - N/A
+     - N/A
+
+A device that rejects the stated method (an ``x805`` status other than
+``00``) or answers ``x821`` without its key also fails the connect with
+:py:class:`SolixBLE.UnsupportedNegotiation`, naming the stage.
+
+.. note::
+   :collapsible: closed
+
+   A path is a class with a ``matches(announcement, outer)`` class method,
+   which says whether it handles what the device declared on that outer,
+   and an ``on_stage(session, msgtype, status, parameters)`` coroutine that
+   handles each reply after ``x829``. It sets ``keys`` when it installs
+   session keys and ``authorized`` when the device accepts the client. New
+   paths are added to :py:data:`SolixBLE.protocols.PATHS`.
+
+
 Negotiation flow
 ^^^^^^^^^^^^^^^^
 

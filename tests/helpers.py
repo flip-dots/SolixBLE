@@ -491,3 +491,18 @@ class RecordingLink:
             int.from_bytes(bytes.fromhex(SOLIX_TEST_PRIVATE_KEY), byteorder="big"),
             SECP256R1(),
         )
+
+
+async def feed_negotiation(
+    session: NegotiatedSession, replies: list[tuple[str, str]],
+) -> None:
+    """
+    Feed a negotiation session decrypted device replies in order.
+
+    :param session: Session under test.
+    :param replies: Pairs of command and plaintext payload, both as hex.
+    """
+    for cmd, plaintext in replies:
+        await session.on_plaintext(
+            bytes.fromhex("030001"), bytes.fromhex(cmd), bytes.fromhex(plaintext),
+        )

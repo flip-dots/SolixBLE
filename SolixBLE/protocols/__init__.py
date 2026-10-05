@@ -17,13 +17,16 @@ from .base import (
     new_announcement,
 )
 from .ecdh import EcdhPath
+from .legacy import LegacyAesPath
 from .outer import EncryptedOuter, PlainOuter
-from .session import NegotiatedSession
+from .session import PATHS, NegotiatedSession
 
 __all__ = [
+    "PATHS",
     "EcdhPath",
     "EncryptedOuter",
     "Keys",
+    "LegacyAesPath",
     "Link",
     "NegotiatedSession",
     "Outer",

@@ -35,6 +35,8 @@ __all__ = [
     "client_parameters",
     "new_announcement",
     "override",
+    "record_identity",
+    "send_clock",
 ]
 
 #: The client's ``a3`` in ``x003`` and ``x005``; the device logs it and ignores it.
@@ -180,6 +182,14 @@ class Path(Protocol):
     keys: Container | None
     authorized: bool
 
+    @classmethod
+    def matches(cls, announcement: Container, outer: Outer) -> bool:
+        """Whether this path handles what the device declared, on this outer.
+
+        :param announcement: What the device declared in ``x803``.
+        :param outer: The outer protocol the session runs on.
+        """
+
     async def on_stage(
         self,
         session: NegotiatedSessionLike,
@@ -264,3 +274,34 @@ class UnsupportedNegotiation(Exception):  # noqa: N818
 def client_parameters(**tags: object) -> dict[str, dict[str, object]]:
     """Build a negotiation parameter dict for ``_send_packet`` from tag=value pairs."""
     return {tag: {"value": value} for tag, value in tags.items()}
+
+
+async def send_clock(session: NegotiatedSessionLike) -> None:
+    """Send ``x022``: the time, UTC offset (int32 LE seconds west) and POSIX TZ.
+
+    The outer adds the client id as ``a2`` where the app sends it.
+
+    :param session: The session running the path.
+    """
+    link = session.link
+    await session.send(
+        0x022,
+        client_parameters(
+            a1=lambda self: self._timestamp(),
+            a3=link._timezone_offset(),  # noqa: SLF001
+            a5=link._posix_timezone().encode(),  # noqa: SLF001
+        ),
+        client_id=True,
+    )
+
+
+def record_identity(announcement: Container, parameters: ParameterDict) -> None:
+    """Record the serial (``a4``) and MAC (``a5``) the device sent in ``x829``.
+
+    :param announcement: Where to record them.
+    :param parameters: The ``x829`` reply's parameters.
+    """
+    if "a4" in parameters:
+        announcement.serial = parameters["a4"].value_legacy
+    if "a5" in parameters:
+        announcement.mac = parameters["a5"].value_legacy

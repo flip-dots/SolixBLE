@@ -3,6 +3,9 @@
 .. moduleauthor:: kb1ibt
 """
 
+import asyncio
+import logging
+
 import pytest
 
 from SolixBLE import C300, C1000G2, PrimeCharger160w, SolixBLEDevice
@@ -17,6 +20,11 @@ from tests.const import (
     NEGOTIATION_RESPONSES_SOLIX,
 )
 from tests.helpers import MockDevice, make_advertisement
+
+#: x803 with no AES bit in a1 and no ECDH bit in a3.
+UNKNOWN_X803 = "00a10100a202fd00a30110a40101a50102"
+#: How much faster fast_sleep and fast_timeouts run the clock.
+TIME_SCALE = 100
 
 
 @pytest.mark.asyncio
@@ -201,3 +209,47 @@ async def test_restart_policy_is_one_method(
         assert not await device.connect()
 
     assert mock_bluetooth.writes == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_path_fails_fast(
+    caplog: pytest.LogCaptureFixture,
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A capability reply no path handles fails the connect without retrying."""
+    device = C300(MOCK_BLE_DEVICE)
+    unknown_x803 = Packet.build(
+        {
+            "pattern": bytes.fromhex("030001"),
+            "cmd": bytes.fromhex("0803"),
+            "payload_bytes": bytes.fromhex(UNKNOWN_X803),
+        },
+    )
+    loop = asyncio.get_running_loop()
+    async with MockDevice() as mock_bluetooth:
+        mock_bluetooth.expect_ordered(
+            bytes.fromhex(NEGOTIATION_COMMAND_0),
+            [
+                bytes.fromhex(r)
+                for r in NEGOTIATION_RESPONSES_SOLIX[NEGOTIATION_COMMAND_0]
+            ],
+        )
+        mock_bluetooth.expect_ordered(
+            bytes.fromhex(NEGOTIATION_COMMAND_1),
+            [unknown_x803],
+        )
+
+        started = loop.time()
+        with caplog.at_level(logging.ERROR):
+            assert not await device.connect()
+        elapsed = loop.time() - started
+        mock_bluetooth.check_assertions()
+
+    assert [Packet.parse(write).cmd.hex() for write in mock_bluetooth.writes] == [
+        "0001",
+        "0003",
+    ]
+    assert "encrypt_method=0x10" in caplog.text
+    assert elapsed < device._negotiation_deadline() / TIME_SCALE  # noqa: SLF001
