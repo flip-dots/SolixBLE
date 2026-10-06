@@ -43,3 +43,11 @@ Homepage = "https://github.com/flip-dots/SolixBLE"
 Documentation = "https://solixble.readthedocs.io/en/latest/"
 Repository = "https://github.com/flip-dots/SolixBLE"
 Issues = "https://github.com/flip-dots/SolixBLE/issues"
+
+[project.optional-dependencies]
+cli = [
+    "prompt-toolkit",
+]
+
+[project.scripts]
+solixble = "SolixBLE.cli:main"

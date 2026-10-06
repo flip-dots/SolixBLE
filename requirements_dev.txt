@@ -8,5 +8,6 @@ bleak-retry-connector
 construct
 tzdata
 tzlocal
+prompt-toolkit
 ruff
 mypy

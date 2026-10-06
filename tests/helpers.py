@@ -25,12 +25,17 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     Container,
 )
 
-from SolixBLE.const import FALLBACK_TZ
+from SolixBLE.cli import Console
+from SolixBLE.const import FALLBACK_TZ, UUID_IDENTIFIER
 from SolixBLE.constructs import Composer, Packet, PacketCommand, PacketPattern
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.protocols import EcdhPath, Keys, NegotiatedSession
 from SolixBLE.utilities import _to_bytes
-from tests.const import SOLIX_TEST_PRIVATE_KEY
+from tests.const import (
+    MOCK_BLE_DEVICE,
+    NEGOTIATION_RESPONSES_SOLIX,
+    SOLIX_TEST_PRIVATE_KEY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -542,3 +547,36 @@ def frame_header(cmd: str, pattern: str = "030001") -> Container:
     :returns: The parsed packet, with an empty payload.
     """
     return Packet.parse(build_frame(pattern, cmd))
+
+
+def console_seeing_c300(**kwargs: Any) -> Console:
+    """
+    Return a console whose scanner reports the mock device as a negotiating
+    Anker device without a manufacturer record.
+
+    :param kwargs: Passed through to the console.
+    """
+    advertisement = make_advertisement(service_uuids=[UUID_IDENTIFIER])
+    return Console(
+        scanner=scanner_reporting([(MOCK_BLE_DEVICE, advertisement)]),
+        reply_wait=0,
+        **kwargs,
+    )
+
+
+async def connect_console(console: Console, mock_bluetooth: MockDevice) -> list[str]:
+    """
+    Scan and connect the console to the mock device as a C300 that answers
+    with the recorded negotiation.
+
+    :param console: Console under test, from console_seeing_c300.
+    :param mock_bluetooth: The active mock device.
+    :returns: What the connect command printed.
+    """
+    for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+        mock_bluetooth.expect_ordered(
+            bytes.fromhex(expected),
+            [bytes.fromhex(response) for response in responses],
+        )
+    await console.run_line("scan 0")
+    return await console.run_line("connect 0 C300")
