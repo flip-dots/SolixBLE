@@ -3,6 +3,8 @@
 .. moduleauthor:: kb1ibt
 """
 
+import logging
+
 import pytest
 from bleak.backends.device import BLEDevice
 
@@ -85,6 +87,38 @@ async def test_transport_2215_uuids(
         assert mock_bluetooth.notify_uuids == [UUID_TELEMETRY_2215]
         assert set(mock_bluetooth.write_uuids) == {UUID_COMMAND_2215}
         await device.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_requested_disconnect_is_not_another_clients(
+    caplog: pytest.LogCaptureFixture,
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """The link drop that follows ``disconnect()`` is logged as the one asked for."""
+    device = C300(MOCK_BLE_DEVICE)
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        with caplog.at_level(logging.DEBUG, logger="SolixBLE.device"):
+            await device.disconnect()
+            mock_bluetooth.disconnect()
+
+    assert f"Disconnected from '{device.name}'." in caplog.text
+    assert "came from other client" not in caplog.text
+
+
+def test_init_message_names_the_address(caplog: pytest.LogCaptureFixture) -> None:
+    """The device's debug line on creation separates its name from its address."""
+    with caplog.at_level(logging.DEBUG, logger="SolixBLE.device"):
+        C300(MOCK_BLE_DEVICE)
+
+    assert f"' with address '{MOCK_BLE_DEVICE.address}'" in caplog.text
 
 
 @pytest.mark.asyncio
