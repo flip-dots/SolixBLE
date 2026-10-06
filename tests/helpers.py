@@ -377,6 +377,7 @@ def make_advertisement(
     manufacturer_data: dict[int, bytes] | None = None,
     service_uuids: list[str] | None = None,
     local_name: str | None = None,
+    service_data: dict[str, bytes] | None = None,
 ) -> AdvertisementData:
     """
     Build a bleak scan result with the given fields.
@@ -384,11 +385,12 @@ def make_advertisement(
     :param manufacturer_data: Manufacturer data by company identifier.
     :param service_uuids: Advertised service UUIDs.
     :param local_name: Advertised local name.
+    :param service_data: Service data by service UUID.
     """
     return AdvertisementData(
         local_name=local_name,
         manufacturer_data=manufacturer_data or {},
-        service_data={},
+        service_data=service_data or {},
         service_uuids=service_uuids or [],
         tx_power=None,
         rssi=-60,

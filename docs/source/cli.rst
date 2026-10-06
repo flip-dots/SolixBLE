@@ -29,10 +29,12 @@ Commands
 
    * - Command
      - Does
-   * - ``scan [secs]``
+   * - ``scan [secs] [raw]``
      - Lists advertising Anker devices: address, name, the MAC, product type,
        sku and capability from the advertisement, and the class the factory
-       picks for it.
+       picks for it. ``raw`` adds each device's advertisement as bytes: the
+       Anker ``0xffff`` record (marked when it doesn't parse), other
+       manufacturer data, service data and the advertised services.
    * - ``connect <n|mac|address> [class]``
      - Connects a scanned device, as the class named or the factory's choice.
    * - ``devices``, ``use <n>``, ``disconnect [n]``

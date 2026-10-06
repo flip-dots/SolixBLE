@@ -79,7 +79,8 @@ FRAME_HISTORY = 1000
 _MODEL_MRO_INDEX = 2
 
 HELP_LINES = (
-    "scan [secs]                          advertising Anker devices (default 5 s)",
+    "scan [secs] [raw]                    advertising Anker devices (default 5 s);",
+    "                                     raw adds each one's advertisement bytes",
     "connect <n|mac|address> [class]      connect a scanned device; the class",
     "                                     defaults to the factory's choice",
     "devices | use <n> | disconnect [n]   the open links and the current one",
@@ -565,7 +566,9 @@ class Console:
         return []
 
     async def _cmd_scan(self, args: list[str]) -> list[str]:
-        seconds = float(args[0]) if args else DEFAULT_SCAN_SECONDS
+        raw = "raw" in args
+        numbers = [arg for arg in args if arg != "raw"]
+        seconds = float(numbers[0]) if numbers else DEFAULT_SCAN_SECONDS
         found: dict[str, ScanResult] = {}
 
         def detected(ble_device: BLEDevice, advertisement: AdvertisementData) -> None:
@@ -578,7 +581,39 @@ class Console:
             found.values(),
             key=lambda result: -result.advertisement.rssi,
         )
-        return self._scan_table()
+        return self._scan_table() + (self._raw_lines() if raw else [])
+
+    def _raw_lines(self) -> list[str]:
+        """Return each scanned device's advertisement as raw bytes, by index.
+
+        The Anker record is shown whether or not it parses, then any other
+        manufacturer data, service data and the advertised services.
+        """
+        lines = []
+        for index, result in enumerate(self.results):
+            advertisement = result.advertisement
+            record = advertisement.manufacturer_data.get(ANKER_COMPANY_ID)
+            if record is not None:
+                unparsed = (
+                    " (unparsed)"
+                    if record_from_advertisement(advertisement) is None
+                    else ""
+                )
+                lines.append(f"{index}  ffff={record.hex()}{unparsed}")
+            lines.extend(
+                f"{index}  mfr {company:04x}={data.hex()}"
+                for company, data in advertisement.manufacturer_data.items()
+                if company != ANKER_COMPANY_ID
+            )
+            lines.extend(
+                f"{index}  data {uuid}={data.hex()}"
+                for uuid, data in advertisement.service_data.items()
+            )
+            if advertisement.service_uuids:
+                lines.append(
+                    f"{index}  services {' '.join(advertisement.service_uuids)}",
+                )
+        return lines
 
     def _scan_table(self) -> list[str]:
         """Return the last scan as a table."""

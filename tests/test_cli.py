@@ -20,6 +20,7 @@ from SolixBLE.cli import (
     coerce_arguments,
     split_args,
 )
+from SolixBLE.const import UUID_IDENTIFIER
 from tests.const import MOCK_BLE_DEVICE
 from tests.helpers import (
     MockDevice,
@@ -31,6 +32,12 @@ from tests.helpers import (
 
 #: A2345 manufacturer record: MAC, product type b402, sku QJB, capability 04.
 A2345_RECORD = "01aa12deadb34500b402514a4204"
+#: F3800-shaped record: no capability byte.
+F3800_RECORD = "01aabbccddeeff02b106373434"
+#: A record version the library doesn't know.
+UNKNOWN_RECORD = "03aabbccddeeff00b199"
+OTHER_COMPANY_ID = 0x004C
+OTHER_SERVICE = "0000fe2c-0000-1000-8000-00805f9b34fb"
 OWNER = "owner-token"
 OTHER_TOKEN = "other-token"  # noqa: S105  # a client id, not a secret
 #: The C300 recorded flow's timestamp, as fake_time pins it.
@@ -81,6 +88,43 @@ async def test_scan_lists_anker_devices_only() -> None:
         "-60",
     ]
     assert len(lines) == len(("header", "anker"))
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_shows_the_advertisement_bytes() -> None:
+    """``scan raw`` adds each record's bytes, flagging one that doesn't parse."""
+    parsed = BLEDevice("AA:BB:CC:DD:EE:01", "Anker SOLIX F3800", None)
+    unparsed = BLEDevice("AA:BB:CC:DD:EE:02", None, None)
+    results = [
+        (
+            parsed,
+            make_advertisement(
+                manufacturer_data={ANKER_COMPANY_ID: bytes.fromhex(F3800_RECORD)},
+                service_uuids=[UUID_IDENTIFIER],
+            ),
+        ),
+        (
+            unparsed,
+            make_advertisement(
+                manufacturer_data={
+                    ANKER_COMPANY_ID: bytes.fromhex(UNKNOWN_RECORD),
+                    OTHER_COMPANY_ID: bytes.fromhex("0215"),
+                },
+                service_data={OTHER_SERVICE: bytes.fromhex("01")},
+            ),
+        ),
+    ]
+    console = Console(scanner=scanner_reporting(results), reply_wait=0)
+
+    lines = await console.run_line("scan 0 raw")
+
+    assert lines[len(("header", "parsed", "unparsed")) :] == [
+        f"0  ffff={F3800_RECORD}",
+        f"0  services {UUID_IDENTIFIER}",
+        f"1  ffff={UNKNOWN_RECORD} (unparsed)",
+        f"1  mfr {OTHER_COMPANY_ID:04x}=0215",
+        f"1  data {OTHER_SERVICE}=01",
+    ]
 
 
 @pytest.mark.asyncio
