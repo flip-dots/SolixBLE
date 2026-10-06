@@ -24,7 +24,7 @@ from SolixBLE.cli import (
     configure_logging,
     split_args,
 )
-from SolixBLE.const import UUID_IDENTIFIER
+from SolixBLE.const import LEGACY_SERVICE, SERVICE_2215, UUID_IDENTIFIER
 from tests.const import MOCK_BLE_DEVICE
 from tests.helpers import (
     MockDevice,
@@ -36,6 +36,8 @@ from tests.helpers import (
 
 #: A2345 manufacturer record: MAC, product type b402, sku QJB, capability 04.
 A2345_RECORD = "01aa12deadb34500b402514a4204"
+#: A1340 record (HaSolixBLE #48): on the 2215 transport.
+A1340_RECORD = "01e8eeccc7011802010100000004"
 #: F3800-shaped record: no capability byte.
 F3800_RECORD = "01aabbccddeeff02b106373434"
 #: A record version the library doesn't know.
@@ -50,6 +52,39 @@ TIMESTAMP = "42ad8c69"
 FAILURE = "link refused"
 #: How a frame line names the mock device.
 DEVICE_TAG = f"[{MOCK_BLE_DEVICE.name}] "
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("service", "record", "transport"),
+    [
+        pytest.param(SERVICE_2215, A1340_RECORD, "2215", id="a1340"),
+        pytest.param(LEGACY_SERVICE, "1fa63fcceee8", "legacy", id="legacy_767"),
+    ],
+)
+async def test_device_without_a_class_names_its_transport(
+    service: str,
+    record: str,
+    transport: str,
+) -> None:
+    """A device no class speaks shows its transport in the scan and on connect."""
+    device = BLEDevice("AA:BB:CC:DD:EE:01", None, None)
+    advertisement = make_advertisement(
+        manufacturer_data={ANKER_COMPANY_ID: bytes.fromhex(record)},
+        service_uuids=[service],
+    )
+    console = Console(
+        scanner=scanner_reporting([(device, advertisement)]),
+        reply_wait=0,
+    )
+
+    lines = await console.run_line("scan 0")
+    connect = await console.run_line("connect 0")
+
+    assert lines[1].split()[-2] == f"({transport})"
+    assert connect == [
+        f"! no class speaks the {transport} transport yet; name one to try",
+    ]
 
 
 @pytest.mark.asyncio

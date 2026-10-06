@@ -45,7 +45,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 import SolixBLE
 
 from .advertisement import ANKER_COMPANY_ID, record_from_advertisement
-from .const import UUID_IDENTIFIERS
+from .const import SERVICE_2215, UUID_IDENTIFIERS
 from .constructs import (
     Channel,
     Composer,
@@ -487,6 +487,13 @@ def coerce_arguments(method: Callable[..., object], args: list[object]) -> list[
     return coerced + args[len(coerced) :]
 
 
+def _transport_without_class(advertisement: AdvertisementData) -> str:
+    """Name the transport of a device the factory has no class for."""
+    if SERVICE_2215 in advertisement.service_uuids:
+        return "2215"
+    return "legacy"
+
+
 def _link_state(device: SolixBLEDevice) -> str:
     """Return how far a device's link has come: negotiated, connected or down."""
     if device.negotiated:
@@ -703,7 +710,9 @@ class Console:
                     record.product_type.hex() if record is not None else "",
                     record.sku if record is not None else "",
                     f"{capability:02x}" if capability is not None else "",
-                    cls.__name__ if cls is not None else "legacy",
+                    cls.__name__
+                    if cls is not None
+                    else f"({_transport_without_class(advertisement)})",
                     str(advertisement.rssi),
                 ),
             )
@@ -778,7 +787,8 @@ class Console:
             result.ble_device.name,
         )
         if cls is None:
-            msg = "the device is on the legacy transport; name its class"
+            transport = _transport_without_class(result.advertisement)
+            msg = f"no class speaks the {transport} transport yet; name one to try"
             raise CommandError(msg)
         return cls
 
