@@ -49,6 +49,7 @@ from .const import SERVICE_2215, UUID_IDENTIFIERS
 from .constructs import (
     Channel,
     Composer,
+    Negotiation,
     Packet,
     PacketCommand,
     PacketPattern,
@@ -75,6 +76,7 @@ FACTORY_CHANNEL = 0x0C
 TIMESTAMP = "@ts"
 CONNECT_USAGE = (
     "connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]"
+    " [--no-register]"
 )
 #: The outer protocols ``connect --outer`` opens with, whatever the advert says.
 OUTERS: dict[str, type[Outer]] = {"plain": PlainOuter, "encrypted": EncryptedOuter}
@@ -99,11 +101,13 @@ HELP_LINES = (
     "scan [secs] [raw]                    advertising Anker devices (default 5 s);",
     "                                     raw adds each one's advertisement bytes",
     "connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]",
-    "                                     connect a scanned device; the class",
+    "        [--no-register]              connect a scanned device; the class",
     "                                     defaults to the factory's choice;",
     "                                     --no-advert connects as HaSolixBLE does",
     "                                     (no capability hint), --outer opens with",
-    "                                     that outer whatever the advert says",
+    "                                     that outer whatever the advert says,",
+    "                                     --no-register withholds 4027 and carries",
+    "                                     on as if authorized",
     "devices | use <n> | disconnect [n]   the open links and the current one",
     "release [n] | reconnect [n]          drop the link (no auto-reconnect) so the",
     "                                     app can connect; retake it on the same",
@@ -281,6 +285,8 @@ class FrameTap(SolixBLEDevice):
     """
 
     frames: FrameLog
+    #: Withhold ``x027`` and carry on as if authorized (``connect --no-register``).
+    withhold_registration = False
     #: Pattern and cmd of the packet being built, while ``_send_packet`` runs.
     _sending: tuple[bytes, bytes] | None = None
 
@@ -304,9 +310,19 @@ class FrameTap(SolixBLEDevice):
         **kwargs: dict[Any, Any],
     ) -> None:
         """Send a packet, noting its header for the record."""
-        self._sending = wire_header(
+        pattern, cmd = wire_header(
             Container({"composer": Composer.REPLY, **command, "channel": channel}),
         )
+        if (
+            self.withhold_registration
+            and channel == Channel.NEGOTIATION
+            and PacketCommand.parse(cmd).msgtype == Negotiation.GET_AUTHENTICATION
+            and self._session is not None
+            and self._session.path is not None
+        ):
+            self._session.path.authorized = True
+            return
+        self._sending = (pattern, cmd)
         try:
             await super()._send_packet(channel, command, parameters, **kwargs)
         finally:
@@ -500,18 +516,24 @@ def coerce_arguments(method: Callable[..., object], args: list[object]) -> list[
     return coerced + args[len(coerced) :]
 
 
-def _connect_options(args: list[str]) -> tuple[list[str], bool, type[Outer] | None]:
-    """Split ``connect``'s arguments into positionals, ``--no-advert`` and ``--outer``.
+def _connect_options(
+    args: list[str],
+) -> tuple[list[str], bool, type[Outer] | None, bool]:
+    """Split ``connect``'s arguments into positionals and its options.
 
+    :returns: The positionals, ``--no-advert``, ``--outer`` and ``--no-register``.
     :raises CommandError: If ``--outer`` is not followed by plain or encrypted.
     """
     positional = []
     no_advert = False
+    no_register = False
     outer: type[Outer] | None = None
     words = iter(args)
     for word in words:
         if word == "--no-advert":
             no_advert = True
+        elif word == "--no-register":
+            no_register = True
         elif word == "--outer":
             name = next(words, "")
             if name not in OUTERS:
@@ -519,7 +541,7 @@ def _connect_options(args: list[str]) -> tuple[list[str], bool, type[Outer] | No
             outer = OUTERS[name]
         else:
             positional.append(word)
-    return positional, no_advert, outer
+    return positional, no_advert, outer, no_register
 
 
 def _transport_without_class(advertisement: AdvertisementData) -> str:
@@ -777,7 +799,7 @@ class Console:
         return None
 
     async def _cmd_connect(self, args: list[str]) -> list[str]:
-        positional, no_advert, outer = _connect_options(args)
+        positional, no_advert, outer, no_register = _connect_options(args)
         if not positional:
             raise CommandError(CONNECT_USAGE)
         result = self._find(positional[0])
@@ -797,6 +819,7 @@ class Console:
         )
         if outer is not None:
             device._outer_class = outer  # noqa: SLF001
+        device.withhold_registration = no_register
         device.frames = self.frames
         if self.token is not None:
             device._client_token = self.token  # noqa: SLF001

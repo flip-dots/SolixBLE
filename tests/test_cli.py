@@ -15,6 +15,7 @@ from SolixBLE import C300, DisplayTimeout
 from SolixBLE.advertisement import ANKER_COMPANY_ID
 from SolixBLE.cli import (
     CAPTURE_NOTE,
+    CONNECT_USAGE,
     CaptureHandler,
     Console,
     Frame,
@@ -25,8 +26,12 @@ from SolixBLE.cli import (
     split_args,
 )
 from SolixBLE.const import LEGACY_SERVICE, SERVICE_2215, UUID_IDENTIFIER
-from SolixBLE.constructs import Packet, PacketCommand
-from tests.const import MOCK_BLE_DEVICE, NEGOTIATION_RESPONSES_SOLIX
+from SolixBLE.constructs import Negotiation, Packet, PacketCommand
+from tests.const import (
+    MOCK_BLE_DEVICE,
+    NEGOTIATION_RESPONSES_PRIME,
+    NEGOTIATION_RESPONSES_SOLIX,
+)
 from tests.helpers import (
     MockDevice,
     connect_console,
@@ -133,8 +138,40 @@ async def test_connect_options_choose_the_opening(  # noqa: PLR0913, PLR0917
 async def test_connect_outer_needs_a_known_outer() -> None:
     """``--outer`` takes plain or encrypted."""
     console = Console(reply_wait=0)
-    assert await console.run_line("connect 0 --outer gcm") == [
-        "! connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]",
+    assert await console.run_line("connect 0 --outer gcm") == [f"! {CONNECT_USAGE}"]
+
+
+@pytest.mark.asyncio
+async def test_connect_no_register_withholds_4027(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """``--no-register`` negotiates the encrypted outer through ``4022`` only."""
+    console = Console(
+        scanner=scanner_reporting(
+            [(MOCK_BLE_DEVICE, make_advertisement(service_uuids=[UUID_IDENTIFIER]))],
+        ),
+        reply_wait=0,
+    )
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_PRIME.items():
+            if (
+                Packet.parse(bytes.fromhex(expected)).msgtype
+                != Negotiation.GET_AUTHENTICATION
+            ):
+                mock_bluetooth.expect_ordered(
+                    bytes.fromhex(expected),
+                    [bytes.fromhex(response) for response in responses],
+                )
+        await console.run_line("scan 0")
+        lines = await console.run_line("connect 0 PrimeCharger160w --no-register")
+        mock_bluetooth.check_assertions()
+        await console.close()
+
+    assert lines[0] == "[0] connected"
+    assert Negotiation.GET_AUTHENTICATION not in [
+        Packet.parse(write).msgtype for write in mock_bluetooth.writes
     ]
 
 
