@@ -72,6 +72,17 @@ PROMPT = "solixble> "
 FACTORY_CHANNEL = 0x0C
 #: A parameter value replaced by the live 4-byte timestamp when sent.
 TIMESTAMP = "@ts"
+#: Loggers of the BLE stack, set by ``--bleak-log-level`` apart from the library's.
+BLEAK_LOGGERS = ("bleak", "bleak_retry_connector")
+#: Announcement fields shown in hex, as on the wire.
+HEX_FIELDS = frozenset(
+    {"base_method", "encrypt_method", "auth_method", "registration_status"},
+)
+#: Shown when a capture starts.
+CAPTURE_NOTE = (
+    "! the capture holds decrypted frames, the client token and device serials"
+    " in clear: keep it out of version control and redact it before sharing"
+)
 DEFAULT_SCAN_SECONDS = 5.0
 DEFAULT_FRAMES = 20
 FRAME_HISTORY = 1000
@@ -96,7 +107,8 @@ HELP_LINES = (
     "    e.g. {'a1': {'value': '21'}}, or a PARAMETERS_* name; a value of '@ts'",
     "    is the live timestamp; kwargs feed lambda values: {'seconds': 300}",
     "frames [n]                           last n frames, both directions (default 20)",
-    "capture <file> | capture off         append every frame to a file, dated",
+    "capture <file> | capture off         append the session to a file, dated:",
+    "                                     frames, commands, output and log records",
     "token [id] | region [cc]             client token (4027 / 420a owner); region",
     "console                              Python prompt on this loop; exit() returns",
     "help | quit",
@@ -163,7 +175,11 @@ def describe(cleartext: bytes | None) -> str:
 
 
 class FrameLog:
-    """The frames of every tapped device, and an optional append-only capture."""
+    """The frames of every tapped device, and an optional append-only capture.
+
+    The capture holds the frames and, through :meth:`note`, the session
+    around them: commands, their output and log records.
+    """
 
     def __init__(self, size: int = FRAME_HISTORY) -> None:
         """Keep the last ``size`` frames.
@@ -205,6 +221,18 @@ class FrameLog:
             self._capture.write(frame.capture_line() + "\n")
             self._capture.flush()
 
+    def note(self, text: str) -> None:
+        """Append console text to the capture file, if one is open, each line dated.
+
+        :param text: A command, its output, or a log record.
+        """
+        if self._capture is None:
+            return
+        stamp = f"{datetime.now(UTC).astimezone():%Y-%m-%d %H:%M:%S.%f}"[:-3]
+        for line in text.splitlines() or [""]:
+            self._capture.write(f"{stamp} {line}\n")
+        self._capture.flush()
+
     def since(self, total: int) -> list[Frame]:
         """Return the frames recorded after the log held ``total`` frames.
 
@@ -212,6 +240,24 @@ class FrameLog:
         """
         count = min(self.total - total, len(self.frames))
         return list(self.frames)[len(self.frames) - count :] if count else []
+
+
+class CaptureHandler(logging.Handler):
+    """Writes log records, tracebacks included, to the capture file."""
+
+    def __init__(self, frames: FrameLog) -> None:
+        """Write to the capture of ``frames``.
+
+        :param frames: The frame log whose capture file receives the records.
+        """
+        super().__init__()
+        self._frames = frames
+        self.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+
+    @override
+    def emit(self, record: logging.LogRecord) -> None:
+        """Note one formatted record in the capture."""
+        self._frames.note(self.format(record))
 
 
 class FrameTap(SolixBLEDevice):
@@ -448,11 +494,17 @@ def _link_state(device: SolixBLEDevice) -> str:
     return "connected" if device.connected else "down"
 
 
-def _render(value: object) -> str:
-    """Render an announcement field: bytes as ASCII when printable, else hex."""
+def _render(name: str, value: object) -> str:
+    """Render an announcement field.
+
+    Bytes as ASCII when printable, else hex; method and status bytes in hex,
+    as on the wire; counts and seconds in decimal.
+    """
     if isinstance(value, bytes):
         text = value.decode("ascii", errors="replace")
         return text if text.isprintable() else value.hex()
+    if name in HEX_FIELDS and isinstance(value, int):
+        return f"0x{value:02x}"
     return str(value)
 
 
@@ -509,10 +561,26 @@ class Console:
         self._reply_wait = reply_wait
 
     async def run_line(self, line: str) -> list[str]:
-        """Run one command line and return what it prints.
+        """Run one command line, note it and its output in the capture.
+
+        Frame lines are left out of the note; the capture already holds the
+        frames themselves.
 
         :param line: The command line.
         """
+        if line.strip():
+            self.frames.note(f"{PROMPT}{line.strip()}")
+        mark = self.frames.total
+        lines = await self._run(line)
+        frame_lines = {frame.line() for frame in self.frames.since(mark)}
+        if not line.strip().startswith("frames"):
+            for output in lines:
+                if output not in frame_lines:
+                    self.frames.note(output)
+        return lines
+
+    async def _run(self, line: str) -> list[str]:
+        """Run one command line and return what it prints."""
         words = split_args(line.strip())
         if not words:
             return []
@@ -674,7 +742,8 @@ class Console:
             msg = f"{args[0]} was not seen advertising"
             raise CommandError(msg)
         cls = self._class_for(result, args[1] if len(args) > 1 else None)
-        tapped = type(f"Tapped{cls.__name__}", (FrameTap, cls), {})
+        # Named after the model, so the library's own log lines read as usual
+        tapped = type(cls.__name__, (FrameTap, cls), {})
         device: FrameTap = tapped(result.ble_device, advertisement=result.advertisement)
         device.frames = self.frames
         if self.token is not None:
@@ -747,25 +816,26 @@ class Console:
     def _info(self, device: SolixBLEDevice) -> list[str]:
         """Return the class, link state, negotiation and announcement of a device."""
         session = device._session  # noqa: SLF001
-        lines = [
-            f"class       {model_class(device).__name__}",
-            f"address     {device.address}  name {device.name}",
-            f"connected   {device.connected}  negotiated {device.negotiated}",
+        rows = [
+            ("class", model_class(device).__name__),
+            ("address", f"{device.address}  name {device.name}"),
+            ("connected", f"{device.connected}  negotiated {device.negotiated}"),
         ]
         if session is not None:
             path = session.path.name if session.path is not None else "-"
-            lines.append(f"outer       {session.outer.name}  path {path}")
+            rows.append(("outer", f"{session.outer.name}  path {path}"))
         error = device._negotiation_error  # noqa: SLF001
         if error is not None:
-            lines.append(f"error       {error}")
+            rows.append(("error", str(error)))
         announcement = device.announcement
         if announcement is not None:
-            lines.extend(
-                f"{name:<11} {_render(value)}"
+            rows.extend(
+                (name, _render(name, value))
                 for name, value in vars(announcement).items()
                 if value is not None
             )
-        return lines
+        width = max(len(label) for label, _ in rows)
+        return [f"{label:<{width}} {value}" for label, value in rows]
 
     async def _cmd_data(self, args: list[str]) -> list[str]:
         data = self._device()._data  # noqa: SLF001
@@ -904,7 +974,7 @@ class Console:
             self.frames.capture(None)
             return ["capture off"]
         await asyncio.to_thread(self.frames.capture_to, args[0])
-        return [f"capturing to {self.frames.capture_path} (appending)"]
+        return [f"capturing to {self.frames.capture_path} (appending)", CAPTURE_NOTE]
 
     async def _cmd_token(self, args: list[str]) -> list[str]:
         if args:
@@ -1083,17 +1153,37 @@ async def python_prompt(console: Console, history: Path) -> None:
             continue
         except EOFError:
             return
+        console.frames.note(f"{python.prompt}{line}")
         if python.prompt == ">>> " and line.strip() in ("exit()", "quit()"):
             return
         await python.push(line)
 
 
-async def interactive(console: Console, history: Path, log_level: str) -> None:
+def configure_logging(log_level: str, bleak_log_level: str) -> None:
+    """Set the library's log level and, apart from it, the BLE stack's.
+
+    :param log_level: Level of SolixBLE's records.
+    :param bleak_log_level: Level of bleak's and bleak-retry-connector's records.
+    """
+    logging.getLogger("SolixBLE").setLevel(log_level.upper())
+    for name in BLEAK_LOGGERS:
+        logging.getLogger(name).setLevel(bleak_log_level.upper())
+
+
+async def interactive(
+    console: Console,
+    history: Path,
+    log_level: str,
+    bleak_log_level: str,
+) -> None:
     """Run the command prompt until ``quit`` or end of input.
+
+    Packages other than the library and the BLE stack log warnings and up.
 
     :param console: The console to drive.
     :param history: The command history file.
-    :param log_level: The level of the library's log output.
+    :param log_level: Level of SolixBLE's records.
+    :param bleak_log_level: Level of bleak's and bleak-retry-connector's records.
     """
     session: PromptSession[str] = PromptSession(
         history=FileHistory(str(history)),
@@ -1102,7 +1192,9 @@ async def interactive(console: Console, history: Path, log_level: str) -> None:
         complete_while_typing=True,
     )
     with patch_stdout():
-        logging.basicConfig(level=log_level.upper())
+        logging.basicConfig(level=logging.WARNING)
+        configure_logging(log_level, bleak_log_level)
+        logging.getLogger().addHandler(CaptureHandler(console.frames))
         sys.stdout.write("solixble: help lists the commands.\n")
         try:
             while not console.finished:
@@ -1130,7 +1222,7 @@ def main(argv: list[str] | None = None) -> None:
         prog="solixble",
         description="Interactive console for Anker BLE devices",
     )
-    parser.add_argument("--capture", type=Path, help="append every frame to this file")
+    parser.add_argument("--capture", type=Path, help="append the session to this file")
     parser.add_argument("--token", help="client token sent as the 4027 / 420a owner")
     parser.add_argument("--region", help="two-letter region for Prime devices")
     parser.add_argument(
@@ -1149,17 +1241,25 @@ def main(argv: list[str] | None = None) -> None:
         type=Path,
         default=Path.home() / ".solixble_history",
     )
-    parser.add_argument("--log-level", default="warning")
+    parser.add_argument("--log-level", default="warning", help="SolixBLE's log level")
+    parser.add_argument(
+        "--bleak-log-level",
+        default="warning",
+        help="bleak's and bleak-retry-connector's log level",
+    )
     args = parser.parse_args(argv)
     if args.region:
         set_region(args.region)
     frames = FrameLog()
     if args.capture:
         frames.capture(args.capture)
+        sys.stdout.write(f"capturing to {args.capture} (appending)\n{CAPTURE_NOTE}\n")
     console = Console(
         frames,
         allow_factory_channel=args.allow_factory_channel,
         token=args.token,
         reply_wait=args.reply_wait,
     )
-    asyncio.run(interactive(console, args.history, args.log_level))
+    asyncio.run(
+        interactive(console, args.history, args.log_level, args.bleak_log_level),
+    )

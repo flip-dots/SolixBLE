@@ -57,7 +57,11 @@ Commands
    * - ``frames [n]``
      - The last frames, both directions, with their status and tags.
    * - ``capture <file>`` / ``capture off``
-     - Appends every frame to a file, one dated line each with the raw bytes.
+     - Appends the session to a file, one dated line each: every frame with
+       its raw bytes, each command and its output, the Python console's
+       input, and the log records ``--log-level`` and ``--bleak-log-level``
+       let through (tracebacks included). The file holds decrypted frames, the client token and
+       device serials in clear; keep it out of version control.
    * - ``token [id]``, ``region [cc]``
      - The client token sent in ``4027`` and as the Prime ``420a`` owner; the
        region (:py:func:`SolixBLE.set_region`).
@@ -92,7 +96,10 @@ Options
    * - ``--reply-wait SECS``
      - How long to collect frames after a send (default 2).
    * - ``--log-level LEVEL``
-     - The library's log level (default ``warning``).
+     - SolixBLE's log level (default ``warning``).
+   * - ``--bleak-log-level LEVEL``
+     - The BLE stack's log level, bleak and bleak-retry-connector (default
+       ``warning``). At ``debug`` bleak logs every advertisement it receives.
 
 .. warning::
 

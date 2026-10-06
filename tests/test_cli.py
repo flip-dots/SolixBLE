@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -13,11 +14,14 @@ from bleak.backends.device import BLEDevice
 from SolixBLE import C300, DisplayTimeout
 from SolixBLE.advertisement import ANKER_COMPANY_ID
 from SolixBLE.cli import (
+    CAPTURE_NOTE,
+    CaptureHandler,
     Console,
     Frame,
     FrameLog,
     PythonConsole,
     coerce_arguments,
+    configure_logging,
     split_args,
 )
 from SolixBLE.const import UUID_IDENTIFIER
@@ -42,6 +46,8 @@ OWNER = "owner-token"
 OTHER_TOKEN = "other-token"  # noqa: S105  # a client id, not a secret
 #: The C300 recorded flow's timestamp, as fake_time pins it.
 TIMESTAMP = "42ad8c69"
+#: The message of the failure logged in the capture test.
+FAILURE = "link refused"
 #: How a frame line names the mock device.
 DEVICE_TAG = f"[{MOCK_BLE_DEVICE.name}] "
 
@@ -142,8 +148,14 @@ async def test_connect_records_both_directions(
         devices = await console.run_line("devices")
         await console.close()
 
-    assert lines[:2] == ["[0] connected", "class       C300"]
-    assert "outer       plain  path ecdh" in lines
+    info = [line.split() for line in lines]
+    assert info[:2] == [["[0]", "connected"], ["class", "C300"]]
+    assert ["outer", "plain", "path", "ecdh"] in info
+    assert ["encrypt_method", "0x44"] in info
+    value_columns = {
+        line.index(field[1]) for line, field in zip(lines[1:], info[1:], strict=True)
+    }
+    assert len(value_columns) == 1
     assert console.devices == []
     assert devices == [
         f"*[0] {MOCK_BLE_DEVICE.name} {MOCK_BLE_DEVICE.address} C300 negotiated",
@@ -259,6 +271,87 @@ async def test_command_errors(
     console = Console(scanner=scanner_reporting([]), reply_wait=0)
     assert await console.run_line(line) == output
     assert not console.finished
+
+
+@pytest.mark.asyncio
+async def test_capture_warns_what_it_holds(tmp_path: Path) -> None:
+    """Starting a capture says the file holds tokens and serials in clear."""
+    path = tmp_path / "capture.txt"
+    console = Console(reply_wait=0)
+
+    started = await console.run_line(f"capture {path}")
+    stopped = await console.run_line("capture off")
+
+    assert started == [f"capturing to {path} (appending)", CAPTURE_NOTE]
+    assert stopped == ["capture off"]
+
+
+@pytest.mark.asyncio
+async def test_capture_holds_the_session(
+    tmp_path: Path,
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """Commands and their output are captured with the frames, each frame once."""
+    path = tmp_path / "session.log"
+    console = console_seeing_c300()
+    async with MockDevice() as mock_bluetooth:
+        await console.run_line(f"capture {path}")
+        await connect_console(console, mock_bluetooth)
+        mock_bluetooth.expect_ordered()
+        await console.run_line("send 404a PARAMETERS_ON")
+        await console.close()
+
+    bodies = [line.split(" ", 2)[2] for line in path.read_text().splitlines()]
+    assert "solixble> connect 0 C300" in bodies
+    assert "[0] connected" in bodies
+    assert "solixble> send 404a PARAMETERS_ON" in bodies
+    sent = [body for body in bodies if body.startswith(f"{DEVICE_TAG}out 03000f 404a")]
+    assert len(sent) == 1
+
+
+def test_bleak_logs_apart_from_the_library() -> None:
+    """``--log-level`` reaches SolixBLE's loggers; bleak keeps its own level."""
+    names = ("SolixBLE", "bleak", "bleak_retry_connector")
+    try:
+        configure_logging("debug", "warning")
+        assert logging.getLogger("SolixBLE.device").getEffectiveLevel() == logging.DEBUG
+        assert (
+            logging.getLogger(
+                "bleak.backends.corebluetooth.CentralManagerDelegate",
+            ).getEffectiveLevel()
+            == logging.WARNING
+        )
+        assert (
+            logging.getLogger("bleak_retry_connector").getEffectiveLevel()
+            == logging.WARNING
+        )
+    finally:
+        for name in names:
+            logging.getLogger(name).setLevel(logging.NOTSET)
+
+
+def test_log_records_reach_the_capture(tmp_path: Path) -> None:
+    """Log records, tracebacks included, are captured as dated lines."""
+    path = tmp_path / "log.log"
+    frames = FrameLog()
+    frames.capture(path)
+    handler = CaptureHandler(frames)
+    logger = logging.getLogger("SolixBLE.test_cli")
+    logger.addHandler(handler)
+    error = ValueError(FAILURE)
+    try:
+        logger.error("connect failed", exc_info=(ValueError, error, None))
+    finally:
+        logger.removeHandler(handler)
+        frames.capture(None)
+
+    lines = path.read_text().splitlines()
+    bodies = [line.split(" ", 2)[2] for line in lines]
+    assert bodies[0] == "ERROR:SolixBLE.test_cli:connect failed"
+    assert f"ValueError: {FAILURE}" in bodies
+    assert all(line[:4].isdigit() for line in lines)
 
 
 def test_capture_appends(tmp_path: Path) -> None:
