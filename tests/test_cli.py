@@ -389,6 +389,24 @@ async def test_send_resolves_constants_and_appends_the_trailer(
 
 
 @pytest.mark.asyncio
+async def test_send_names_a_missing_constant(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A constant the model lacks is named as such, not parsed as a literal."""
+    console = console_seeing_c300()
+    async with MockDevice() as mock_bluetooth:
+        await connect_console(console, mock_bluetooth)
+        lines = await console.run_line("send 4057 PARAMETERS_SUBSCRIBE")
+        await console.close()
+
+    assert lines == [
+        "! C300 has no constant PARAMETERS_SUBSCRIBE; constants lists them",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_nego_sends_on_the_negotiation_pattern(
     fake_time: None,  # noqa: ARG001
     fast_sleep: None,  # noqa: ARG001

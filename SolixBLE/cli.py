@@ -998,6 +998,10 @@ class Console:
         :raises CommandError: If it is neither a dict nor a known constant.
         """
         known = constants(self._device()) if self.current is not None else {}
+        if text.isidentifier() and text not in known:
+            model = model_class(self._device()).__name__
+            msg = f"{model} has no constant {text}; constants lists them"
+            raise CommandError(msg)
         value = copy.deepcopy(known[text]) if text in known else parse_literal(text)
         if not isinstance(value, dict):
             msg = f"parameters must be a dict, not {type(value).__name__}"
