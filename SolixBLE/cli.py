@@ -105,6 +105,9 @@ HELP_LINES = (
     "                                     (no capability hint), --outer opens with",
     "                                     that outer whatever the advert says",
     "devices | use <n> | disconnect [n]   the open links and the current one",
+    "release [n] | reconnect [n]          drop the link (no auto-reconnect) so the",
+    "                                     app can connect; retake it on the same",
+    "                                     device, which keeps its last outer",
     "info                                 class, outer, path, announcement",
     "data [verbose]                       decoded telemetry tags",
     "props | constants                    public properties; CMD_* and PARAMETERS_*",
@@ -557,6 +560,8 @@ class Console:
         "devices",
         "use",
         "disconnect",
+        "release",
+        "reconnect",
         "info",
         "data",
         "props",
@@ -857,6 +862,22 @@ class Console:
             self.current = self.devices[-1] if self.devices else None
         return [f"disconnected {device.name}"]
 
+    async def _cmd_release(self, args: list[str]) -> list[str]:
+        index = self._index(args)
+        device = self.devices[index]
+        await device.disconnect()
+        return [f"released [{index}] {device.name}; reconnect {index} retakes it"]
+
+    async def _cmd_reconnect(self, args: list[str]) -> list[str]:
+        index = self._index(args)
+        device = self.devices[index]
+        if not await device.connect():
+            return [
+                f"! could not reconnect [{index}] {device.name}",
+                *self._info(device),
+            ]
+        return [f"[{index}] reconnected", *self._info(device)]
+
     async def _cmd_info(self, _args: list[str]) -> list[str]:
         return self._info(self._device())
 
@@ -1117,6 +1138,8 @@ class CommandCompleter(Completer):
             ("connect", 2): lambda: sorted(device_classes()),
             ("use", 1): self._device_indices,
             ("disconnect", 1): self._device_indices,
+            ("release", 1): self._device_indices,
+            ("reconnect", 1): self._device_indices,
             ("call", 1): self._methods,
             ("send", 2): self._parameter_names,
             ("nego", 2): self._parameter_names,

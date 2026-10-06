@@ -44,6 +44,11 @@ Commands
        no ``0x04``.
    * - ``devices``, ``use <n>``, ``disconnect [n]``
      - The open links and which one the other commands act on.
+   * - ``release [n]``, ``reconnect [n]``
+     - Drops a device's link without the library's automatic reconnect, so
+       the Anker app or another client can connect, and keeps it in
+       ``devices``; ``reconnect`` connects the same device again, which
+       opens with the outer it last authorized on.
    * - ``info``
      - The class, link state, outer protocol, path and what the device
        announced while negotiating.

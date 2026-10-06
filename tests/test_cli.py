@@ -26,7 +26,7 @@ from SolixBLE.cli import (
 )
 from SolixBLE.const import LEGACY_SERVICE, SERVICE_2215, UUID_IDENTIFIER
 from SolixBLE.constructs import Packet, PacketCommand
-from tests.const import MOCK_BLE_DEVICE
+from tests.const import MOCK_BLE_DEVICE, NEGOTIATION_RESPONSES_SOLIX
 from tests.helpers import (
     MockDevice,
     connect_console,
@@ -252,6 +252,38 @@ async def test_connect_records_both_directions(
     keyed = [field for field in fields if field[2] == "4022"]
     assert keyed
     assert keyed[0][3] != "undecryptable"
+
+
+@pytest.mark.asyncio
+async def test_release_then_reconnect_the_same_device(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """``release`` drops the link but keeps the device; ``reconnect`` retakes it."""
+    console = console_seeing_c300()
+    async with MockDevice() as mock_bluetooth:
+        await connect_console(console, mock_bluetooth)
+        device = console.current
+        assert device is not None
+
+        released = await console.run_line("release")
+        assert not device.connected
+        listed = await console.run_line("devices")
+
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        reconnected = await console.run_line("reconnect")
+        mock_bluetooth.check_assertions()
+        await console.close()
+
+    assert released == [f"released [0] {MOCK_BLE_DEVICE.name}; reconnect 0 retakes it"]
+    assert listed[0].endswith("C300 down")
+    assert reconnected[0] == "[0] reconnected"
+    assert console.devices == []
 
 
 @pytest.mark.asyncio
