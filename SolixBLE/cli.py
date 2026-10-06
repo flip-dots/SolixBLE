@@ -787,6 +787,7 @@ class Console:
         if result is None:
             msg = f"{positional[0]} was not seen advertising"
             raise CommandError(msg)
+        slot = self._slot_for(result.ble_device.address)
         cls = self._class_for(result, positional[1] if len(positional) > 1 else None)
         # Named after the model, so the library's own log lines read as usual
         tapped = type(cls.__name__, (FrameTap, cls), {})
@@ -805,9 +806,26 @@ class Console:
                 f"! could not connect to {result.ble_device.address}",
                 *self._info(device),
             ]
-        self.devices.append(device)
+        if slot is None:
+            self.devices.append(device)
+            slot = len(self.devices) - 1
+        else:
+            self.devices[slot] = device
         self.current = device
-        return [f"[{len(self.devices) - 1}] connected", *self._info(device)]
+        return [f"[{slot}] connected", *self._info(device)]
+
+    def _slot_for(self, address: str) -> int | None:
+        """Return the index of a released device at ``address``, to connect into.
+
+        :raises CommandError: If a device at ``address`` is still connected.
+        """
+        for index, device in enumerate(self.devices):
+            if device.address == address:
+                if device.connected:
+                    msg = f"[{index}] is connected to {address}; release it first"
+                    raise CommandError(msg)
+                return index
+        return None
 
     def _class_for(
         self,
@@ -865,6 +883,8 @@ class Console:
     async def _cmd_release(self, args: list[str]) -> list[str]:
         index = self._index(args)
         device = self.devices[index]
+        if not device.connected:
+            return [f"[{index}] {device.name} is already down"]
         await device.disconnect()
         return [f"released [{index}] {device.name}; reconnect {index} retakes it"]
 

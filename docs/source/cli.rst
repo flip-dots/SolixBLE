@@ -48,7 +48,9 @@ Commands
      - Drops a device's link without the library's automatic reconnect, so
        the Anker app or another client can connect, and keeps it in
        ``devices``; ``reconnect`` connects the same device again, which
-       opens with the outer it last authorized on.
+       opens with the outer it last authorized on. ``connect`` on a released
+       device's address builds it afresh in the same slot, e.g. to retry
+       with ``--outer``; on a connected one it asks for a release first.
    * - ``info``
      - The class, link state, outer protocol, path and what the device
        announced while negotiating.

@@ -287,6 +287,32 @@ async def test_release_then_reconnect_the_same_device(
 
 
 @pytest.mark.asyncio
+async def test_connect_after_release_takes_the_released_slot(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A device keeps one slot: connecting it again needs a release, then reuses it."""
+    console = console_seeing_c300()
+    async with MockDevice() as mock_bluetooth:
+        await connect_console(console, mock_bluetooth)
+        while_connected = await console.run_line("connect 0 C300")
+        await console.run_line("release")
+        released_again = await console.run_line("release 0")
+        reconnected = await connect_console(console, mock_bluetooth)
+        mock_bluetooth.check_assertions()
+        slots = len(console.devices)
+        await console.close()
+
+    assert while_connected == [
+        f"! [0] is connected to {MOCK_BLE_DEVICE.address}; release it first",
+    ]
+    assert released_again == [f"[0] {MOCK_BLE_DEVICE.name} is already down"]
+    assert reconnected[0] == "[0] connected"
+    assert slots == 1
+
+
+@pytest.mark.asyncio
 async def test_token_is_the_client_token(
     fake_time: None,  # noqa: ARG001
     fast_sleep: None,  # noqa: ARG001
