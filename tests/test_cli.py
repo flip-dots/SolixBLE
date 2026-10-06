@@ -135,6 +135,26 @@ async def test_connect_options_choose_the_opening(  # noqa: PLR0913, PLR0917
 
 
 @pytest.mark.asyncio
+async def test_connect_outer_plain_is_not_reopened_encrypted(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A refused ``0001`` under ``--outer plain`` ends the connect."""
+    console = console_seeing_c300()
+    async with MockDevice() as mock_bluetooth:
+        mock_bluetooth.refuse_after()
+        await console.run_line("scan 0")
+        lines = await console.run_line("connect 0 C300 --outer plain")
+        mock_bluetooth.check_assertions()
+        await console.close()
+
+    assert lines[0].startswith("! could not connect")
+    writes = [Packet.parse(write) for write in mock_bluetooth.writes]
+    assert [PacketCommand.build(packet).hex() for packet in writes] == ["0001"]
+
+
+@pytest.mark.asyncio
 async def test_connect_outer_needs_a_known_outer() -> None:
     """``--outer`` takes plain or encrypted."""
     console = Console(reply_wait=0)

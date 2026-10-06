@@ -39,9 +39,10 @@ Commands
      - Connects a scanned device, as the class named or the factory's choice.
        ``--no-advert`` connects without the scan result, as HaSolixBLE does,
        so the class default picks the opening outer and a refused ``0001``
-       reopens with ``4001``. ``--outer`` opens with that outer, ignoring
-       the advertised capability byte, e.g. ``4001`` on a device that advertises
-       no ``0x04``. ``--no-register`` withholds the client registration
+       reopens with ``4001``. ``--outer`` attempts only that outer,
+       ignoring the advertised capability byte, e.g. ``4001`` on a device that
+       advertises no ``0x04``; a refused ``0001`` ends the connect instead of
+       reopening with ``4001``. ``--no-register`` withholds the client registration
        (``4027``) and carries on as if authorized, to see what the device
        does with a client that never registers.
    * - ``devices``, ``use <n>``, ``disconnect [n]``

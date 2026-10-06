@@ -78,7 +78,7 @@ CONNECT_USAGE = (
     "connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]"
     " [--no-register]"
 )
-#: The outer protocols ``connect --outer`` opens with, ignoring the advert.
+#: The outer protocols ``connect --outer`` attempts, ignoring the advert.
 OUTERS: dict[str, type[Outer]] = {"plain": PlainOuter, "encrypted": EncryptedOuter}
 #: Loggers of the BLE stack, set by ``--bleak-log-level`` apart from the library's.
 BLEAK_LOGGERS = ("bleak", "bleak_retry_connector")
@@ -104,8 +104,8 @@ HELP_LINES = (
     "        [--no-register]              connect a scanned device; the class",
     "                                     defaults to the factory's choice;",
     "                                     --no-advert connects as HaSolixBLE does",
-    "                                     (no capability hint), --outer opens with",
-    "                                     that outer, ignoring the advert's",
+    "                                     (no capability hint), --outer attempts",
+    "                                     only that outer, ignoring the advert's",
     "                                     capability byte;",
     "                                     --no-register withholds 4027 and carries",
     "                                     on as if authorized",
@@ -288,8 +288,21 @@ class FrameTap(SolixBLEDevice):
     frames: FrameLog
     #: Withhold ``x027`` and carry on as if authorized (``connect --no-register``).
     withhold_registration = False
+    #: Keep the outer ``connect --outer`` chose: a refusal ends the connect.
+    pin_outer = False
     #: Pattern and cmd of the packet being built, while ``_send_packet`` runs.
     _sending: tuple[bytes, bytes] | None = None
+
+    @override
+    async def _reopen_if_refused(
+        self,
+        max_attempts: int,
+        run_callbacks: bool,  # noqa: FBT001  # the library's signature
+    ) -> bool:
+        """Reopen on the other outer as the library does, unless it is pinned."""
+        if self.pin_outer:
+            return False
+        return await super()._reopen_if_refused(max_attempts, run_callbacks)
 
     @override
     def _encrypt_payload(self, payload: bytes) -> bytes:
@@ -820,6 +833,7 @@ class Console:
         )
         if outer is not None:
             device._outer_class = outer  # noqa: SLF001
+            device.pin_outer = True
         device.withhold_registration = no_register
         device.frames = self.frames
         if self.token is not None:
