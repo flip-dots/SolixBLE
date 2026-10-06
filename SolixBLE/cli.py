@@ -56,6 +56,7 @@ from .constructs import (
 )
 from .device import SolixBLEDevice
 from .factory import device_class_from_advertisement
+from .protocols import EncryptedOuter, Outer, PlainOuter
 from .protocols.base import override
 from .utilities import region, set_region
 
@@ -72,6 +73,11 @@ PROMPT = "solixble> "
 FACTORY_CHANNEL = 0x0C
 #: A parameter value replaced by the live 4-byte timestamp when sent.
 TIMESTAMP = "@ts"
+CONNECT_USAGE = (
+    "connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]"
+)
+#: The outer protocols ``connect --outer`` opens with, whatever the advert says.
+OUTERS: dict[str, type[Outer]] = {"plain": PlainOuter, "encrypted": EncryptedOuter}
 #: Loggers of the BLE stack, set by ``--bleak-log-level`` apart from the library's.
 BLEAK_LOGGERS = ("bleak", "bleak_retry_connector")
 #: Announcement fields shown in hex, as on the wire.
@@ -92,8 +98,12 @@ _MODEL_MRO_INDEX = 2
 HELP_LINES = (
     "scan [secs] [raw]                    advertising Anker devices (default 5 s);",
     "                                     raw adds each one's advertisement bytes",
-    "connect <n|mac|address> [class]      connect a scanned device; the class",
-    "                                     defaults to the factory's choice",
+    "connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]",
+    "                                     connect a scanned device; the class",
+    "                                     defaults to the factory's choice;",
+    "                                     --no-advert connects as HaSolixBLE does",
+    "                                     (no capability hint), --outer opens with",
+    "                                     that outer whatever the advert says",
     "devices | use <n> | disconnect [n]   the open links and the current one",
     "info                                 class, outer, path, announcement",
     "data [verbose]                       decoded telemetry tags",
@@ -487,6 +497,28 @@ def coerce_arguments(method: Callable[..., object], args: list[object]) -> list[
     return coerced + args[len(coerced) :]
 
 
+def _connect_options(args: list[str]) -> tuple[list[str], bool, type[Outer] | None]:
+    """Split ``connect``'s arguments into positionals, ``--no-advert`` and ``--outer``.
+
+    :raises CommandError: If ``--outer`` is not followed by plain or encrypted.
+    """
+    positional = []
+    no_advert = False
+    outer: type[Outer] | None = None
+    words = iter(args)
+    for word in words:
+        if word == "--no-advert":
+            no_advert = True
+        elif word == "--outer":
+            name = next(words, "")
+            if name not in OUTERS:
+                raise CommandError(CONNECT_USAGE)
+            outer = OUTERS[name]
+        else:
+            positional.append(word)
+    return positional, no_advert, outer
+
+
 def _transport_without_class(advertisement: AdvertisementData) -> str:
     """Name the transport of a device the factory has no class for."""
     if SERVICE_2215 in advertisement.service_uuids:
@@ -740,20 +772,25 @@ class Console:
         return None
 
     async def _cmd_connect(self, args: list[str]) -> list[str]:
-        if not args:
-            msg = "connect <n|mac|address> [class]"
-            raise CommandError(msg)
-        result = self._find(args[0])
+        positional, no_advert, outer = _connect_options(args)
+        if not positional:
+            raise CommandError(CONNECT_USAGE)
+        result = self._find(positional[0])
         if result is None:
             await self._cmd_scan([])
-            result = self._find(args[0])
+            result = self._find(positional[0])
         if result is None:
-            msg = f"{args[0]} was not seen advertising"
+            msg = f"{positional[0]} was not seen advertising"
             raise CommandError(msg)
-        cls = self._class_for(result, args[1] if len(args) > 1 else None)
+        cls = self._class_for(result, positional[1] if len(positional) > 1 else None)
         # Named after the model, so the library's own log lines read as usual
         tapped = type(cls.__name__, (FrameTap, cls), {})
-        device: FrameTap = tapped(result.ble_device, advertisement=result.advertisement)
+        device: FrameTap = tapped(
+            result.ble_device,
+            advertisement=None if no_advert else result.advertisement,
+        )
+        if outer is not None:
+            device._outer_class = outer  # noqa: SLF001
         device.frames = self.frames
         if self.token is not None:
             device._client_token = self.token  # noqa: SLF001

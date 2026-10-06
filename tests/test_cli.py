@@ -25,6 +25,7 @@ from SolixBLE.cli import (
     split_args,
 )
 from SolixBLE.const import LEGACY_SERVICE, SERVICE_2215, UUID_IDENTIFIER
+from SolixBLE.constructs import Packet, PacketCommand
 from tests.const import MOCK_BLE_DEVICE
 from tests.helpers import (
     MockDevice,
@@ -36,6 +37,8 @@ from tests.helpers import (
 
 #: A2345 manufacturer record: MAC, product type b402, sku QJB, capability 04.
 A2345_RECORD = "01aa12deadb34500b402514a4204"
+#: A91B2 record: capability byte present and clear.
+A91B2_RECORD = "01aa12deadb1b200b4014a544200"
 #: A1340 record (HaSolixBLE #48): on the 2215 transport.
 A1340_RECORD = "01e8eeccc7011802010100000004"
 #: F3800-shaped record: no capability byte.
@@ -84,6 +87,54 @@ async def test_device_without_a_class_names_its_transport(
     assert lines[1].split()[-2] == f"({transport})"
     assert connect == [
         f"! no class speaks the {transport} transport yet; name one to try",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("record", "options", "opening"),
+    [
+        pytest.param(A2345_RECORD, "", "4001", id="capability_04_encrypted"),
+        pytest.param(A2345_RECORD, "--no-advert", "0001", id="no_advert_class_default"),
+        pytest.param(A91B2_RECORD, "--outer encrypted", "4001", id="forced_encrypted"),
+        pytest.param(A2345_RECORD, "--outer plain", "0001", id="forced_plain"),
+    ],
+)
+async def test_connect_options_choose_the_opening(  # noqa: PLR0913, PLR0917
+    record: str,
+    options: str,
+    opening: str,
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """``--no-advert`` drops the capability hint; ``--outer`` overrides it."""
+    advertisement = make_advertisement(
+        manufacturer_data={ANKER_COMPANY_ID: bytes.fromhex(record)},
+        service_uuids=[UUID_IDENTIFIER],
+    )
+    console = Console(
+        scanner=scanner_reporting([(MOCK_BLE_DEVICE, advertisement)]),
+        reply_wait=0,
+    )
+    async with MockDevice() as mock_bluetooth:
+        mock_bluetooth.refuse_after()
+        mock_bluetooth.refuse_after()
+        await console.run_line("scan 0")
+        lines = await console.run_line(f"connect 0 C300 {options}")
+        await console.close()
+
+    assert lines[0].startswith("! could not connect")
+    opened = Packet.parse(mock_bluetooth.writes[0])
+    assert PacketCommand.build(opened).hex() == opening
+
+
+@pytest.mark.asyncio
+async def test_connect_outer_needs_a_known_outer() -> None:
+    """``--outer`` takes plain or encrypted."""
+    console = Console(reply_wait=0)
+    assert await console.run_line("connect 0 --outer gcm") == [
+        "! connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]",
     ]
 
 

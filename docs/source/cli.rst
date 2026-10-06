@@ -35,8 +35,13 @@ Commands
        picks for it. ``raw`` adds each device's advertisement as bytes: the
        Anker ``0xffff`` record (marked when it doesn't parse), other
        manufacturer data, service data and the advertised services.
-   * - ``connect <n|mac|address> [class]``
+   * - ``connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]``
      - Connects a scanned device, as the class named or the factory's choice.
+       ``--no-advert`` connects without the scan result, as HaSolixBLE does,
+       so the class default picks the opening outer and a refused ``0001``
+       reopens with ``4001``. ``--outer`` opens with that outer whatever the
+       advertised capability says, e.g. ``4001`` on a device that advertises
+       no ``0x04``.
    * - ``devices``, ``use <n>``, ``disconnect [n]``
      - The open links and which one the other commands act on.
    * - ``info``
