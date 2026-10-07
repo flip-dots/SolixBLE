@@ -18,11 +18,11 @@ from SolixBLE.cli import (
     CONNECT_USAGE,
     CaptureHandler,
     Console,
-    Frame,
     FrameLog,
     PythonConsole,
     coerce_arguments,
     configure_logging,
+    new_frame,
     split_args,
 )
 from SolixBLE.const import LEGACY_SERVICE, SERVICE_2215, UUID_IDENTIFIER
@@ -580,14 +580,14 @@ def test_capture_appends(tmp_path: Path) -> None:
     frames = FrameLog()
     frames.capture(path)
     frames.record(
-        Frame(
-            datetime(2026, 10, 5, 12, 0, 0).astimezone(),
-            "device",
-            "in",
-            bytes.fromhex("030001"),
-            bytes.fromhex("0801"),
-            bytes.fromhex("00a10101"),
-            bytes.fromhex("ff090e00030001080100a1010152"),
+        new_frame(
+            time=datetime(2026, 10, 5, 12, 0, 0).astimezone(),
+            device="device",
+            direction="in",
+            pattern=bytes.fromhex("030001"),
+            cmd=bytes.fromhex("0801"),
+            cleartext=bytes.fromhex("00a10101"),
+            raw=bytes.fromhex("ff090e00030001080100a1010152"),
         ),
     )
     frames.capture(None)

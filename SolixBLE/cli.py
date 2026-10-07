@@ -25,13 +25,14 @@ import sys
 import traceback
 import typing
 from collections import deque
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TextIO
 
 from bleak import BleakScanner
+from bleak.backends.device import BLEDevice
+from bleak.backends.scanner import AdvertisementData
 from construct import (  # type: ignore[import-untyped]  # construct ships no types
     ConstructError,
     Container,
@@ -65,8 +66,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
     from bleak import BleakClient
-    from bleak.backends.device import BLEDevice
-    from bleak.backends.scanner import AdvertisementData
     from prompt_toolkit.document import Document
 
 PROMPT = "solixble> "
@@ -137,33 +136,59 @@ class CommandError(Exception):
     """A command that cannot run as typed."""
 
 
-@dataclass(frozen=True)
-class Frame:
-    """One frame as sent or received, with its cleartext when available."""
+def new_frame(  # noqa: PLR0913  # one argument per frame field
+    *,
+    time: datetime,
+    device: str,
+    direction: str,
+    pattern: bytes,
+    cmd: bytes,
+    cleartext: bytes | None,
+    raw: bytes | None = None,
+) -> Container:
+    """Return one frame as sent or received, with its cleartext when available.
 
-    time: datetime
-    device: str
-    direction: str
-    pattern: bytes
-    cmd: bytes
-    cleartext: bytes | None
-    raw: bytes | None = None
+    :param time: When the frame was sent or received.
+    :param device: The console's name for the device.
+    :param direction: ``in`` or ``out``.
+    :param pattern: The frame's pattern.
+    :param cmd: The frame's command.
+    :param cleartext: The decrypted payload, or None if it didn't decrypt.
+    :param raw: The whole frame as on the wire, if known.
+    """
+    return Container(
+        time=time,
+        device=device,
+        direction=direction,
+        pattern=pattern,
+        cmd=cmd,
+        cleartext=cleartext,
+        raw=raw,
+    )
 
-    def line(self) -> str:
-        """Return the frame as one console line: time, [device], then the frame."""
-        clear = self.cleartext.hex() if self.cleartext is not None else "undecryptable"
-        text = (
-            f"{self.time:%H:%M:%S.%f}"[:-3]
-            + f" [{self.device}] {self.direction:<3} {self.pattern.hex()}"
-            + f" {self.cmd.hex()} {clear}"
-        )
-        described = describe(self.cleartext)
-        return f"{text}  {described}" if described else text
 
-    def capture_line(self) -> str:
-        """Return the frame as one dated capture-file line, raw bytes included."""
-        raw = f" raw={self.raw.hex()}" if self.raw is not None else ""
-        return f"{self.time:%Y-%m-%d} {self.line()}{raw}"
+def frame_line(frame: Container) -> str:
+    """Return a frame as one console line: time, [device], then the frame.
+
+    :param frame: A frame from :func:`new_frame`.
+    """
+    clear = frame.cleartext.hex() if frame.cleartext is not None else "undecryptable"
+    text = (
+        f"{frame.time:%H:%M:%S.%f}"[:-3]
+        + f" [{frame.device}] {frame.direction:<3} {frame.pattern.hex()}"
+        + f" {frame.cmd.hex()} {clear}"
+    )
+    described = describe(frame.cleartext)
+    return f"{text}  {described}" if described else text
+
+
+def capture_line(frame: Container) -> str:
+    """Return a frame as one dated capture-file line, raw bytes included.
+
+    :param frame: A frame from :func:`new_frame`.
+    """
+    raw = f" raw={frame.raw.hex()}" if frame.raw is not None else ""
+    return f"{frame.time:%Y-%m-%d} {frame_line(frame)}{raw}"
 
 
 def wire_header(fields: Container) -> tuple[bytes, bytes]:
@@ -204,7 +229,7 @@ class FrameLog:
 
         :param size: How many frames to keep in memory.
         """
-        self.frames: deque[Frame] = deque(maxlen=size)
+        self.frames: deque[Container] = deque(maxlen=size)
         self.total = 0
         self._capture: TextIO | None = None
         self.capture_path: Path | None = None
@@ -228,15 +253,15 @@ class FrameLog:
         """
         self.capture(Path(name).expanduser())
 
-    def record(self, frame: Frame) -> None:
+    def record(self, frame: Container) -> None:
         """Keep a frame and append it to the capture file, if one is open.
 
-        :param frame: The frame to record.
+        :param frame: The frame to record, from :func:`new_frame`.
         """
         self.frames.append(frame)
         self.total += 1
         if self._capture is not None:
-            self._capture.write(frame.capture_line() + "\n")
+            self._capture.write(capture_line(frame) + "\n")
             self._capture.flush()
 
     def note(self, text: str) -> None:
@@ -251,7 +276,7 @@ class FrameLog:
             self._capture.write(f"{stamp} {line}\n")
         self._capture.flush()
 
-    def since(self, total: int) -> list[Frame]:
+    def since(self, total: int) -> list[Container]:
         """Return the frames recorded after the log held ``total`` frames.
 
         :param total: An earlier value of :attr:`total`.
@@ -393,24 +418,20 @@ class FrameTap(SolixBLEDevice):
     ) -> None:
         """Hand one frame to the frame log."""
         self.frames.record(
-            Frame(
-                datetime.now(UTC).astimezone(),
-                self.name,
-                direction,
-                pattern,
-                cmd,
-                cleartext,
-                raw,
+            new_frame(
+                time=datetime.now(UTC).astimezone(),
+                device=self.name,
+                direction=direction,
+                pattern=pattern,
+                cmd=cmd,
+                cleartext=cleartext,
+                raw=raw,
             ),
         )
 
 
-@dataclass
-class ScanResult:
-    """One advertising device as last seen."""
-
-    ble_device: BLEDevice
-    advertisement: AdvertisementData
+#: One advertising device as last seen, as bleak pairs them.
+ScanResult = tuple[BLEDevice, AdvertisementData]
 
 
 def is_anker(advertisement: AdvertisementData) -> bool:
@@ -652,7 +673,7 @@ class Console:
             self.frames.note(f"{PROMPT}{line.strip()}")
         mark = self.frames.total
         lines = await self._run(line)
-        frame_lines = {frame.line() for frame in self.frames.since(mark)}
+        frame_lines = {frame_line(frame) for frame in self.frames.since(mark)}
         if not line.strip().startswith("frames"):
             for output in lines:
                 if output not in frame_lines:
@@ -721,13 +742,13 @@ class Console:
 
         def detected(ble_device: BLEDevice, advertisement: AdvertisementData) -> None:
             if is_anker(advertisement):
-                found[ble_device.address] = ScanResult(ble_device, advertisement)
+                found[ble_device.address] = (ble_device, advertisement)
 
         async with self._scanner(detected):
             await asyncio.sleep(seconds)
         self.results = sorted(
             found.values(),
-            key=lambda result: -result.advertisement.rssi,
+            key=lambda result: -result[1].rssi,
         )
         return self._scan_table() + (self._raw_lines() if raw else [])
 
@@ -738,8 +759,7 @@ class Console:
         manufacturer data, service data and the advertised services.
         """
         lines = []
-        for index, result in enumerate(self.results):
-            advertisement = result.advertisement
+        for index, (_, advertisement) in enumerate(self.results):
             record = advertisement.manufacturer_data.get(ANKER_COMPANY_ID)
             if record is not None:
                 unparsed = (
@@ -766,19 +786,15 @@ class Console:
     def _scan_table(self) -> list[str]:
         """Return the last scan as a table."""
         rows = [("#", "address", "name", "mac", "type", "sku", "cap", "class", "rssi")]
-        for index, result in enumerate(self.results):
-            advertisement = result.advertisement
+        for index, (ble_device, advertisement) in enumerate(self.results):
             record = record_from_advertisement(advertisement)
-            cls = device_class_from_advertisement(
-                advertisement,
-                result.ble_device.name,
-            )
+            cls = device_class_from_advertisement(advertisement, ble_device.name)
             capability = record.capability if record is not None else None
             rows.append(
                 (
                     str(index),
-                    result.ble_device.address,
-                    advertisement.local_name or result.ble_device.name or "",
+                    ble_device.address,
+                    advertisement.local_name or ble_device.name or "",
                     record.mac.hex() if record is not None else "",
                     record.product_type.hex() if record is not None else "",
                     record.sku if record is not None else "",
@@ -805,10 +821,11 @@ class Console:
             return self.results[int(key)]
         mac = re.sub("[:-]", "", key).lower()
         for result in self.results:
-            record = record_from_advertisement(result.advertisement)
+            ble_device, advertisement = result
+            record = record_from_advertisement(advertisement)
             if record is not None and record.mac.hex() == mac:
                 return result
-            if result.ble_device.address.lower() == key.lower():
+            if ble_device.address.lower() == key.lower():
                 return result
         return None
 
@@ -823,13 +840,14 @@ class Console:
         if result is None:
             msg = f"{positional[0]} was not seen advertising"
             raise CommandError(msg)
-        slot = self._slot_for(result.ble_device.address)
+        ble_device, advertisement = result
+        slot = self._slot_for(ble_device.address)
         cls = self._class_for(result, positional[1] if len(positional) > 1 else None)
         # Named after the model, so the library's own log lines read as usual
         tapped = type(cls.__name__, (FrameTap, cls), {})
         device: FrameTap = tapped(
-            result.ble_device,
-            advertisement=None if no_advert else result.advertisement,
+            ble_device,
+            advertisement=None if no_advert else advertisement,
         )
         if outer is not None:
             device._outer_class = outer  # noqa: SLF001
@@ -841,7 +859,7 @@ class Console:
         if not await device.connect():
             await device.disconnect()
             return [
-                f"! could not connect to {result.ble_device.address}",
+                f"! could not connect to {ble_device.address}",
                 *self._info(device),
             ]
         if slot is None:
@@ -880,12 +898,10 @@ class Console:
                 msg = f"unknown class {name!r}; one of {', '.join(sorted(classes))}"
                 raise CommandError(msg)
             return classes[name]
-        cls = device_class_from_advertisement(
-            result.advertisement,
-            result.ble_device.name,
-        )
+        ble_device, advertisement = result
+        cls = device_class_from_advertisement(advertisement, ble_device.name)
         if cls is None:
-            transport = _transport_without_class(result.advertisement)
+            transport = _transport_without_class(advertisement)
             msg = f"no class speaks the {transport} transport yet; name one to try"
             raise CommandError(msg)
         return cls
@@ -1090,11 +1106,11 @@ class Console:
     async def _replies(self, mark: int) -> list[str]:
         """Wait for replies, then return the frames recorded since ``mark``."""
         await asyncio.sleep(self._reply_wait)
-        return [frame.line() for frame in self.frames.since(mark)]
+        return [frame_line(frame) for frame in self.frames.since(mark)]
 
     async def _cmd_frames(self, args: list[str]) -> list[str]:
         count = int(args[0]) if args else DEFAULT_FRAMES
-        return [frame.line() for frame in list(self.frames.frames)[-count:]]
+        return [frame_line(frame) for frame in list(self.frames.frames)[-count:]]
 
     async def _cmd_capture(self, args: list[str]) -> list[str]:
         if not args:
