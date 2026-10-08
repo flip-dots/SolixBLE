@@ -30,13 +30,15 @@ from SolixBLE import (
     SolixBLEDevice,
     TemperatureUnit,
 )
+from SolixBLE.const import DEFAULT_METADATA_INT
 from SolixBLE.devices.solarbank2 import (
     ENV_SB2_ANKER_USER_ID,
+    ErrorCodeSB2,
     MaxLoadSB2,
     Solarbank2Common,
     Solarbank2Prime,
 )
-from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
+from SolixBLE.states import GridStatus, LightMode, SBUsageMode
 from tests.const import (
     MOCK_BLE_DEVICE,
     NEGOTIATION_RESPONSES_PRIME,
@@ -787,6 +789,7 @@ from tests.helpers import MockDevice
                 "battery_percentage": 58,
                 "battery_percentage_aggregate": 58,
                 "error_code": 0,
+                "error": ErrorCodeSB2.NONE,
                 "software_version": "1.6.8.1.6.5.3.7.7",
                 "software_version_controller": "8.2.2.4.7.6.8.0.0",
                 "software_version_expansion": "1.0.0.8.6.0.6.7.2",
@@ -1745,6 +1748,63 @@ def test_sb2_build_set_schedule_payload_uses_fresh_nonce_per_call(power_w):
     assert a[:-4] == b[:-4]
     # 1-in-2^32 false-fail rate is negligible.
     assert a[-4:] != b[-4:]
+
+
+def _sb2_with_error_code(code: int) -> Solarbank2:
+    """Build an SB2 whose telemetry carries only ``a5 = code`` (u16 LE)."""
+    device = Solarbank2(MOCK_BLE_DEVICE)
+    device._data = {"a5": bytes([0x03]) + code.to_bytes(2, "little")}
+    return device
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        pytest.param(0, ErrorCodeSB2.NONE, id="no_error"),
+        pytest.param(14, ErrorCodeSB2.PV_INPUT_OVERVOLTAGE_PORT_1, id="pv_ov_port_1"),
+        pytest.param(17, ErrorCodeSB2.PV_INPUT_OVERVOLTAGE_PORT_4, id="pv_ov_port_4"),
+        pytest.param(80, ErrorCodeSB2.PV_INPUT_POWER_TOO_HIGH_80, id="pv_power_80"),
+        pytest.param(93, ErrorCodeSB2.POWER_GRID_EXCEPTION_93, id="grid_exc_first"),
+        pytest.param(100, ErrorCodeSB2.POWER_GRID_EXCEPTION_100, id="grid_exc_last"),
+        pytest.param(92, ErrorCodeSB2.GRID_CONNECTION_LOST, id="single_code"),
+        pytest.param(329, ErrorCodeSB2.SYSTEM_FAILURE_329, id="highest_code"),
+    ],
+)
+def test_sb2_error_maps_known_codes(code, expected):
+    """Known codes map to their Anker-documented member; error_code stays raw."""
+    device = _sb2_with_error_code(code)
+    assert device.error_code == code
+    assert device.error is expected
+
+
+def test_sb2_error_unknown_code_does_not_raise(caplog):
+    """An unlisted code maps to UNKNOWN and logs the raw value.
+
+    Guards against a repeat of the SBPowerCutoff(100) crash, which took down
+    the whole HA sensor platform on an unexpected telemetry value.
+    """
+    device = _sb2_with_error_code(999)
+    with caplog.at_level(logging.WARNING):
+        assert device.error is ErrorCodeSB2.UNKNOWN
+    assert device.error_code == 999
+    assert "999" in caplog.text
+
+
+def test_sb2_error_without_telemetry_is_unknown(caplog):
+    """No telemetry yet -> UNKNOWN, without a spurious unknown-code warning."""
+    device = Solarbank2(MOCK_BLE_DEVICE)
+    with caplog.at_level(logging.WARNING):
+        assert device.error is ErrorCodeSB2.UNKNOWN
+    assert caplog.text == ""
+
+
+def test_sb2_error_enum_covers_anker_list():
+    """57 published codes plus UNKNOWN and NONE.
+
+    Values are unique (enforced by ``@unique`` at import), so this count
+    catches a code dropped or duplicated while editing the table.
+    """
+    assert len(ErrorCodeSB2) == 59
 
 
 @pytest.mark.parametrize(

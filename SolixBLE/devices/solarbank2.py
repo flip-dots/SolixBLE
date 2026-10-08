@@ -78,6 +78,220 @@ class MaxLoadSB2(Enum):
     W1000 = 1000
 
 
+@unique
+class ErrorCodeSB2(Enum):
+    """
+    Error code reported by the Solarbank 2 (telemetry tag ``a5``).
+
+    Descriptions are taken from Anker's official "Solarbank 2 E1600
+    Pro/Plus/AC & Solarbank 3 E2700 Pro Series Error Codes" support article.
+
+    .. note::
+        Parts of this mapping are inferred rather than confirmed:
+
+        * The PV port numbers of codes 14-17. Anker gives all four the same
+          description ("Pv Input Overvoltage"); since the device has four PV
+          inputs, ascending code is assumed to mean ascending port
+          (14 = port 1 ... 17 = port 4).
+
+        Other codes that share a description (e.g. the eight "Power Grid
+        Exception" codes 93-100) have no confirmed distinguishing meaning,
+        so their member names carry the code number instead.
+
+    Codes missing from Anker's list map to :attr:`UNKNOWN` instead of
+    raising, and the raw value is logged as a warning. The raw number is
+    always available via ``error_code``.
+    """
+
+    #: The error code is unknown or not in Anker's published list.
+    UNKNOWN = -1
+
+    #: No error. Not in Anker's list; INFERRED from captures of a healthy
+    #: device, which always report 0.
+    NONE = 0
+
+    #: PV input overvoltage on PV port 1 (port INFERRED).
+    PV_INPUT_OVERVOLTAGE_PORT_1 = 14
+
+    #: PV input overvoltage on PV port 2 (port INFERRED).
+    PV_INPUT_OVERVOLTAGE_PORT_2 = 15
+
+    #: PV input overvoltage on PV port 3 (port INFERRED).
+    PV_INPUT_OVERVOLTAGE_PORT_3 = 16
+
+    #: PV input overvoltage on PV port 4 (port INFERRED).
+    PV_INPUT_OVERVOLTAGE_PORT_4 = 17
+
+    #: System failure.
+    SYSTEM_FAILURE_18 = 18
+
+    #: System failure.
+    SYSTEM_FAILURE_23 = 23
+
+    #: Device overheating.
+    DEVICE_OVERHEATING_25 = 25
+
+    #: Device overheating.
+    DEVICE_OVERHEATING_26 = 26
+
+    #: System failure.
+    SYSTEM_FAILURE_28 = 28
+
+    #: Meter abnormality.
+    METER_ABNORMALITY = 32
+
+    #: Software version is outdated.
+    SOFTWARE_VERSION_OUTDATED = 33
+
+    #: Meter connection error.
+    METER_CONNECTION_ERROR = 35
+
+    #: Device sleep.
+    DEVICE_SLEEP = 40
+
+    #: Leakage current fault.
+    LEAKAGE_CURRENT_FAULT = 53
+
+    #: Off-grid overload.
+    OFF_GRID_OVERLOAD_72 = 72
+
+    #: System failure.
+    SYSTEM_FAILURE_75 = 75
+
+    #: System failure.
+    SYSTEM_FAILURE_76 = 76
+
+    #: PV input power is too high.
+    PV_INPUT_POWER_TOO_HIGH_80 = 80
+
+    #: PV input power is too high.
+    PV_INPUT_POWER_TOO_HIGH_81 = 81
+
+    #: PV input power is too high.
+    PV_INPUT_POWER_TOO_HIGH_82 = 82
+
+    #: PV input power is too high.
+    PV_INPUT_POWER_TOO_HIGH_83 = 83
+
+    #: System failure.
+    SYSTEM_FAILURE_84 = 84
+
+    #: Off-grid overload.
+    OFF_GRID_OVERLOAD_91 = 91
+
+    #: Grid connection lost.
+    GRID_CONNECTION_LOST = 92
+
+    #: Power grid exception.
+    POWER_GRID_EXCEPTION_93 = 93
+
+    #: Power grid exception.
+    POWER_GRID_EXCEPTION_94 = 94
+
+    #: Power grid exception.
+    POWER_GRID_EXCEPTION_95 = 95
+
+    #: Power grid exception.
+    POWER_GRID_EXCEPTION_96 = 96
+
+    #: Power grid exception.
+    POWER_GRID_EXCEPTION_97 = 97
+
+    #: Power grid exception.
+    POWER_GRID_EXCEPTION_98 = 98
+
+    #: Power grid exception.
+    POWER_GRID_EXCEPTION_99 = 99
+
+    #: Power grid exception.
+    POWER_GRID_EXCEPTION_100 = 100
+
+    #: System failure.
+    SYSTEM_FAILURE_113 = 113
+
+    #: Device overheating.
+    DEVICE_OVERHEATING_126 = 126
+
+    #: Low device temperature.
+    LOW_DEVICE_TEMPERATURE_129 = 129
+
+    #: Device overheating.
+    DEVICE_OVERHEATING_132 = 132
+
+    #: Low device temperature.
+    LOW_DEVICE_TEMPERATURE_135 = 135
+
+    #: System failure.
+    SYSTEM_FAILURE_209 = 209
+
+    #: System failure.
+    SYSTEM_FAILURE_212 = 212
+
+    #: System failure.
+    SYSTEM_FAILURE_215 = 215
+
+    #: System failure.
+    SYSTEM_FAILURE_218 = 218
+
+    #: System failure.
+    SYSTEM_FAILURE_222 = 222
+
+    #: System failure.
+    SYSTEM_FAILURE_223 = 223
+
+    #: System failure.
+    SYSTEM_FAILURE_224 = 224
+
+    #: System failure.
+    SYSTEM_FAILURE_227 = 227
+
+    #: System failure.
+    SYSTEM_FAILURE_230 = 230
+
+    #: System failure.
+    SYSTEM_FAILURE_233 = 233
+
+    #: System failure.
+    SYSTEM_FAILURE_236 = 236
+
+    #: System failure.
+    SYSTEM_FAILURE_254 = 254
+
+    #: System failure.
+    SYSTEM_FAILURE_281 = 281
+
+    #: System failure.
+    SYSTEM_FAILURE_284 = 284
+
+    #: System failure.
+    SYSTEM_FAILURE_287 = 287
+
+    #: System failure.
+    SYSTEM_FAILURE_290 = 290
+
+    #: System failure.
+    SYSTEM_FAILURE_300 = 300
+
+    #: System failure.
+    SYSTEM_FAILURE_317 = 317
+
+    #: System failure.
+    SYSTEM_FAILURE_320 = 320
+
+    #: System failure.
+    SYSTEM_FAILURE_329 = 329
+
+    @classmethod
+    def _missing_(cls, value: object) -> "ErrorCodeSB2":
+        """Map codes absent from Anker's list to UNKNOWN instead of raising."""
+        _LOGGER.warning(
+            "Unknown Solarbank 2 error code %s, please report it so it can be "
+            "added to ErrorCodeSB2",
+            value,
+        )
+        return cls.UNKNOWN
+
+
 #: One of the command codes for setting a schedule on an SB2.
 CMD_SB2_SET_SCHEDULE = "405e"
 
