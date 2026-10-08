@@ -72,10 +72,17 @@ TELEMETRY_PATTERN_A = "03010f"
 NEGOTIATION_PATTERN = "030001"
 
 #: Static AES-GCM key, nonce and additional authenticated data used on the
-#: encrypted negotiation path before the ECDH shared secret exists.
+#: encrypted negotiation path before the ECDH shared secret exists. The nonce
+#: is the full 16-byte CBC IV the legacy AES path also seals its bootstrap
+#: exchange under on the encrypted outer; GCM uses only its first 12 bytes.
 NEGOTIATION_KEY = "b8ff7422955d4eb6d554a2c470280559"
-NEGOTIATION_NONCE = "6ba3e3f2f3a60f2971ce5d1f"
+NEGOTIATION_NONCE = "6ba3e3f2f3a60f2971ce5d1fd821cfa3"
 NEGOTIATION_AAD = "3322110077665544bbaa9988ffeeddcc"
+
+#: Public default account the legacy AES path bootstraps from when the
+#: connect frame carries no client id (``0001`` on the plain outer with no
+#: ``a2``, or any connect on the encrypted outer, which never sends one).
+ANKER_DEFAULT_ACCOUNT_1 = "ANKER_DEFAULT_ACCOUNT_1"
 
 # POSIX timezone to use if determining the system time zone fails
 FALLBACK_TZ = "GMT0BST,M3.5.0/1,M10.5.0"

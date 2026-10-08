@@ -1,8 +1,10 @@
-"""Legacy AES key establishment, on the plain outer.
+"""Legacy AES key establishment, on either outer protocol.
 
 The older module builds answer ``0803`` with AES (``a1 02``) and no ECDH auth
-method. The client opens CBC under its client id and the device serial, and
-the device hands out the session key in ``4822``.
+method. On the plain outer the client opens CBC under the client id it
+connected with and the device serial; on the encrypted outer, which never
+sends a client id, it opens CBC under the outer's own static key instead.
+Either way the device hands out the session key in ``4822``.
 
 .. moduleauthor:: kb1ibt
 """
@@ -16,13 +18,14 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     Bytes,
     Container,
     Int8ul,
-    Int16ul,
 )
+
+from SolixBLE.utilities import cbc_encrypt
 
 from .base import (
     CLIENT_ENCRYPT,
-    CLIENT_MTU,
     Keys,
+    Link,
     NegotiatedSessionLike,
     Outer,
     Path,
@@ -32,7 +35,7 @@ from .base import (
     record_identity,
     send_clock,
 )
-from .outer import PlainOuter
+from .outer import STATIC_KEYS
 
 if TYPE_CHECKING:
     from SolixBLE.constructs import ParameterDict
@@ -50,7 +53,7 @@ KEY_PREFIX = Bytes(KEY_LENGTH)
 
 
 class LegacyAesPath(Path):
-    """AES-CBC keyed on the client id and serial, then on the key the device sends."""
+    """AES-CBC keyed on the bootstrap material, then on the key the device sends."""
 
     name: ClassVar[str] = "legacy_aes"
 
@@ -61,17 +64,34 @@ class LegacyAesPath(Path):
 
     @classmethod
     @override
-    def matches(cls, announcement: Container, outer: Outer) -> bool:
-        """Whether ``x803`` offers AES (``a1 & 0x02``) on the plain outer.
-
-        The device installs the legacy key only on a port opened with ``0001``.
+    def matches(
+        cls,
+        announcement: Container,
+        outer: Outer,  # noqa: ARG003  # the protocol's signature; legacy runs on either
+    ) -> bool:
+        """Whether ``x803`` offers AES (``a1 & 0x02``), on either outer.
 
         :param announcement: What the device declared in ``x803``.
-        :param outer: The outer protocol the session runs on.
+        :param outer: The outer protocol; legacy AES runs on either.
         """
-        return isinstance(outer, PlainOuter) and bool(
-            (announcement.base_method or 0) & AES_METHOD,
-        )
+        return bool((announcement.base_method or 0) & AES_METHOD)
+
+    @override
+    def encrypt_override(self, payload: bytes) -> bytes | None:
+        """CBC-seal the bootstrap exchange under the current keys.
+
+        The device answers the ``0022``/``4822`` key request in CBC under
+        whatever keys this path just installed (the client id and serial on
+        the plain outer, the outer's own static key on the encrypted one),
+        regardless of the outer's own cipher: ``EncryptedOuter`` can only
+        produce GCM on its own. Once the device's key authorizes the path,
+        traffic resumes under the outer's normal cipher with that key.
+
+        :param payload: Plain-text bytes.
+        """
+        if self.authorized or self.keys is None:
+            return None
+        return cbc_encrypt(self.keys.key, self.keys.iv, payload)
 
     @override
     async def on_stage(
@@ -93,24 +113,17 @@ class LegacyAesPath(Path):
         match msgtype:
             case 0x829:
                 record_identity(announcement, parameters)
-                await session.send(
-                    0x005,
-                    client_parameters(
-                        a1=lambda self: self._timestamp(),
-                        a3=Int8ul.build(CLIENT_ENCRYPT),
-                        a4=Int16ul.build(CLIENT_MTU),
-                        a5=Int8ul.build(AES_METHOD),
-                    ),
-                    client_id=True,
-                )
+                await session.send(0x005, self._choose_method(session), client_id=True)
             case 0x805:
                 if status != STATUS_OK:
                     raise UnsupportedNegotiation(
                         announcement,
                         f"x805 status {status:02x}",
                     )
-                self.keys = Keys.parse(
-                    self._client_id(session) + self._iv(announcement),
+                self.keys = self._bootstrap_keys(
+                    session.outer,
+                    session.link,
+                    announcement,
                 )
                 await send_clock(session)
             case 0x822:
@@ -118,7 +131,7 @@ class LegacyAesPath(Path):
                     raise UnsupportedNegotiation(announcement, "x822 without a key")
                 self.keys = Keys.parse(
                     KEY_PREFIX.parse(parameters["a1"].value_legacy)
-                    + self._iv(announcement),
+                    + self._ongoing_iv(session.outer, announcement),
                 )
                 self.authorized = True
                 await session.send(
@@ -132,10 +145,57 @@ class LegacyAesPath(Path):
             case 0x823:
                 _LOGGER.debug("Client bind status %02x", status)
 
-    def _client_id(self, session: NegotiatedSessionLike) -> bytes:
-        """Return the initial key: the client id's first 16 bytes."""
-        key: bytes = KEY_PREFIX.parse(session.link._UUID_STRING.encode())  # noqa: SLF001
-        return key
+    def _choose_method(
+        self,
+        session: NegotiatedSessionLike,
+    ) -> dict[str, dict[str, object]]:
+        """Tell the device this path's method in x005: legacy AES.
+
+        The outer supplies ``a4`` and ``a6`` the way the app sends them on it.
+        """
+        a4, a6 = session.outer.x005_tags(session.announcement)
+        tags = client_parameters(
+            a1=lambda self: self._timestamp(),
+            a3=Int8ul.build(CLIENT_ENCRYPT),
+            a4=a4,
+            a5=Int8ul.build(AES_METHOD),
+        )
+        if a6 is not None:
+            tags["a6"] = {"value": a6}
+        return tags
+
+    def _bootstrap_keys(
+        self,
+        outer: Outer,
+        link: Link,
+        announcement: Container,
+    ) -> Container:
+        """Return the pre-``0822`` key.
+
+        The static key on the encrypted outer, else the client id this
+        session opened with and the device serial.
+
+        :param outer: The outer protocol the session runs on.
+        :param link: The device sending the frames.
+        :param announcement: What the device declared in ``x829``.
+        """
+        if not outer.sends_client_id:
+            return STATIC_KEYS
+        client_id: bytes = KEY_PREFIX.parse(link._UUID_STRING.encode())  # noqa: SLF001
+        return Keys.parse(client_id + self._iv(announcement))
+
+    def _ongoing_iv(self, outer: Outer, announcement: Container) -> bytes:
+        """Return the IV/nonce source for traffic once the device's key arrives.
+
+        The static nonce on the encrypted outer, the serial on the plain one.
+
+        :param outer: The outer protocol the session runs on.
+        :param announcement: What the device declared in ``x829``.
+        """
+        if not outer.sends_client_id:
+            iv: bytes = STATIC_KEYS.iv
+            return iv
+        return self._iv(announcement)
 
     def _iv(self, announcement: Container) -> bytes:
         """Return the IV: the device serial's first 16 bytes.

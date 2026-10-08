@@ -216,10 +216,14 @@ class NegotiatedSession(NegotiatedSessionLike, Session):
 
     @override
     def encrypt(self, payload: bytes) -> bytes:
-        """Seal a payload with the outer, under the path's keys if installed.
+        """Seal a payload with the path's own cipher if it overrides, else the outer's.
 
         :param payload: Plain-text bytes.
         """
+        if self.path is not None:
+            override = self.path.encrypt_override(payload)
+            if override is not None:
+                return override
         return self.outer.encrypt(
             payload,
             self.path.keys if self.path is not None else None,

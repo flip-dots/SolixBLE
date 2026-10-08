@@ -6,6 +6,7 @@
 import pytest
 
 from SolixBLE.const import FALLBACK_TZ
+from SolixBLE.constructs import Packet
 from SolixBLE.protocols import (
     EcdhPath,
     EncryptedOuter,
@@ -16,6 +17,7 @@ from SolixBLE.protocols import (
     UnsupportedNegotiation,
     new_announcement,
 )
+from SolixBLE.protocols.outer import STATIC_KEYS
 from tests.helpers import RECORDING_CLIENT_ID, RecordingLink, feed_negotiation
 
 TIMESTAMP = bytes.fromhex("42ad8c69")
@@ -56,6 +58,12 @@ def test_unsupported_names_the_announcement() -> None:
         pytest.param(PlainOuter(), ECDH_X803, EcdhPath, id="ecdh_plain"),
         pytest.param(EncryptedOuter(), ECDH_X803, EcdhPath, id="ecdh_encrypted"),
         pytest.param(PlainOuter(), LEGACY_X803, LegacyAesPath, id="legacy_plain"),
+        pytest.param(
+            EncryptedOuter(),
+            LEGACY_X803,
+            LegacyAesPath,
+            id="legacy_encrypted",
+        ),
     ],
 )
 async def test_capability_reply_chooses_the_path(
@@ -63,7 +71,7 @@ async def test_capability_reply_chooses_the_path(
     x803: str,
     path: type,
 ) -> None:
-    """``x803`` picks ECDH when it offers it, else legacy AES on the plain outer."""
+    """``x803`` picks ECDH when it offers it, else legacy AES on either outer."""
     session = NegotiatedSession(outer, RecordingLink())
     await feed_negotiation(session, [("0803", x803)])
     assert type(session.path) is path
@@ -78,14 +86,14 @@ async def test_capability_reply_chooses_the_path(
             UNKNOWN_X803,
             "encrypt_method=0x10.*no path for the plain outer",
             0x10,
-            id="unknown_capabilities",
+            id="unknown_capabilities_plain",
         ),
         pytest.param(
             EncryptedOuter(),
-            LEGACY_X803,
-            "no path for the encrypted outer",
-            0x04,
-            id="legacy_needs_the_plain_outer",
+            UNKNOWN_X803,
+            "encrypt_method=0x10.*no path for the encrypted outer",
+            0x10,
+            id="unknown_capabilities_encrypted",
         ),
     ],
 )
@@ -179,4 +187,47 @@ async def test_legacy_aes_path() -> None:
     assert link.sent[-1][1:] == (
         "4023",
         {"a1": TIMESTAMP, "a2": CLIENT_ID, "a3": SERIAL},
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_aes_path_on_the_encrypted_outer() -> None:
+    """On the encrypted outer the legacy path bootstraps on the static key.
+
+    Worked example: the A91B2 bench test's real ``4022``/``4822`` pair
+    (``a91b2-3.log:268-274``, 2026-10-08).
+    """
+    link = RecordingLink()
+    session = NegotiatedSession(EncryptedOuter(), link)
+
+    await feed_negotiation(session, [("0803", LEGACY_X803), ("0829", X829)])
+    assert link.sent[-1][1:] == (
+        "4005",
+        {"a1": TIMESTAMP, "a3": b"\x20", "a4": bytes.fromhex("fd00"), "a5": b"\x02"},
+    )
+
+    await feed_negotiation(session, [("0805", "00")])
+    assert session.path is not None
+    assert session.path.keys is STATIC_KEYS
+    assert not session.authorized
+
+    sealed = session.encrypt(bytes.fromhex("a1043171c76aa30440380000"))
+    assert (
+        sealed
+        == Packet.parse(
+            bytes.fromhex("ff091a000300014022600738a5de6f772a00411c1dc4d3ba7205"),
+        ).payload_bytes
+    )
+
+    await feed_negotiation(session, [("0822", "00a110" + LEGACY_NEW_KEY.hex())])
+    assert session.path.keys is not None
+    assert (session.path.keys.key, session.path.keys.iv) == (
+        LEGACY_NEW_KEY,
+        STATIC_KEYS.iv,
+    )
+    assert session.authorized
+    # Once authorized, the override steps aside for the outer's own GCM cipher.
+    assert session.encrypt(b"probe") == EncryptedOuter().encrypt(
+        b"probe",
+        session.path.keys,
     )

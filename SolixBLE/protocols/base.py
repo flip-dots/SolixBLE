@@ -205,6 +205,21 @@ class Path(Protocol):
         :param parameters: The reply's parameters.
         """
 
+    def encrypt_override(
+        self,
+        payload: bytes,  # noqa: ARG002  # overridden by paths that use this
+    ) -> bytes | None:
+        """Return this path's own ciphertext for ``payload``, or None for the outer's.
+
+        The default never overrides, so the session falls through to the
+        outer's cipher. A path whose own key exchange has a fixed cipher
+        independent of the outer (the legacy AES path's bootstrap request)
+        returns its own ciphertext here until it is authorized, then None.
+
+        :param payload: Plain-text bytes the session is about to send.
+        """
+        return None
+
 
 class Session(Protocol):
     """What the device needs from its negotiation."""
