@@ -58,7 +58,7 @@ from .constructs import (
 )
 from .device import SolixBLEDevice
 from .factory import device_class_from_advertisement
-from .protocols import EncryptedOuter, Outer, PlainOuter
+from .protocols import EncryptedOuter, NegotiatedSession, Outer, PlainOuter
 from .protocols.base import override
 from .utilities import region, set_region
 
@@ -75,7 +75,7 @@ FACTORY_CHANNEL = 0x0C
 TIMESTAMP = "@ts"
 CONNECT_USAGE = (
     "connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]"
-    " [--no-register]"
+    " [--no-register] [--manual]"
 )
 #: The outer protocols ``connect --outer`` attempts, ignoring the advert.
 OUTERS: dict[str, type[Outer]] = {"plain": PlainOuter, "encrypted": EncryptedOuter}
@@ -100,14 +100,18 @@ HELP_LINES = (
     "scan [secs] [raw]                    advertising Anker devices (default 5 s);",
     "                                     raw adds each one's advertisement bytes",
     "connect <n|mac|address> [class] [--no-advert] [--outer plain|encrypted]",
-    "        [--no-register]              connect a scanned device; the class",
+    "        [--no-register] [--manual]   connect a scanned device; the class",
     "                                     defaults to the factory's choice;",
     "                                     --no-advert connects as HaSolixBLE does",
     "                                     (no capability hint), --outer attempts",
     "                                     only that outer, ignoring the advert's",
     "                                     capability byte;",
     "                                     --no-register withholds 4027 and carries",
-    "                                     on as if authorized",
+    "                                     on as if authorized;",
+    "                                     --manual subscribes and sends nothing:",
+    "                                     nego frames go as typed, a flagged one",
+    "                                     under the outer's static key, and no",
+    "                                     reply is answered",
     "devices | use <n> | disconnect [n]   the open links and the current one",
     "release [n] | reconnect [n]          drop the link (no auto-reconnect) so the",
     "                                     app can connect; retake it on the same",
@@ -303,6 +307,29 @@ class CaptureHandler(logging.Handler):
         self._frames.note(self.format(record))
 
 
+class ManualSession(NegotiatedSession):
+    """A session that answers no reply: only what is typed is sent.
+
+    Frames seal under the outer with no keys installed, so a flagged one goes
+    under the static GCM key on the encrypted outer. It never authorizes.
+    """
+
+    @property
+    @override
+    def authorized(self) -> bool:
+        """Never: nothing negotiated here unlocks session commands."""
+        return False
+
+    @override
+    async def on_plaintext(
+        self,
+        packet: Container,  # noqa: ARG002  # the library's signature
+        plaintext: bytes,  # noqa: ARG002  # the library's signature
+    ) -> None:
+        """Note the reply and leave it unanswered."""
+        self._replied = True
+
+
 class FrameTap(SolixBLEDevice):
     """Device mixin that records every frame it sends and receives as cleartext.
 
@@ -315,8 +342,40 @@ class FrameTap(SolixBLEDevice):
     withhold_registration = False
     #: Keep the outer ``connect --outer`` chose: a refusal ends the connect.
     pin_outer = False
+    #: Subscribe and send nothing until typed (``connect --manual``).
+    manual = False
     #: Pattern and cmd of the packet being built, while ``_send_packet`` runs.
     _sending: tuple[bytes, bytes] | None = None
+
+    @override
+    async def _negotiate(self) -> bool:
+        """Negotiate, or under ``--manual`` start a session that answers nothing."""
+        if not self.manual:
+            return await super()._negotiate()
+        self._session = ManualSession(self._outer_class(), self)
+        return True
+
+    @override
+    async def _auto_reconnect(self) -> None:
+        """Reconnect after a drop, except under ``--manual``.
+
+        A manual link never negotiates, so the library's task would reopen it
+        every few seconds; ``reconnect`` retakes a dropped one instead.
+        """
+        if not self.manual:
+            await super()._auto_reconnect()
+
+    @override
+    async def _post_authorize(self) -> None:
+        """Send the model's post-authorize requests, except under ``--manual``."""
+        if not self.manual:
+            await super()._post_authorize()
+
+    @override
+    async def _post_connect(self) -> None:
+        """Run the model's post-connect setup, except under ``--manual``."""
+        if not self.manual:
+            await super()._post_connect()
 
     @override
     async def _reopen_if_refused(
@@ -338,6 +397,8 @@ class FrameTap(SolixBLEDevice):
         """
         if self._sending is not None:
             self._record("out", *self._sending, payload)
+            if self.manual and not PacketCommand.parse(self._sending[1]).encrypted:
+                return payload
         return super()._encrypt_payload(payload)
 
     @override
@@ -553,15 +614,17 @@ def coerce_arguments(method: Callable[..., object], args: list[object]) -> list[
 
 def _connect_options(
     args: list[str],
-) -> tuple[list[str], bool, type[Outer] | None, bool]:
+) -> tuple[list[str], bool, type[Outer] | None, bool, bool]:
     """Split ``connect``'s arguments into positionals and its options.
 
-    :returns: The positionals, ``--no-advert``, ``--outer`` and ``--no-register``.
+    :returns: The positionals, ``--no-advert``, ``--outer``, ``--no-register``
+        and ``--manual``.
     :raises CommandError: If ``--outer`` is not followed by plain or encrypted.
     """
     positional = []
     no_advert = False
     no_register = False
+    manual = False
     outer: type[Outer] | None = None
     words = iter(args)
     for word in words:
@@ -569,6 +632,8 @@ def _connect_options(
             no_advert = True
         elif word == "--no-register":
             no_register = True
+        elif word == "--manual":
+            manual = True
         elif word == "--outer":
             name = next(words, "")
             if name not in OUTERS:
@@ -576,7 +641,7 @@ def _connect_options(
             outer = OUTERS[name]
         else:
             positional.append(word)
-    return positional, no_advert, outer, no_register
+    return positional, no_advert, outer, no_register, manual
 
 
 def _transport_without_class(advertisement: AdvertisementData) -> str:
@@ -830,7 +895,7 @@ class Console:
         return None
 
     async def _cmd_connect(self, args: list[str]) -> list[str]:
-        positional, no_advert, outer, no_register = _connect_options(args)
+        positional, no_advert, outer, no_register, manual = _connect_options(args)
         if not positional:
             raise CommandError(CONNECT_USAGE)
         result = self._find(positional[0])
@@ -853,6 +918,7 @@ class Console:
             device._outer_class = outer  # noqa: SLF001
             device.pin_outer = True
         device.withhold_registration = no_register
+        device.manual = manual
         device.frames = self.frames
         if self.token is not None:
             device._client_token = self.token  # noqa: SLF001
@@ -1094,6 +1160,10 @@ class Console:
     ) -> list[str]:
         """Send a packet as typed and return the frames that follow it."""
         device = self._device()
+        if not device.connected:
+            index = self.devices.index(device)
+            msg = f"[{index}] {device.name} is down; reconnect {index} retakes it"
+            raise CommandError(msg)
         mark = self.frames.total
         await device._send_packet(  # noqa: SLF001
             channel,

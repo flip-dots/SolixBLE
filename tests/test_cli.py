@@ -7,6 +7,7 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from bleak.backends.device import BLEDevice
@@ -19,6 +20,8 @@ from SolixBLE.cli import (
     CaptureHandler,
     Console,
     FrameLog,
+    FrameTap,
+    ManualSession,
     PythonConsole,
     coerce_arguments,
     configure_logging,
@@ -27,6 +30,8 @@ from SolixBLE.cli import (
 )
 from SolixBLE.const import LEGACY_SERVICE, SERVICE_2215, UUID_IDENTIFIER
 from SolixBLE.constructs import Negotiation, Packet, PacketCommand
+from SolixBLE.device import SolixBLEDevice
+from SolixBLE.protocols import EncryptedOuter, PlainOuter
 from tests.const import (
     MOCK_BLE_DEVICE,
     NEGOTIATION_RESPONSES_PRIME,
@@ -34,8 +39,10 @@ from tests.const import (
 )
 from tests.helpers import (
     MockDevice,
+    RecordingLink,
     connect_console,
     console_seeing_c300,
+    frame_header,
     make_advertisement,
     scanner_reporting,
 )
@@ -196,6 +203,139 @@ async def test_connect_no_register_withholds_4027(
 
 
 @pytest.mark.asyncio
+async def test_connect_manual_sends_nothing_and_never_negotiates(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """``--manual`` connects and subscribes but sends no negotiation frame."""
+    console = console_seeing_c300()
+    async with MockDevice() as mock_bluetooth:
+        await console.run_line("scan 0")
+        lines = await console.run_line("connect 0 C300 --manual")
+        devices = await console.run_line("devices")
+        await console.close()
+
+    assert lines[0] == "[0] connected"
+    assert mock_bluetooth.writes == []
+    assert devices == [
+        f"*[0] {MOCK_BLE_DEVICE.name} {MOCK_BLE_DEVICE.address} C300 connected",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_manual_nego_unflagged_frame_goes_in_clear(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """An unflagged ``nego`` frame under ``--manual`` is sent exactly as typed."""
+    console = console_seeing_c300()
+    async with MockDevice() as mock_bluetooth:
+        mock_bluetooth.expect_ordered()
+        await console.run_line("scan 0")
+        await console.run_line("connect 0 C300 --manual")
+        lines = await console.run_line("nego 0027 {'a1': {'value': '21'}}")
+        await console.close()
+
+    sent = Packet.parse(mock_bluetooth.writes[-1])
+    assert DEVICE_TAG in lines[0]
+    assert PacketCommand.build(sent).hex() == "0027"
+    assert sent.payload_bytes.hex() == "a10121"
+
+
+@pytest.mark.asyncio
+async def test_manual_nego_flagged_frame_uses_the_static_key(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A flagged ``nego`` frame under ``--manual`` uses the outer's static key."""
+    console = console_seeing_c300()
+    async with MockDevice() as mock_bluetooth:
+        mock_bluetooth.expect_ordered()
+        await console.run_line("scan 0")
+        await console.run_line("connect 0 C300 --outer encrypted --manual")
+        await console.run_line("nego 4027 {'a1': {'value': '21'}}")
+        await console.close()
+
+    sealed = Packet.parse(mock_bluetooth.writes[-1]).payload_bytes
+    assert sealed.hex() != "a10121"
+    assert EncryptedOuter().decrypt(bytes(sealed), None).hex() == "a10121"
+
+
+@pytest.mark.asyncio
+async def test_manual_session_notes_a_reply_but_answers_nothing() -> None:
+    """A manual session marks a reply received but sends nothing back."""
+    link = RecordingLink()
+    session = ManualSession(PlainOuter(), link)
+
+    await session.on_plaintext(frame_header("0801"), bytes.fromhex("00a10101"))
+
+    assert session.replied is True
+    assert link.sent == []
+
+
+def test_manual_session_never_authorizes() -> None:
+    """A manual session stays unauthorized even after a session push."""
+    session = ManualSession(PlainOuter(), RecordingLink())
+
+    session.on_session_push()
+
+    assert session.authorized is False
+
+
+@pytest.mark.asyncio
+async def test_manual_negotiate_installs_a_manual_session_without_sending() -> None:
+    """``--manual`` skips the negotiation loop and installs an unauthorized session."""
+    tapped = type("Tapped", (FrameTap, SolixBLEDevice), {})
+    device = tapped(MOCK_BLE_DEVICE)
+    device.manual = True
+
+    negotiated = await device._negotiate()  # noqa: SLF001
+
+    assert negotiated is True
+    assert isinstance(device._session, ManualSession)  # noqa: SLF001
+    assert device._session.authorized is False  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [True, False], ids=["manual", "negotiated"])
+async def test_manual_gates_the_models_connect_hooks(
+    manual: bool,  # noqa: FBT001
+) -> None:
+    """``--manual`` skips post-connect, post-authorize and auto-reconnect."""
+    tapped = type("Tapped", (FrameTap, SolixBLEDevice), {})
+    device = tapped(MOCK_BLE_DEVICE)
+    device.manual = manual
+
+    with (
+        mock.patch.object(
+            SolixBLEDevice,
+            "_post_connect",
+            mock.AsyncMock(),
+        ) as post_connect,
+        mock.patch.object(
+            SolixBLEDevice,
+            "_post_authorize",
+            mock.AsyncMock(),
+        ) as post_authorize,
+        mock.patch.object(
+            SolixBLEDevice,
+            "_auto_reconnect",
+            mock.AsyncMock(),
+        ) as auto_reconnect,
+    ):
+        await device._post_connect()  # noqa: SLF001
+        await device._post_authorize()  # noqa: SLF001
+        await device._auto_reconnect()  # noqa: SLF001
+
+    assert post_connect.called is not manual
+    assert post_authorize.called is not manual
+    assert auto_reconnect.called is not manual
+
+
+@pytest.mark.asyncio
 async def test_scan_lists_anker_devices_only() -> None:
     """``scan`` tabulates Anker adverts with their record and factory class."""
     anker = BLEDevice("AA:BB:CC:DD:EE:01", "A2345_B345", None)
@@ -309,6 +449,26 @@ async def test_connect_records_both_directions(
     keyed = [field for field in fields if field[2] == "4022"]
     assert keyed
     assert keyed[0][3] != "undecryptable"
+
+
+@pytest.mark.asyncio
+async def test_nego_refuses_a_released_device(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """``nego`` refuses a released device instead of sending on a dead link."""
+    console = console_seeing_c300()
+    async with MockDevice() as mock_bluetooth:
+        await connect_console(console, mock_bluetooth)
+        await console.run_line("release")
+
+        lines = await console.run_line("nego 4027 {'a1': {'value': '21'}}")
+        await console.close()
+
+    assert lines == [
+        f"! [0] {MOCK_BLE_DEVICE.name} is down; reconnect 0 retakes it",
+    ]
 
 
 @pytest.mark.asyncio
