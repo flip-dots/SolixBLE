@@ -185,19 +185,6 @@ class SBUsageMode(Enum):
     TIME_SLOT = 8
 
 
-class SBPowerCutoff(Enum):
-    """Power cutoff threshold of a Solarbank device in %."""
-
-    #: The cutoff threshold is unknown.
-    UNKNOWN = -1
-
-    #: 5 %.
-    P5 = 5
-
-    #: 10 %.
-    P10 = 10
-
-
 class PortOverload(Enum):
     """The overload status of a port."""
 

@@ -22,7 +22,7 @@ builder, and the wall-clock-timestamp ``_send_command`` override via the
 import logging
 import os
 import time
-from enum import Enum
+from enum import Enum, unique
 
 from bleak.backends.device import BLEDevice
 from Crypto.Cipher import AES
@@ -37,6 +37,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from ..const import (
     DEFAULT_METADATA_BOOL,
     DEFAULT_METADATA_FLOAT,
+    DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
     UUID_COMMAND,
 )
@@ -49,7 +50,7 @@ from ..prime_device import (
     TELEMETRY_PATTERN,
     PrimeDevice,
 )
-from ..states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode, TemperatureUnit
+from ..states import GridStatus, LightMode, SBUsageMode, TemperatureUnit
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,9 +84,15 @@ CMD_SB2_SET_SCHEDULE = "405e"
 #: Command code for setting the AC output power limit (max load).
 CMD_SB2_SET_MAX_LOAD = "4080"
 
-#: Command code for setting the reserved-power composite (discharge cutoff,
-#: low-power-input parameter, and charge cutoff written together).
-CMD_SB2_SET_RESERVED_POWER = "4067"
+#: Command code for setting the battery SOC limits (minimum SOC / reserved
+#: power and maximum charge SOC written together).
+CMD_SB2_SET_SOC_LIMITS = "4067"
+
+#: Inclusive range for the minimum SOC (reserved power) on an SB2.
+SB2_MIN_SOC_RANGE = (5, 20)
+
+#: Inclusive range for the maximum charge SOC on an SB2.
+SB2_MAX_SOC_RANGE = (80, 100)
 
 #: Command code for turning the status light on or off.
 CMD_SB2_SET_LIGHT = "4068"
@@ -281,54 +288,67 @@ class Solarbank2Common(SolixBLEDevice):
             cmd=bytes.fromhex(CMD_SB2_SET_LIGHT), payload=payload
         )
 
-    # Mapping for 3rd field reserved power command
-    _RESERVED_POWER_A3_MAP: dict[int, int] = {5: 4, 10: 5}
-
     @staticmethod
-    def _build_set_reserved_power_payload(level: SBPowerCutoff) -> bytes:
-        """Build the plaintext payload for cmd 0x4067 (reserved power).
-
-        The Anker app's "Reserved power" writes
-        three independent fields. This is reflected in the telemetry:
-        discharge cutoff (b4), low-power-input (b5), and charge cutoff (b6).
-        a2 and a4 both equal the reserved-power %; a3 seems to follow an
-        uncharacterized mapping.
+    def _build_set_soc_limits_payload(min_soc: int, max_soc: int) -> bytes:
+        """Build the plaintext payload for cmd 0x4067 (battery SOC limits).
 
         Plaintext layout (without the ``fe 05 03 <ts>`` trailer)::
 
             a1 01 21
-            a2 02 01 <pct>     -> c405 telemetry b4 (discharge cutoff)
-            a3 02 01 <b5>      -> c405 telemetry b5 (low-power-input parameter)
-            a4 02 01 <pct>     -> c405 telemetry b6 (charge cutoff)
+            a2 02 01 <min_soc>   -> c405 telemetry b4 (min SOC / reserved power)
+            a5 02 01 <max_soc>   -> c405 telemetry eb (max charge SOC)
+            a6 02 01 00          backup SOC, always 0 on SB2
+            a7 02 01 00          backup SOC switch, always 0 on SB2
+
+        .. note::
+            This is the *new* 0x4067 field layout. Older firmware used
+            ``a2``/``a3``/``a4`` for a three-field "reserved power" write where
+            all three values followed a single 5%/10% selection. That variant
+            is no longer supported: sending it to newer firmware can invalidate
+            the max-SOC setting.
+
+        The ``a6``/``a7`` backup fields are sent as zero.
+        The SB2 is not believed to support backup SOC, so
+        they are deliberately not exposed as parameters.
         """
-        if level is SBPowerCutoff.UNKNOWN:
-            raise ValueError("SBPowerCutoff.UNKNOWN is not a valid setter input")
-        pct = level.value
-        a3_value = Solarbank2Common._RESERVED_POWER_A3_MAP.get(pct)
-        if a3_value is None:
+        min_lo, min_hi = SB2_MIN_SOC_RANGE
+        if not (min_lo <= min_soc <= min_hi):
             raise ValueError(
-                f"Reserved-power value {pct}% has no captured a3 mapping."
+                f"min_soc must be {min_lo}-{min_hi} %, got {min_soc}"
             )
+
+        max_lo, max_hi = SB2_MAX_SOC_RANGE
+        if not (max_lo <= max_soc <= max_hi):
+            raise ValueError(
+                f"max_soc must be {max_lo}-{max_hi} %, got {max_soc}"
+            )
+
         return bytes.fromhex(
-            f"a10121a20201{pct:02x}a30201{a3_value:02x}a40201{pct:02x}"
+            f"a10121a20201{min_soc:02x}a50201{max_soc:02x}a6020100a7020100"
         )
 
-    async def set_reserved_power(self, level: SBPowerCutoff) -> None:
-        """Set the battery reserved-power percentage.
+    async def set_soc_limits(self, min_soc: int, max_soc: int) -> None:
+        """Set the battery minimum and maximum SOC limits.
 
-        Mirrors the Anker app's "Reserved power" toggle. Writes three
-        telemetry fields (output_cutoff_data, lowpower_input_data,
-        input_cutoff_data).
+        Mirrors the Anker app's SOC limit settings. ``min_soc`` is the
+        reserved power the battery will not discharge below; ``max_soc`` is
+        the charge ceiling. Both are written in a single command, so both
+        must be supplied - the device reports them back as the ``min_soc``
+        and ``max_soc`` telemetry properties.
 
-        :param level: Desired reserved-power level
-            (:class:`SBPowerCutoff.P5` or :class:`SBPowerCutoff.P10`).
+        .. warning::
+            This function probably writes to persistant memory. Excessive use of this
+            function (e.g. in short intervals of 2s) may lead to memory wear
+            and brick your device. Use at your own risk.
+
+        :param min_soc: Minimum battery SOC in % (5-20).
+        :param max_soc: Maximum charge SOC in % (80-100).
         :raises ConnectionError: If not connected/negotiated to the device.
-        :raises ValueError: If ``level`` is ``UNKNOWN`` or has no captured
-            a3 mapping.
+        :raises ValueError: If either value is outside its allowed range.
         """
-        payload = self._build_set_reserved_power_payload(level)
+        payload = self._build_set_soc_limits_payload(min_soc, max_soc)
         await self._send_command(
-            cmd=bytes.fromhex(CMD_SB2_SET_RESERVED_POWER), payload=payload
+            cmd=bytes.fromhex(CMD_SB2_SET_SOC_LIMITS), payload=payload
         )
 
     @staticmethod
@@ -652,6 +672,18 @@ class Solarbank2Common(SolixBLEDevice):
         return self._parse_int("a5", begin=1)
 
     @property
+    def error(self) -> ErrorCodeSB2:
+        """Device error as a named code.
+
+        Same value as :attr:`error_code`, mapped onto Anker's published
+        error list. See :class:`ErrorCodeSB2` for which parts of the mapping
+        are inferred.
+
+        :returns: Error code enum, or ``UNKNOWN`` if unmapped or no data.
+        """
+        return ErrorCodeSB2(self.error_code)
+
+    @property
     def temperature_unit(self) -> TemperatureUnit:
         """Temperature unit setting.
 
@@ -660,31 +692,53 @@ class Solarbank2Common(SolixBLEDevice):
         return TemperatureUnit(self._parse_int("a9", begin=1))
 
     @property
-    def output_cutoff_data(self) -> SBPowerCutoff:
+    def min_soc(self) -> int:
         """
-        Output cutoff threshold in %.
+        Minimum battery SOC in %.
 
-        Minimum battery SOC to maintain.
+        The reserved power the battery will not discharge below. Set by
+        :meth:`set_soc_limits`.
 
-        :returns: Output cutoff battery SOC threshold.
+        :returns: Minimum battery SOC in % or default int value.
         """
-        return SBPowerCutoff(self._parse_int("b4", begin=1))
+        return self._parse_int("b4", begin=1)
 
     @property
     def lowpower_input_data(self) -> int:
         """Low power input data.
+
+        Read-only. Older firmware wrote this alongside the reserved-power
+        setting; the current 0x4067 command has no field for it.
 
         :returns: Low power input data or default int value.
         """
         return self._parse_int("b5", begin=1)
 
     @property
-    def input_cutoff_data(self) -> SBPowerCutoff:
-        """Input cutoff threshold in %.
+    def active_charge_soc(self) -> int:
+        """Currently active charge SOC limit in %.
 
-        :returns: Input cutoff battery SOC threshold.
+        The charge ceiling the device is actually applying, which is
+        typically identical to :attr:`max_soc`.
+
+        :returns: Active charge SOC limit in % or default int value.
         """
-        return SBPowerCutoff(self._parse_int("b6", begin=1))
+        return self._parse_int("b6", begin=1)
+
+    @property
+    def max_soc(self) -> int:
+        """Maximum charge SOC in %.
+
+        The configured charge ceiling, as set by :meth:`set_soc_limits`.
+        Firmware predating the SOC-limit settings does not report this field
+        at all, in which case the default int value is returned.
+
+        :returns: Maximum charge SOC in % or default int value.
+        """
+        if self._data is None or "eb" not in self._data:
+            return DEFAULT_METADATA_INT
+
+        return self._parse_int("eb", begin=1)
 
     @property
     def max_load(self) -> MaxLoadSB2:

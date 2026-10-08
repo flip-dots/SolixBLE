@@ -33,8 +33,8 @@ from SolixBLE import (
 from SolixBLE.devices.solarbank2 import (
     ENV_SB2_ANKER_USER_ID,
     MaxLoadSB2,
-    Solarbank2Prime,
     Solarbank2Common,
+    Solarbank2Prime,
 )
 from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
 from tests.const import (
@@ -812,9 +812,10 @@ from tests.helpers import MockDevice
                 "consumed_energy": 0.0006,
                 "power_out": 50.0,
                 "max_load": MaxLoadSB2.W800,
-                "output_cutoff_data": SBPowerCutoff.P5,
+                "min_soc": 5,
                 "lowpower_input_data": 4,
-                "input_cutoff_data": SBPowerCutoff.P5,
+                "active_charge_soc": 5,
+                "max_soc": DEFAULT_METADATA_INT,
                 "usage_mode": SBUsageMode.MANUAL,
                 "home_load_preset": 50,
                 "light_mode": LightMode.NORMAL,
@@ -823,6 +824,51 @@ from tests.helpers import MockDevice
                 "battery_heating": False,
             },
             id="solarbank2_telemetry",
+        ),
+
+        pytest.param(
+            Solarbank2,
+            "a10131a2110041504347513830453030303030303030a3020124a4020102a503020000a6050301000710a7050300000710a8050300030408a9020100aa020120ab0503900b0000ac05030c030000ad020124ae020100af020100b0050328550000b1050347fb2000b2050337fe7a00b30503bda11d00b4020105b5020105b6020164b7050300000000b8020101b9020100ba050328000000bb020100bc050300000000bd050300000000be050300000000bf050300000000c0110000000000000000000000000000000000c1020100c203022003c405030c030000c5020100c6020101c703025000c8050300000000c905035a010000ca050394020000cb05033e030000cc0503ee020000cd0503d0020000d2020100d305030c030000e0020103e1020101e8020100e9020100ea020101eb020164fe050378a5896af8020100fb050300000000fc1604010101010001010101010101010100000000000000",
+            {
+                "serial_number": "APCGQ80E00000000",
+                "battery_percentage": 36,
+                "battery_percentage_aggregate": 36,
+                "error_code": 0,
+                "error": ErrorCodeSB2.NONE,
+                "temperature_unit": TemperatureUnit.CELSIUS,
+                "temperature": 32,
+                "solar_power_in": 296.0,
+                "solar_pv_1_power_in": 66.0,
+                "solar_pv_2_power_in": 83.0,
+                "solar_pv_3_power_in": 75.0,
+                "solar_pv_4_power_in": 72.0,
+                "ac_power_out": 78.0,
+                "ac_power_out_sockets": 0.0,
+                "battery_charge_power": 218.0,
+                "battery_discharge_power": 0.0,
+                "pv_yield": 216.1479,
+                "charged_energy": 80.60471,
+                "output_energy": 194.1949,
+                "grid_to_home_power": 0.0,
+                "pv_to_grid_power": 0.0,
+                "grid_import_energy": 0.0,
+                "grid_export_energy": 0.0,
+                "house_demand": 78.0,
+                "consumed_energy": 0.0346,
+                "power_out": 78.0,
+                "max_load": MaxLoadSB2.W800,
+                "min_soc": 5,
+                "lowpower_input_data": 5,
+                "active_charge_soc": 100,
+                "max_soc": 100,
+                "usage_mode": SBUsageMode.MANUAL,
+                "home_load_preset": 80,
+                "light_mode": LightMode.NORMAL,
+                "grid_status": GridStatus.CONNECTING,
+                "light_on": False,
+                "battery_heating": False,
+            },
+            id="solarbank2_telemetry_soc_limits",
         ),
         # Anker MagGo 3-in-1 wireless charger. Real capture with a phone on pad 1
         # and an Apple Watch on pad 2, pad 3 unused. Per-pad power is the little
@@ -1702,6 +1748,52 @@ def test_sb2_build_set_schedule_payload_uses_fresh_nonce_per_call(power_w):
 
 
 @pytest.mark.parametrize(
+    "min_soc,max_soc,expected_hex",
+    [
+        pytest.param(5, 100, "a10121a20201" "05" "a50201" "64" "a6020100a7020100",
+                     id="capture_values_min5_max100"),
+        pytest.param(10, 90, "a10121a20201" "0a" "a50201" "5a" "a6020100a7020100",
+                     id="min10_max90"),
+        pytest.param(20, 80, "a10121a20201" "14" "a50201" "50" "a6020100a7020100",
+                     id="range_edges_inner"),
+    ],
+)
+def test_sb2_build_set_soc_limits_payload_matches_expected_layout(
+    min_soc, max_soc, expected_hex
+):
+    """0x4067 writes min SOC in a2 and max SOC in a5.
+
+    The a6/a7 backup fields are always sent as zero to match the Anker app's
+    payload; the SB2 is not believed to support backup SOC.
+    """
+    result = Solarbank2Common._build_set_soc_limits_payload(min_soc, max_soc)
+    assert result.hex() == expected_hex
+
+
+@pytest.mark.parametrize(
+    "min_soc,max_soc",
+    [
+        pytest.param(4, 90, id="min_soc_one_under"),
+        pytest.param(21, 90, id="min_soc_one_over"),
+        pytest.param(0, 90, id="min_soc_zero"),
+        pytest.param(-1, 90, id="min_soc_negative"),
+        pytest.param(10, 79, id="max_soc_one_under"),
+        pytest.param(10, 101, id="max_soc_one_over"),
+        pytest.param(10, 0, id="max_soc_zero"),
+        pytest.param(10, 255, id="max_soc_byte_overflow"),
+    ],
+)
+def test_sb2_build_set_soc_limits_payload_rejects_out_of_range(min_soc, max_soc):
+    """Out-of-range SOC values raise ValueError rather than emitting bad bytes.
+
+    Matters because the device applies whatever it accepts; a silently
+    truncated byte would set a limit the caller never asked for.
+    """
+    with pytest.raises(ValueError):
+        Solarbank2Common._build_set_soc_limits_payload(min_soc, max_soc)
+
+
+@pytest.mark.parametrize(
     "anker_user_id,expected",
     [
         pytest.param(
@@ -1796,7 +1888,7 @@ def test_sb2_prime_user_id_missing_raises(monkeypatch, env_value):
     "plaintext",
     [
         pytest.param(b"", id="empty"),
-        pytest.param(bytes.fromhex("a104deadbeefa200"), id="tlv_like"),
+        pytest.param(bytes.fromhex("a10401020304a200"), id="tlv_like"),
         pytest.param(b"\x00" * 32, id="all_zeros"),
         pytest.param(bytes(range(64)), id="sequential_64"),
     ],

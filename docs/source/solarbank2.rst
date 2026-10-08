@@ -21,3 +21,17 @@ Solarbank 2
    :special-members: __init__
    :member-order: groupwise
    :no-index:
+
+
+Error codes
+-----------
+
+:attr:`Solarbank2Common.error` maps the raw :attr:`Solarbank2Common.error_code`
+onto Anker's published error list. Parts of this mapping are inferred, see the
+note below.
+
+.. autoclass:: SolixBLE.devices.solarbank2.ErrorCodeSB2
+   :members:
+   :undoc-members:
+   :member-order: bysource
+   :no-index:
