@@ -1790,6 +1790,17 @@ def test_sb2_error_unknown_code_does_not_raise(caplog):
     assert "999" in caplog.text
 
 
+def test_sb2_error_unknown_code_warns_once_per_occurrence(caplog):
+    """A persisting unlisted code warns once; clearing and returning warns again."""
+    device = _sb2_with_error_code(999)
+    with caplog.at_level(logging.WARNING):
+        for code in (999, 999, 0, 999):
+            device._data = {"a5": bytes([0x03]) + code.to_bytes(2, "little")}
+            device.error
+    warnings = [r for r in caplog.records if "Unknown Solarbank 2 error" in r.message]
+    assert len(warnings) == 2
+
+
 def test_sb2_error_without_telemetry_is_unknown(caplog):
     """No telemetry yet -> UNKNOWN, without a spurious unknown-code warning."""
     device = Solarbank2(MOCK_BLE_DEVICE)

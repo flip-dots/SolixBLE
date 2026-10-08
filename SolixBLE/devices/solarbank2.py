@@ -283,12 +283,11 @@ class ErrorCodeSB2(Enum):
 
     @classmethod
     def _missing_(cls, value: object) -> "ErrorCodeSB2":
-        """Map codes absent from Anker's list to UNKNOWN instead of raising."""
-        _LOGGER.warning(
-            "Unknown Solarbank 2 error code %s, please report it so it can be "
-            "added to ErrorCodeSB2",
-            value,
-        )
+        """Map codes absent from Anker's list to UNKNOWN instead of raising.
+
+        Does not log; :attr:`Solarbank2Common.error` warns once per occurrence
+        of an unlisted code, which needs per-device state this method lacks.
+        """
         return cls.UNKNOWN
 
 
@@ -351,6 +350,10 @@ class Solarbank2Common(SolixBLEDevice):
     _EXPECTED_TELEMETRY_LENGTH: int = 253
 
     _TELEMETRY_COMMANDS: tuple[str, ...] = (*SolixBLEDevice._TELEMETRY_COMMANDS, "c840")
+
+    #: Raw error code seen on the previous read of :attr:`error`, so an
+    #: unlisted code is warned about once per occurrence, not once per update.
+    _last_error_code: int | None = None
 
     # Post-handshake command path
 
@@ -893,9 +896,24 @@ class Solarbank2Common(SolixBLEDevice):
         error list. See :class:`ErrorCodeSB2` for which parts of the mapping
         are inferred.
 
+        Logs a warning when the code changes to one absent from Anker's list.
+        A code that persists is reported once; one that clears and returns is
+        reported again.
+
         :returns: Error code enum, or ``UNKNOWN`` if unmapped or no data.
         """
-        return ErrorCodeSB2(self.error_code)
+        code = self.error_code
+        error = ErrorCodeSB2(code)
+        if (
+            error is ErrorCodeSB2.UNKNOWN
+            and code != DEFAULT_METADATA_INT
+            and code != self._last_error_code
+        ):
+            _LOGGER.warning(
+                f"Unknown Solarbank 2 error code {code}, please report it so it can be added to ErrorCodeSB2"
+            )
+        self._last_error_code = code
+        return error
 
     @property
     def temperature_unit(self) -> TemperatureUnit:
