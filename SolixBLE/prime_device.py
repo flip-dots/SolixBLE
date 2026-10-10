@@ -53,6 +53,36 @@ class PrimeDevice(SolixBLEDevice):
     specific implementations, e.g 160w, 250w, etc.
     """
 
+    #: Prime devices drop the connection when handshake writes overlap
+    #: over a remote GATT transport (e.g an ESPHome Bluetooth proxy), so
+    #: commands are written without response like the official app does.
+    _COMMAND_WRITE_RESPONSE = False
+
+    #: Set once the final (stage 7) handshake packets have been written.
+    _negotiation_complete = False
+
+    @property
+    def negotiated(self) -> bool:
+        """Has the full Prime handshake been completed.
+
+        The shared secret is derived at stage 5, two stages before the
+        handshake finishes. Reporting negotiated at that point lets the
+        connection setup and keep-alive start sending while the remaining
+        handshake writes are still in flight.
+
+        :returns: True/False if the full handshake completed and connected.
+        """
+        return (
+            self.connected
+            and self._shared_secret is not None
+            and self._negotiation_complete
+        )
+
+    def _reset_session(self, reset_data: bool = True) -> None:
+        """Reset negotiated variables, including the handshake marker."""
+        super()._reset_session(reset_data)
+        self._negotiation_complete = False
+
     ###########################
     # Encryption / Decryption #
     ###########################
@@ -340,6 +370,7 @@ class PrimeDevice(SolixBLEDevice):
                         },
                     },
                 )
+                self._negotiation_complete = True
 
             case _:
                 _LOGGER.warning(

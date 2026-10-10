@@ -84,7 +84,12 @@ async def test_send_command(
     device._encrypt_payload = lambda x: x
     with (
         mock.patch("SolixBLE.constructs.Packet.build") as mock_build,
-        mock.patch("SolixBLE.SolixBLEDevice.negotiated", return_value=True),
+        mock.patch.object(
+            device_class,
+            "negotiated",
+            new_callable=mock.PropertyMock,
+            return_value=True,
+        ),
         pytest.raises(expected) if isinstance(expected, type) else nullcontext(),
     ):
 
@@ -146,7 +151,12 @@ async def test_send_command_response(  # noqa: PLR0913, PLR0917
 
     with (
         mock.patch("SolixBLE.constructs.Packet.build") as mock_build,
-        mock.patch("SolixBLE.SolixBLEDevice.negotiated", return_value=True),
+        mock.patch.object(
+            device_class,
+            "negotiated",
+            new_callable=mock.PropertyMock,
+            return_value=True,
+        ),
         mock.patch("SolixBLE.SolixBLEDevice._listen_for_packet") as mock_listen,
         pytest.raises(returned) if isinstance(returned, type) else nullcontext(),
     ):

@@ -61,6 +61,10 @@ class SolixBLEDevice:
     #: The maximum packet size an Anker device is able to send
     _mtu = 253
 
+    #: GATT write semantics used for commands. ``None`` keeps the bleak
+    #: default; device families may force write-with or without-response.
+    _COMMAND_WRITE_RESPONSE: bool | None = None
+
     def __init__(self, ble_device: BLEDevice) -> None:
         """Initialise device object. Does not connect automatically."""
 
@@ -597,7 +601,12 @@ class SolixBLEDevice:
         })
         _LOGGER.debug(f"Built packet: {packet.hex()}")
         _LOGGER.debug("Sending packet...")
-        await self._client.write_gatt_char(UUID_COMMAND, packet)
+        if self._COMMAND_WRITE_RESPONSE is None:
+            await self._client.write_gatt_char(UUID_COMMAND, packet)
+        else:
+            await self._client.write_gatt_char(
+                UUID_COMMAND, packet, response=self._COMMAND_WRITE_RESPONSE
+            )
         _LOGGER.debug("Packet sent!")
 
     async def _process_negotiation(self, cmd: bytes, payload: bytes) -> None:

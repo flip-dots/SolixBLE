@@ -4,10 +4,12 @@ Tests for the Anker Prime specific functionality.
 .. moduleauthor:: Harvey Lelliott (flip-dots) <harveylelliott@duck.com>
 """
 
+from unittest import mock
+
 import pytest
 
 from SolixBLE import prime_device
-from SolixBLE.constructs import Packet
+from SolixBLE.constructs import Packet, Parameters
 from SolixBLE.prime_device import PrimeDevice
 from tests.const import MOCK_BLE_DEVICE
 
@@ -73,3 +75,50 @@ def test_negotiation_encryption_session(
 
     re_encrypted = prime._encrypt_payload(decrypted)
     assert payload.hex() == re_encrypted.hex()
+
+
+def _connected_prime() -> PrimeDevice:
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+    prime._client = mock.AsyncMock()
+    prime._client.is_connected = True
+    return prime
+
+
+@pytest.mark.asyncio
+async def test_negotiated_waits_for_final_handshake_stage():
+    """
+    Test that a Prime device only reports negotiated after stage 7.
+
+    The shared secret exists from stage 5, but the handshake is not finished
+    until the stage 7 packets are written. Reporting negotiated earlier lets
+    connection setup race the remaining handshake writes.
+    """
+
+    prime = _connected_prime()
+    prime._shared_secret = bytes.fromhex(
+        "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265"
+    )
+    assert not prime.negotiated, "Expected negotiated to be False before stage 7"
+
+    with mock.patch.object(Parameters, "parse"):
+        prime._decrypt_payload = lambda x: x
+        await prime._process_negotiation(bytes.fromhex("4827"), b"")
+
+    assert prime.negotiated, "Expected negotiated to be True after stage 7"
+
+    prime._reset_session()
+    prime._shared_secret = bytes.fromhex(
+        "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265"
+    )
+    assert not prime.negotiated, "Expected session reset to clear negotiated"
+
+
+@pytest.mark.asyncio
+async def test_commands_are_written_without_response():
+    """Test that Prime devices write commands without response."""
+
+    prime = _connected_prime()
+    await prime._initiate_negotiations()
+
+    prime._client.write_gatt_char.assert_awaited_once()
+    assert prime._client.write_gatt_char.await_args.kwargs == {"response": False}
