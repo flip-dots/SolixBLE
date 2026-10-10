@@ -188,6 +188,68 @@ async def test_two_futures_one_decrypt(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "cmd", "resolves"),
+    [
+        pytest.param("03010f", "c840", True, id="fragmented_encrypted"),
+        pytest.param("03010f", "4840", True, id="unfragmented_encrypted"),
+        pytest.param("03010f", "0840", True, id="clear"),
+        pytest.param("03000f", "4840", True, id="other_composer"),
+        pytest.param("03010f", "4841", False, id="other_msgtype"),
+        pytest.param("030111", "4840", False, id="other_channel"),
+    ],
+)
+async def test_future_matches_channel_and_msgtype(  # noqa: PLR0913, PLR0917
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+    pattern: str,
+    cmd: str,
+    resolves: bool,  # noqa: FBT001
+) -> None:
+    """A reply future waits for a channel and msgtype, whatever the flags."""
+    device = C300(MOCK_BLE_DEVICE)
+    plaintext = bytes.fromhex("00a10101")
+    flags = bytes.fromhex(cmd)[0]
+    payload = (
+        AES.new(SECRET[:16], AES.MODE_CBC, iv=SECRET[16:]).encrypt(pad(plaintext, 16))
+        if flags & 0x40
+        else plaintext
+    )
+    # A 0x80 frame opens its payload with index << 4 | total; one fragment is 11
+    fragment = b"\x11" if flags & 0x80 else b""
+    frame = Packet.build(
+        {
+            "pattern": bytes.fromhex(pattern),
+            "cmd": bytes.fromhex(cmd),
+            "payload_bytes": fragment + payload,
+        },
+    )
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        install_session_keys(device, SECRET)
+
+        # Registered the way get_status_update() listens for its reply
+        future = asyncio.get_running_loop().create_future()
+        device._register_future(  # noqa: SLF001
+            future,
+            bytes.fromhex("03010f"),
+            bytes.fromhex("c840"),
+        )
+        await mock_bluetooth.send_data([frame])
+
+    assert future.done() is resolves
+    if resolves:
+        assert future.result() == plaintext
+
+
+@pytest.mark.asyncio
 async def test_clear_fragmented_telemetry_is_telemetry(
     fake_time: None,  # noqa: ARG001
     fast_sleep: None,  # noqa: ARG001
