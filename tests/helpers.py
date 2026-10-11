@@ -8,10 +8,12 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any, Self, Union
 from unittest import mock
 
 from bleak import BleakClient
+from bleak.backends.device import BLEDevice
+from bleak.backends.scanner import AdvertisementData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -89,6 +91,10 @@ class MockDevice:
         # The value that all our mocked bleak clients will return for
         # client.is_connected. This can be changed dynamically
         self._is_connected = True
+
+        # The GATT UUIDs the module under test subscribed to and wrote to
+        self.notify_uuids: list[str | bytes] = []
+        self.write_uuids: list[str | bytes] = []
 
     def new_connection_mock(self):
         """
@@ -199,6 +205,7 @@ class MockDevice:
         :param uuid: The UUID the module under test wants notifications of.
         :param callback: The callback the module under test wants executed.
         """
+        self.notify_uuids.append(uuid)
         for client, _, n_callbacks in self._mock_bleak_clients:
             if client is self._current_mock_bleak_client:
                 n_callbacks.append(callback)
@@ -237,6 +244,7 @@ class MockDevice:
         :param response: Not used. Bool of if the module wants a response to its write.
         """
         _LOGGER.debug(f"Mock device has received data: '{data.hex()}'")
+        self.write_uuids.append(char_specifier)
 
         # Find the request/response for this write
         request_response = None
@@ -283,3 +291,54 @@ class MockDevice:
         """
         self._patcher.stop()
         return False
+
+
+def make_advertisement(
+    manufacturer_data: dict[int, bytes] | None = None,
+    service_uuids: list[str] | None = None,
+    local_name: str | None = None,
+) -> AdvertisementData:
+    """
+    Build a bleak scan result with the given fields.
+
+    :param manufacturer_data: Manufacturer data by company identifier.
+    :param service_uuids: Advertised service UUIDs.
+    :param local_name: Advertised local name.
+    """
+    return AdvertisementData(
+        local_name=local_name,
+        manufacturer_data=manufacturer_data or {},
+        service_data={},
+        service_uuids=service_uuids or [],
+        tx_power=None,
+        rssi=-60,
+        platform_data=(),
+    )
+
+
+def scanner_reporting(results: list[tuple[BLEDevice, AdvertisementData]]) -> type:
+    """
+    Return a stand-in for BleakScanner that reports the given scan results.
+
+    The results are passed to the detection callback as soon as the scanner
+    is entered, as a real scanner would while it runs.
+
+    :param results: Pairs of device and scan result to report.
+    """
+
+    class _Scanner:
+
+        def __init__(
+            self, callback: Callable[[BLEDevice, AdvertisementData], None],
+        ) -> None:
+            self._callback = callback
+
+        async def __aenter__(self) -> Self:
+            for device, advertisement in results:
+                self._callback(device, advertisement)
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+    return _Scanner

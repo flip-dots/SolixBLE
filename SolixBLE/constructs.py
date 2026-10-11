@@ -13,6 +13,7 @@ from functools import reduce
 from typing import Any, Self
 
 from construct import (
+    BitsInteger,
     BitStruct,
     Bytes,
     Checksum,
@@ -20,11 +21,13 @@ from construct import (
     Container,
     ExprAdapter,
     ExprValidator,
+    Flag,
     GreedyBytes,
     GreedyRange,
     Hex,
     HexDump,
     If,
+    Int8ub,
     Int8ul,
     Int16ul,
     Nibble,
@@ -120,6 +123,79 @@ Usage:
             "pattern": "030001",
             "cmd": "0000",
             "payload_bytes": "a101a20200a303010000",
+        })
+
+"""
+
+#: Dispatch channel of negotiation requests, replies and the grant.
+CHANNEL_NEGOTIATION = 0x01
+
+#: Dispatch channel of session commands, replies and pushes.
+CHANNEL_SESSION = 0x0F
+
+#: Dispatch channel of app session pushes.
+CHANNEL_APP = 0x11
+
+#: Composer of a reply that echoes the request's pattern.
+COMPOSER_REPLY = 0x00
+
+#: Composer of a frame the device sends on its own.
+COMPOSER_SEND = 0x01
+
+PacketPattern = Struct(
+    "family" / Int8ub,
+    "composer" / Int8ub,
+    "channel" / Int8ub,
+)
+"""
+Pattern of an Anker packet: ``03 <composer> <channel>``.
+
+The channel is the module's dispatch key (``0x01`` negotiation, ``0x0f`` /
+``0x11`` session); the composer is ``01`` on frames the module sends on its
+own and ``00`` on replies that echo the request.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        pattern = PacketPattern.parse(packet.pattern)
+        print(f"composer: {pattern.composer}, channel: {pattern.channel}")
+
+"""
+
+PacketCommand = ExprAdapter(
+    BitStruct(
+        "fragmented" / Flag,
+        "encrypted" / Flag,
+        "reserved" / BitsInteger(2),
+        "msgtype" / BitsInteger(12),
+    ),
+    decoder=lambda obj, _: Container(
+        fragmented=obj.fragmented,
+        encrypted=obj.encrypted,
+        msgtype=obj.msgtype,
+        response=bool(obj.msgtype & 0x800),
+    ),
+    encoder=lambda obj, _: {"reserved": 0, **obj},
+)
+"""
+Command of an Anker packet: link flags in the high nibble, a 12-bit message type.
+
+``0x80`` marks a fragment (the payload's first byte is index << 4 | total) and
+``0x40`` an encrypted/authorized link; a response is the request's message
+type with ``0x800`` set.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        command = PacketCommand.parse(packet.cmd)
+        print(f"msgtype: {command.msgtype:03x}, encrypted: {command.encrypted}")
+
+        cmd_bytes = PacketCommand.build({
+            "fragmented": False,
+            "encrypted": True,
+            "msgtype": 0x005,
         })
 
 """

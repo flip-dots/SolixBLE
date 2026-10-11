@@ -4,6 +4,7 @@
 
 """
 
+from .advertisement import capability_from_advertisement
 from .device import SolixBLEDevice
 from .devices import (
     C300,
@@ -22,6 +23,7 @@ from .devices import (
     Solarbank2,
     Solarbank3,
 )
+from .factory import device_class_from_advertisement
 from .prime_device import PrimeDevice
 from .states import (
     ChargingStatus,
@@ -60,4 +62,6 @@ __all__ = [
     "TemperatureUnit",
     "PortOverload",
     "discover_devices",
+    "capability_from_advertisement",
+    "device_class_from_advertisement",
 ]

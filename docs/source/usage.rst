@@ -32,9 +32,9 @@ Finding a device
 
 Anker power stations can be automatically detected by the 
 :py:meth:`discover_devices() <SolixBLE.discover_devices>`
-method which looks for 
-:py:attr:`UUID_IDENTIFIER <SolixBLE.const.UUID_IDENTIFIER>`
-in the Bluetooth service data. This method returns a list of
+method which looks for one of
+:py:attr:`UUID_IDENTIFIERS <SolixBLE.const.UUID_IDENTIFIERS>`
+among the advertised service UUIDs. This method returns a list of
 `BLEDevice`_, each of which have been detected as Solix power stations.
 
 ``devices = await SolixBLE.discover_devices()``

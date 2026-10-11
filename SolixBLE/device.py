@@ -26,7 +26,17 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 )
 from cryptography.hazmat.primitives.padding import PKCS7
 
-from SolixBLE.constructs import FragmentedPayload, Packet, ParameterDict, Parameters
+from SolixBLE.constructs import (
+    CHANNEL_APP,
+    CHANNEL_NEGOTIATION,
+    CHANNEL_SESSION,
+    FragmentedPayload,
+    Packet,
+    PacketCommand,
+    PacketPattern,
+    ParameterDict,
+    Parameters,
+)
 from SolixBLE.utilities import _to_bytes, get_posix_tz
 
 from .const import (
@@ -40,14 +50,16 @@ from .const import (
     PRIVATE_KEY,
     RECONNECT_ATTEMPTS_MAX,
     RECONNECT_DELAY,
-    UUID_COMMAND,
-    UUID_TELEMETRY,
 )
+from .transport import LegacyTransport, NegotiatingTransport, Transport2215
 
 _LOGGER = logging.getLogger(__name__)
 
 #: The UUID sent to the device during negotiation
 UUID_STRING = "b2dc0b17-b75d-4abf-ba6e-ec7c997c23e7"
+
+#: Message type handled as telemetry on every model (``0300`` / ``4300``)
+TELEMETRY_MSGTYPE = 0x300
 
 
 class SolixBLEDevice:
@@ -58,8 +70,23 @@ class SolixBLEDevice:
     #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
     _TELEMETRY_COMMANDS: tuple[str, ...] = ("c402", "4300", "c405")
 
+    #: The BLE transport this device uses. Subclasses on the legacy transport
+    #: (GATT service ``1780``) set :class:`~SolixBLE.transport.LegacyTransport`,
+    #: those on service ``2215`` :class:`~SolixBLE.transport.Transport2215`.
+    _TRANSPORT: type[NegotiatingTransport | Transport2215 | LegacyTransport] = NegotiatingTransport
+
     #: The maximum packet size an Anker device is able to send
     _mtu = 253
+
+    @property
+    def UUID_TELEMETRY(self) -> str:  # noqa: N802
+        """GATT characteristic the device sends telemetry on."""
+        return self._TRANSPORT.telemetry
+
+    @property
+    def UUID_COMMAND(self) -> str:  # noqa: N802
+        """GATT characteristic the device takes commands on."""
+        return self._TRANSPORT.command
 
     def __init__(self, ble_device: BLEDevice) -> None:
         """Initialise device object. Does not connect automatically."""
@@ -166,13 +193,15 @@ class SolixBLEDevice:
         try:
             _LOGGER.debug(f"Subscribing to notifications from device '{self.name}'!")
             await self._client.start_notify(
-                UUID_TELEMETRY, partial(self._process_notification, self._client)
+                self.UUID_TELEMETRY,
+                partial(self._process_notification, self._client),
             )
         except BleakError:
             _LOGGER.exception(f"Error subscribing/negotiating with '{self.name}'!")
             return False
 
-        # Negotiate
+        # Negotiate (a no-op on a transport without negotiation, where
+        # negotiated is already True)
         try:
             async with asyncio.timeout(NEGOTIATION_TIMEOUT):
 
@@ -307,11 +336,14 @@ class SolixBLEDevice:
         """Has an encrypted session been successfully negotiated.
 
         This does not mean that any data values have been populated,
-        use the available property to determine that.
+        use the available property to determine that. On a transport
+        without negotiation this is True as soon as the device is connected.
 
         :returns: True/False if session has been negotiated and connected.
         """
-        return self.connected and self._shared_secret is not None
+        return self.connected and (
+            not self._TRANSPORT.negotiates or self._shared_secret is not None
+        )
 
     @property
     def available(self) -> bool:
@@ -498,22 +530,39 @@ class SolixBLEDevice:
             )
             self._last_packet_timestamp = time.time()
 
-            # Parse packet
+            # Parse packet and decode its header
             packet = Packet.parse(data)
             _LOGGER.debug(f"Packet: {packet}")
             pattern = packet.pattern
             cmd = packet.cmd
             payload = packet.payload_bytes
+            header = PacketPattern.parse(pattern)
+            command = PacketCommand.parse(cmd)
 
-            # If packet is maximum size or a previous one of the same
-            # type was, then hand off to the fragment re-assembler which
-            # will re-assemble the payload when all fragments are available
-            if (len(data) == self._mtu or
-                pattern + cmd in self._fragment_buffers):
-
+            # Fragments are handed to the re-assembler which will
+            # re-assemble the payload when all fragments are available
+            if command.fragmented:
                 payload = self._reassemble(packet)
                 if payload is None:
                     return None
+
+            # Negotiation messages (requests, replies and the grant the
+            # device pushes after its button is pressed) decrypt themselves
+            if header.channel == CHANNEL_NEGOTIATION:
+                _LOGGER.debug("Received negotiation message!")
+                return await self._process_negotiation(cmd, payload)
+
+            if header.channel not in (CHANNEL_SESSION, CHANNEL_APP):
+                _LOGGER.debug(
+                    f"Unhandled channel {header.channel:02x} "
+                    f"(composer {header.composer:02x}), cmd {cmd.hex()}",
+                )
+                return None
+
+            # Session messages are decrypted once, if the frame says so
+            if command.encrypted:
+                payload = self._decrypt_payload(payload)
+                _LOGGER.debug(f"Plain-text payload: {payload.hex()}")
 
             # If the packet has a future registered then we just trigger that
             # future instead of processing it here
@@ -522,50 +571,51 @@ class SolixBLEDevice:
                     "Packet has future(s) registered. Triggering future(s) and ignoring packet..."
                 )
                 for future in self._packet_futures[pattern + cmd]:
-
-                    # Decrypt payload
-                    payload = self._decrypt_payload(payload)
                     future.set_result(payload)
                 return None
 
-            # Match against common message types
-            match pattern.hex():
-
-                # Negotiation messages
-                case "030001":
-                    _LOGGER.debug("Received negotiation message!")
-                    return await self._process_negotiation(cmd, payload)
-
-                # Session messages
-                case "03010f" | "030111":
-
-                    # Non-encrypted telemetry messages
-                    if cmd.hex() == "0300":
-                        _LOGGER.debug("Received non-encrypted telemetry message!")
-                        parameters = Parameters.parse(payload)
-                        return await self._process_telemetry(parameters)
-
-                    # Encrypted telemetry messages
-                    elif cmd.hex() in self._TELEMETRY_COMMANDS:
-                        _LOGGER.debug("Received encrypted telemetry message!")
-                        decrypted_payload = self._decrypt_payload(payload)
-                        _LOGGER.debug(f"Plain-text payload: {decrypted_payload.hex()}")
-                        parameters = Parameters.parse(decrypted_payload)
-                        return await self._process_telemetry(parameters)
-
-                    # Unknown messages
-                    else:
-                        _LOGGER.debug(f"Received unknown message of type: {cmd.hex()}")
-
-                case _:
-                    _LOGGER.warning(
-                        f"Unexpected packet type '{pattern}' sent by device! Packet: {data.hex()}"
-                    )
+            return await self._process_session(
+                cmd, payload, encrypted=command.encrypted,
+            )
 
         except Exception:
             _LOGGER.exception(f"Failed to process packet from {self.name}!")
 
             return None
+
+    def _telemetry_msgtypes(self) -> set[int]:
+        """Return the message types of this model's telemetry commands."""
+        return {
+            PacketCommand.parse(bytes.fromhex(cmd)).msgtype
+            for cmd in self._TELEMETRY_COMMANDS
+        }
+
+    async def _process_session(
+        self, cmd: bytes, payload: bytes, *, encrypted: bool,
+    ) -> None:
+        """
+        Process a session message from the device.
+
+        :param cmd: The command code of the packet.
+        :param payload: The plain-text payload.
+        :param encrypted: Whether the packet arrived encrypted.
+        """
+
+        # Telemetry messages, matched on the message type whatever the
+        # fragment and encryption flags (a clear 8405 is a c405)
+        msgtype = PacketCommand.parse(cmd).msgtype
+        if msgtype == TELEMETRY_MSGTYPE or msgtype in self._telemetry_msgtypes():
+            _LOGGER.debug(
+                "Received encrypted telemetry message!"
+                if encrypted
+                else "Received non-encrypted telemetry message!",
+            )
+            parameters = Parameters.parse(payload)
+            return await self._process_telemetry(parameters)
+
+        # Unknown messages
+        _LOGGER.debug(f"Received unknown message of type: {cmd.hex()}")
+        return None
 
     async def _send_packet(self, pattern: str, cmd: str, parameters: dict, **kwargs: dict) -> None:
         """
@@ -597,7 +647,7 @@ class SolixBLEDevice:
         })
         _LOGGER.debug(f"Built packet: {packet.hex()}")
         _LOGGER.debug("Sending packet...")
-        await self._client.write_gatt_char(UUID_COMMAND, packet)
+        await self._client.write_gatt_char(self.UUID_COMMAND, packet)
         _LOGGER.debug("Packet sent!")
 
     async def _process_negotiation(self, cmd: bytes, payload: bytes) -> None:
@@ -1051,7 +1101,6 @@ class SolixBLEDevice:
             self._last_data_timestamp = None
 
         self._fragment_buffers = {}
-        self._fragment_totals = {}
         self._shared_secret = None
         self._last_packet_timestamp = None
         self._negotiation_timestamp = None

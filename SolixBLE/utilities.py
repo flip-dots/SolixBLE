@@ -13,20 +13,22 @@ from typing import Callable
 import tzlocal
 from bleak import BleakScanner, BLEDevice
 
-from .const import UUID_IDENTIFIER
+from .advertisement import ANKER_COMPANY_ID
+from .const import UUID_IDENTIFIERS
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def discover_devices(
-    scanner: BleakScanner | None = None, timeout: int = 5
+    scanner: type[BleakScanner] | None = None, timeout: int = 5
 ) -> list[BLEDevice]:
     """Scan feature.
 
-    Scans the BLE neighborhood for Solix BLE device(s) and returns
-    a list of nearby devices based upon detection of a known UUID.
+    Scans the BLE neighborhood for Solix BLE device(s) and returns a list of
+    nearby devices that carry the Anker manufacturer record or advertise a
+    known service UUID.
 
-    :param scanner: Scanner to use. Defaults to new scanner.
+    :param scanner: Scanner class to use. Defaults to BleakScanner.
     :param timeout: Time to scan for devices (default=5).
     """
 
@@ -39,13 +41,20 @@ async def discover_devices(
         _LOGGER.debug(
             f"Found generic BT device '{device}' with advertising data: '{advertising_data}'"
         )
-        if UUID_IDENTIFIER in advertising_data.service_uuids and device not in devices:
+        # A passive scan can miss the services; the record is always there
+        if (
+            (
+                ANKER_COMPANY_ID in advertising_data.manufacturer_data
+                or any(uuid in advertising_data.service_uuids for uuid in UUID_IDENTIFIERS)
+            )
+            and device not in devices
+        ):
             _LOGGER.debug(
                 f"Found Anker device '{device}' with advertising data: '{advertising_data}'"
             )
             devices.append(device)
 
-    async with BleakScanner(callback) as scanner:
+    async with scanner(callback):
         await asyncio.sleep(timeout)
 
     return devices
