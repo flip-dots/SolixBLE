@@ -19,6 +19,7 @@ from construct import (
     Const,
     Container,
     ExprAdapter,
+    ExprValidator,
     GreedyBytes,
     GreedyRange,
     Hex,
@@ -254,6 +255,11 @@ class ParameterDict(dict):
         super().__init__(*args, **kwargs)
         self.prefix = prefix
 
+    @property
+    def status(self) -> int | None:
+        """Status byte of a reply, or None for a push."""
+        return self.prefix[0] if self.prefix else None
+
     def diff(self, old: Self, types: bool | None = None) -> str:  # noqa: FBT001
         """
         Return changes from previous parameters to this in string representation.
@@ -311,13 +317,16 @@ class ParameterDict(dict):
         """Return string representation of potential parameter encodings."""
         return self.to_str()
 
+STATUS_LIMIT = 0xA1
+"""TLV tags start at ``0xa1``; a lower first byte is a reply's status."""
+
 Parameters = ExprAdapter(
     Struct(
 
-        # 0x00 optional prefix
+        # Optional status byte (replies only)
         "prefix" / If(
-            this._parsing or (this._building and this._.prefix is not None),
-            Optional(Const(bytes.fromhex("00"))),
+            lambda this: this._parsing or this.prefix is not None,
+            Optional(ExprValidator(Bytes(1), lambda obj, _: obj[0] < STATUS_LIMIT)),
         ),
 
         # List of parameters
@@ -336,7 +345,8 @@ Parameters = ExprAdapter(
 Decoded parameters of the payload of an Anker packet.
 
 The payload of Anker packets is made up of a list of
-parameters and is sometimes prefixed with 00.
+parameters. The payload of a reply starts with a status byte;
+pushes have none.
 
 Structure: <Prefix 1B> <Parameter 1 nB> ... <Parameter n nB>.
 
