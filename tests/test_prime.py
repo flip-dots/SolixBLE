@@ -4,12 +4,17 @@ Tests for the Anker Prime specific functionality.
 .. moduleauthor:: Harvey Lelliott (flip-dots) <harveylelliott@duck.com>
 """
 
+from unittest import mock
+
 import pytest
 
-from SolixBLE import prime_device
 from SolixBLE.constructs import Packet
 from SolixBLE.prime_device import PrimeDevice
 from tests.const import MOCK_BLE_DEVICE
+from tests.helpers import install_session_keys
+
+#: Client token the post-authorize test registers as the owner.
+OWNER_TOKEN = "owner-token"  # noqa: S105
 
 
 @pytest.mark.parametrize(
@@ -66,10 +71,55 @@ def test_negotiation_encryption_session(
     prime = PrimeDevice(MOCK_BLE_DEVICE)
 
     payload = Packet.parse(bytes.fromhex(packet)).payload_bytes
-    prime._shared_secret = bytes.fromhex(shared_secret)
+    install_session_keys(prime, bytes.fromhex(shared_secret))
 
     decrypted = prime._decrypt_payload(payload)
     assert decrypted.hex() == decrypted_payload
 
     re_encrypted = prime._encrypt_payload(decrypted)
     assert payload.hex() == re_encrypted.hex()
+
+
+@pytest.mark.asyncio
+async def test_post_authorize_sends_region_and_owner(
+    fake_time: None,  # noqa: ARG001
+) -> None:
+    """
+    Test the requests sent once a Prime client is authorized.
+
+    ``4200`` asks for all device information and ``420a`` carries the region
+    (typed 02) and this client's token as the owner (typed 04), both followed
+    by the typed timestamp trailer.
+    """
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+    prime._client_token = OWNER_TOKEN
+    prime._client = mock.AsyncMock()
+    timestamp = prime._timestamp().hex()
+
+    with (
+        mock.patch.object(
+            prime, "_encrypt_payload", side_effect=lambda payload: payload,
+        ),
+        mock.patch("SolixBLE.constructs.Packet.build") as mock_build,
+        mock.patch("SolixBLE.SolixBLEDevice.negotiated", return_value=True),
+        mock.patch("SolixBLE.prime_device.region", return_value="US"),
+    ):
+        await prime._post_authorize()
+
+    assert [call.args[0] for call in mock_build.call_args_list] == [
+        {
+            "pattern": bytes.fromhex("03000f"),
+            "cmd": bytes.fromhex("4200"),
+            "payload_bytes": bytes.fromhex(f"a10121fe0503{timestamp}"),
+        },
+        {
+            "pattern": bytes.fromhex("03000f"),
+            "cmd": bytes.fromhex("420a"),
+            "payload_bytes": bytes.fromhex(
+                "a10121"
+                + "a203025553"
+                + "a30c04" + OWNER_TOKEN.encode().hex()
+                + f"fe0503{timestamp}",
+            ),
+        },
+    ]

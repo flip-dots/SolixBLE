@@ -12,8 +12,25 @@ from typing import Any, Self, Union
 from unittest import mock
 
 from bleak import BleakClient
+from bleak.exc import BleakError
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    SECP256R1,
+    EllipticCurvePrivateKey,
+    derive_private_key,
+)
+
+from SolixBLE.cli import Console
+from SolixBLE.const import FALLBACK_TZ, UUID_IDENTIFIER
+from SolixBLE.device import SolixBLEDevice
+from SolixBLE.protocols import EcdhPath, Keys, NegotiatedSession
+from SolixBLE.utilities import _to_bytes
+from tests.const import (
+    MOCK_BLE_DEVICE,
+    NEGOTIATION_RESPONSES_SOLIX,
+    SOLIX_TEST_PRIVATE_KEY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +61,18 @@ class RequestResponse:
     called: bool = field(default=False)
     """
     Has this request been fulfilled.
+    """
+
+    refuse: bool = field(default=False)
+    """
+    Drop the connection instead of responding, as a device does when it
+    refuses a request.
+    """
+
+    refuse_during_write: bool = field(default=False)
+    """
+    Drop the connection before the refused write returns, so the write
+    raises as bleak's does.
     """
 
 
@@ -96,6 +125,12 @@ class MockDevice:
         self.notify_uuids: list[str | bytes] = []
         self.write_uuids: list[str | bytes] = []
 
+        # Every packet the module under test wrote, in order
+        self.writes: list[bytes] = []
+
+        # Set by a refusal so the next connection succeeds again
+        self._connect_next = False
+
     def new_connection_mock(self):
         """
         Executing this causes all new bleak clients created using
@@ -108,6 +143,11 @@ class MockDevice:
             establish_connection is called.
             """
             _LOGGER.debug(f"New mock bleak client created with '{args}', '{kwargs}'!")
+
+            # A device that refused the last connection accepts the next one
+            if self._connect_next:
+                self._is_connected = True
+                self._connect_next = False
 
             # We give it a name so we can tell the difference between them in logs
             mock_bleak_client = mock.AsyncMock(
@@ -156,7 +196,7 @@ class MockDevice:
         """
         self._is_connected = True
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         """
         Set is_connected of all mocked bleak clients to False and
         trigger call on_disconnect callbacks.
@@ -183,6 +223,31 @@ class MockDevice:
             RequestResponse(
                 name=f"num {len(self._assertions)}", expected=value, response=response
             )
+        )
+
+    def refuse_after(
+        self,
+        value: bytes | None = None,
+        *,
+        during_write: bool = False,
+    ) -> None:
+        """
+        Expect an ordered request and drop the connection when it is made.
+
+        Nothing is answered, as a device does when it refuses a request. The
+        next connection made to the mock device succeeds.
+
+        :param value: Expected bytes value or None to accept any.
+        :param during_write: Drop before the write returns, so it raises.
+        """
+        self._assertions.append(
+            RequestResponse(
+                name=f"num {len(self._assertions)} (refused)",
+                expected=value,
+                response=[],
+                refuse=True,
+                refuse_during_write=during_write,
+            ),
         )
 
     def expect_ordered_all(self, requests: list[RequestResponse]):
@@ -265,6 +330,16 @@ class MockDevice:
         # Increment position
         self._position = self._position + 1
         request_response.called = True
+        self.writes.append(bytes(data))
+
+        # A refused request drops the connection and answers nothing
+        if request_response.refuse:
+            self.disconnect()
+            self._connect_next = True
+            if request_response.refuse_during_write:
+                msg = "disconnected"
+                raise BleakError(msg)
+            return
 
         # Wait a little
         await asyncio.sleep(0.1)
@@ -297,6 +372,7 @@ def make_advertisement(
     manufacturer_data: dict[int, bytes] | None = None,
     service_uuids: list[str] | None = None,
     local_name: str | None = None,
+    service_data: dict[str, bytes] | None = None,
 ) -> AdvertisementData:
     """
     Build a bleak scan result with the given fields.
@@ -304,11 +380,12 @@ def make_advertisement(
     :param manufacturer_data: Manufacturer data by company identifier.
     :param service_uuids: Advertised service UUIDs.
     :param local_name: Advertised local name.
+    :param service_data: Service data by service UUID.
     """
     return AdvertisementData(
         local_name=local_name,
         manufacturer_data=manufacturer_data or {},
-        service_data={},
+        service_data=service_data or {},
         service_uuids=service_uuids or [],
         tx_power=None,
         rssi=-60,
@@ -342,3 +419,130 @@ def scanner_reporting(results: list[tuple[BLEDevice, AdvertisementData]]) -> typ
             return False
 
     return _Scanner
+
+
+def install_session_keys(device: SolixBLEDevice, secret: bytes) -> None:
+    """
+    Give a device the session keys an ECDH negotiation derives from a secret.
+
+    The device keeps its current session (or starts one on its class's outer
+    protocol) and its path holds ``secret[:16]`` as the key and
+    ``secret[16:32]`` as the IV, as after a real key exchange. An empty
+    secret leaves the keys as they are.
+
+    :param device: Device under test.
+    :param secret: The 32-byte ECDH shared secret, or empty.
+    """
+    if device._session is None:
+        device._session = NegotiatedSession(device._outer_class(), device)
+    if device._session.path is None:
+        device._session.path = EcdhPath()
+    if secret:
+        device._session.path.keys = Keys.parse(secret)
+
+
+#: Client UUID and token reported by RecordingLink.
+RECORDING_CLIENT_ID = "b2dc0b17-b75d-4abf-ba6e-ec7c997c23e7"
+
+
+class RecordingLink:
+    """
+    Stand-in for the device a negotiation runs on.
+
+    Every packet the negotiation sends is recorded as a tuple of pattern,
+    cmd and parameters, with each parameter value resolved to bytes the way
+    the device resolves it. The clock, time zone, client id and private key
+    are fixed so the recorded bytes are reproducible.
+    """
+
+    _UUID_STRING = RECORDING_CLIENT_ID
+    _client_token = RECORDING_CLIENT_ID
+
+    def __init__(self) -> None:
+        """Initialise with nothing sent."""
+
+        # Every packet sent, in order, as (pattern, cmd, parameters)
+        self.sent: list[tuple[str, str, dict[str, bytes]]] = []
+
+    async def _send_packet(
+        self, pattern: str, cmd: str, parameters: dict[str, Any],
+        **kwargs: Any,  # noqa: ANN401
+    ) -> None:
+        """
+        Record a packet instead of sending it.
+
+        :param pattern: Pattern of the packet.
+        :param cmd: Command of the packet.
+        :param parameters: Parameters by tag, values may be lambdas taking self.
+        """
+        self.sent.append((pattern, cmd, {
+            tag: _to_bytes(data=item["value"], **kwargs | { "self": self })
+            for tag, item in parameters.items()
+        }))
+
+    def _timestamp(self) -> bytes:
+        """Return a fixed timestamp."""
+        return bytes.fromhex("42ad8c69")
+
+    def _timezone_offset(self) -> bytes:
+        """Return a fixed UTC offset of zero seconds west."""
+        return bytes(4)
+
+    def _posix_timezone(self) -> str:
+        """Return the fallback POSIX time zone."""
+        return FALLBACK_TZ
+
+    def _generate_private_key(self) -> EllipticCurvePrivateKey:
+        """Return the key derived from the fixed private value."""
+        return derive_private_key(
+            int.from_bytes(bytes.fromhex(SOLIX_TEST_PRIVATE_KEY), byteorder="big"),
+            SECP256R1(),
+        )
+
+
+async def feed_negotiation(
+    session: NegotiatedSession, replies: list[tuple[str, str]],
+) -> None:
+    """
+    Feed a negotiation session decrypted device replies in order.
+
+    :param session: Session under test.
+    :param replies: Pairs of command and plaintext payload, both as hex.
+    """
+    for cmd, plaintext in replies:
+        await session.on_plaintext(
+            bytes.fromhex("030001"), bytes.fromhex(cmd), bytes.fromhex(plaintext),
+        )
+
+
+def console_seeing_c300(**kwargs: Any) -> Console:
+    """
+    Return a console whose scanner reports the mock device as a negotiating
+    Anker device without a manufacturer record.
+
+    :param kwargs: Passed through to the console.
+    """
+    advertisement = make_advertisement(service_uuids=[UUID_IDENTIFIER])
+    return Console(
+        scanner=scanner_reporting([(MOCK_BLE_DEVICE, advertisement)]),
+        reply_wait=0,
+        **kwargs,
+    )
+
+
+async def connect_console(console: Console, mock_bluetooth: MockDevice) -> list[str]:
+    """
+    Scan and connect the console to the mock device as a C300 that answers
+    with the recorded negotiation.
+
+    :param console: Console under test, from console_seeing_c300.
+    :param mock_bluetooth: The active mock device.
+    :returns: What the connect command printed.
+    """
+    for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+        mock_bluetooth.expect_ordered(
+            bytes.fromhex(expected),
+            [bytes.fromhex(response) for response in responses],
+        )
+    await console.run_line("scan 0")
+    return await console.run_line("connect 0 C300")
