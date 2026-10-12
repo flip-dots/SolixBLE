@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 )
 
 from SolixBLE.const import FALLBACK_TZ
+from SolixBLE.constructs import Packet
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.protocols import EcdhPath, Keys, NegotiatedSession
 from SolixBLE.utilities import _to_bytes
@@ -506,3 +507,26 @@ async def feed_negotiation(
         await session.on_plaintext(
             bytes.fromhex("030001"), bytes.fromhex(cmd), bytes.fromhex(plaintext),
         )
+
+
+def negotiation_steps_through(
+    responses: dict[str, list[str]], stop_after_cmd: str,
+) -> list[tuple[bytes, list[bytes]]]:
+    """
+    Return a recorded negotiation's steps, up to and including one command.
+
+    Use to script a :class:`MockDevice` through a prefix of a recorded
+    negotiation (e.g. up to the clock/time zone exchange), before swapping in
+    a substitute reply for whatever request comes next.
+
+    :param responses: Maps a sent command's bytes (as hex) to its replies
+        (as hex), in order, e.g. NEGOTIATION_RESPONSES_PRIME.
+    :param stop_after_cmd: The sent command (as hex, e.g. "4022") to stop
+        after, inclusive.
+    """
+    steps = []
+    for sent, replies in responses.items():
+        steps.append((bytes.fromhex(sent), [bytes.fromhex(reply) for reply in replies]))
+        if Packet.parse(bytes.fromhex(sent)).cmd.hex() == stop_after_cmd:
+            break
+    return steps

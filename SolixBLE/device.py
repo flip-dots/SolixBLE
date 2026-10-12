@@ -59,6 +59,7 @@ from .const import (
     FALLBACK_TZ,
     NEGOTIATION_RESPONSE_TIMEOUT,
     NEGOTIATION_TIMEOUT,
+    PAIRING_CONFIRMATION_GRACE,
     RECONNECT_ATTEMPTS_MAX,
     RECONNECT_DELAY,
 )
@@ -107,6 +108,7 @@ class SolixBLEDevice:
         self,
         ble_device: BLEDevice,
         advertisement: AdvertisementData | None = None,
+        client_token: str | None = None,
     ) -> None:
         """Initialise device object. Does not connect automatically.
 
@@ -114,6 +116,10 @@ class SolixBLEDevice:
         :param advertisement: The device's scan result, if available. Its
             capability byte tells which negotiation the device accepts; without
             it the class default is tried first and corrected if refused.
+        :param client_token: Sent in the ECDH path's registration (``x027``).
+            Firmware that pairs clients remembers it, so keep it stable across
+            runs to avoid a repeat button press. Defaults to the class
+            identifier, shared by every client of this class.
         """
 
         _LOGGER.debug(
@@ -128,6 +134,7 @@ class SolixBLEDevice:
         self._last_data_timestamp: datetime | None = None
         self._last_packet_timestamp: datetime | None = None
         self._state_changed_callbacks: list[Callable[[], None]] = []
+        self._pairing_callbacks: list[Callable[[], None]] = []
         self._packet_futures: dict[tuple[int, int], list[asyncio.Future]] = {}
         self._auto_reconnect_task: asyncio.Task | None = None
         self._keep_alive_task: asyncio.Task | None = None
@@ -136,7 +143,7 @@ class SolixBLEDevice:
         self._session: NegotiatedSession | None = None
         self._outer_class: type[Outer] = self._initial_outer(advertisement)
         self._negotiation_error: UnsupportedNegotiation | None = None
-        self._client_token: str = self._UUID_STRING
+        self._client_token: str = client_token or self._UUID_STRING
 
     def _initial_outer(
         self, advertisement: AdvertisementData | None,
@@ -175,6 +182,26 @@ class SolixBLEDevice:
         :raises ValueError: If callback does not exist.
         """
         self._state_changed_callbacks.remove(function)
+
+    def add_pairing_callback(self, function: Callable[[], None]) -> None:
+        """Register a callback to run when the device asks for a button press.
+
+        Firmware that pairs clients runs this once per connection attempt,
+        when its registration reply first asks for physical confirmation
+        (``x827`` status ``09``). Use it to prompt a user to press the
+        device's button.
+
+        :param function: Function to run when pairing confirmation is needed.
+        """
+        self._pairing_callbacks.append(function)
+
+    def remove_pairing_callback(self, function: Callable[[], None]) -> None:
+        """Remove a registered pairing callback.
+
+        :param function: Function to remove from callbacks.
+        :raises ValueError: If callback does not exist.
+        """
+        self._pairing_callbacks.remove(function)
 
     async def _initiate_negotiations(self) -> None:
         """Start a negotiation on the current outer protocol.
@@ -298,13 +325,23 @@ class SolixBLEDevice:
     async def _negotiate(self) -> bool:
         """Run the negotiation until it succeeds, fails, or the link drops.
 
+        Firmware that pairs clients can ask, part way through, for its
+        physical button to be pressed. That wait runs as a second phase
+        after this one ends, bounded by the device's own announced window
+        instead of :meth:`_negotiation_deadline`.
+
         :returns: True once negotiated, else False.
         """
         try:
             async with asyncio.timeout(self._negotiation_deadline()):
 
-                # While negotiations have not completed and the link is up
-                while not self.negotiated and self.connected:
+                # While negotiations have not completed, the link is up, and
+                # the device is not waiting for its button to be pressed
+                while (
+                    not self.negotiated
+                    and self.connected
+                    and not self.pairing_required
+                ):
 
                     # If we have not received any packet from the device in
                     # any stage then restart negotiations from the start
@@ -324,6 +361,7 @@ class SolixBLEDevice:
                             self.negotiated
                             or not self.connected
                             or self._negotiation_error is not None
+                            or self.pairing_required
                         ):
                             break
 
@@ -339,8 +377,46 @@ class SolixBLEDevice:
             _LOGGER.exception(f"Timed out attempting to negotiate with '{self.name}'!")
             return False
 
+        if self.pairing_required and self.connected and not self.negotiated:
+            return await self._wait_for_pairing_confirmation()
+
         if not self.negotiated:
             _LOGGER.error(f"Connection to '{self.name}' was lost while negotiating!")
+        return self.negotiated
+
+    async def _wait_for_pairing_confirmation(self) -> bool:
+        """Wait for the device's button to be pressed, without restarting.
+
+        Runs the registered pairing callbacks once, then waits the window
+        the device announced plus :data:`PAIRING_CONFIRMATION_GRACE`, the
+        same grace the firmware itself allows past that window before it
+        drops the link.
+
+        :returns: True once the grant arrives, else False.
+        """
+        self._run_pairing_callbacks()
+        window = (
+            self.announcement.confirmation_window
+            if self.announcement is not None and self.announcement.confirmation_window
+            else 0
+        ) + PAIRING_CONFIRMATION_GRACE
+
+        try:
+            async with asyncio.timeout(window):
+                for _ in range(0, int(window)):
+                    await asyncio.sleep(1)
+                    if self.negotiated or not self.connected:
+                        break
+        except TimeoutError:
+            _LOGGER.exception(
+                f"'{self.name}' was not confirmed within the pairing window!",
+            )
+            return False
+
+        if not self.negotiated:
+            _LOGGER.error(
+                f"Connection to '{self.name}' was lost awaiting pairing confirmation!",
+            )
         return self.negotiated
 
     async def _reopen_if_refused(
@@ -389,10 +465,14 @@ class SolixBLEDevice:
         """Whether :meth:`connect` should send the opening request (again).
 
         The default restarts when the device has sent nothing, or nothing for
-        ``NEGOTIATION_RESPONSE_TIMEOUT`` seconds.
+        ``NEGOTIATION_RESPONSE_TIMEOUT`` seconds, unless it is waiting for
+        its button to be pressed: resending the opener there would start a
+        fresh key exchange and void the pending confirmation.
 
         :returns: True to send the opening request now.
         """
+        if self.pairing_required:
+            return False
         return (
             self._last_packet_timestamp is None
             or (time.time() - self._last_packet_timestamp)
@@ -498,6 +578,21 @@ class SolixBLEDevice:
         :returns: The announcement, or None before a negotiation started.
         """
         return self._session.announcement if self._session is not None else None
+
+    @property
+    def pairing_required(self) -> bool:
+        """Is the device waiting for its physical button to confirm this client.
+
+        True once a registration reply asks for a button press (``x827``
+        status ``09``), and until the grant pushed after the press arrives.
+
+        :returns: True/False if a pairing confirmation is outstanding.
+        """
+        return (
+            not self.negotiated
+            and self.announcement is not None
+            and self.announcement.confirmation_window is not None
+        )
 
     @property
     def available(self) -> bool:
@@ -941,6 +1036,16 @@ class SolixBLEDevice:
             except Exception:
                 _LOGGER.exception(
                     f"Exception raised by a registered state change callback '{function}'!"
+                )
+
+    def _run_pairing_callbacks(self) -> None:
+        """Execute all registered callbacks for a pairing confirmation request."""
+        for function in self._pairing_callbacks:
+            try:
+                function()
+            except Exception:
+                _LOGGER.exception(
+                    f"Exception raised by a registered pairing callback '{function}'!"
                 )
 
     async def _auto_reconnect(self) -> None:
