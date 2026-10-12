@@ -102,7 +102,7 @@ How a device object and its negotiation fit together:
 - ``announcement`` holds what the device declared.
 - ``NegotiatedSession.encrypt()`` uses ``path.encrypt_override()``, else ``outer.encrypt()`` under ``path.keys``. ``NegotiatedSession.decrypt()`` uses ``outer.decrypt()`` under ``path.keys``.
 - The outer is how the negotiation travels and which cipher the session uses (see `Outer protocols`_).
-- The path is the key exchange and authorization after the shared opening (see Paths).
+- The path is the key exchange and authorization after the shared opening (see `Paths`_).
 - The session ties one outer and one path to one connection; the device is its link, which builds and writes the frames.
 
 
@@ -322,7 +322,7 @@ opening frame.
      - Opening
      - Before keys
      - Session cipher
-     - Client authorized at
+     - Client authorized at (ECDH path)
    * - Plain (:py:class:`SolixBLE.protocols.PlainOuter`)
      - ``0001``
      - clear
@@ -334,10 +334,7 @@ opening frame.
      - AES-128-GCM
      - ``4827`` status ``00``, or the first session push the client can decrypt
 
-Both outers run the same opening (``x001``, ``x003`` for the device's
-capabilities, ``x029`` for its serial and MAC), then an ECDH key exchange on
-P-256 with a fresh key for every negotiation. The key is the first 16 bytes
-of the shared secret; the IV is the next 16 (GCM uses 12 of them).
+Both outers run the same opening (``x001``, ``x003`` for the device's capabilities, ``x029`` for its serial and MAC), then the key exchange of the path the capability reply selects (see `Paths`_). The legacy AES path authorizes at ``4822`` on either outer.
 
 Which outer is tried first comes from the best hint available, strongest
 first:
@@ -391,16 +388,15 @@ that handles the reply runs the rest of the negotiation.
        ``x021`` / ``x821`` exchange P-256 points, ``x022`` sets the clock,
        ``4027`` registers the client
      - plain or encrypted
-     - the shared secret's first 16 bytes; IV the next 16
+     - P-256 with a fresh key for every negotiation; the shared secret's first 16 bytes, IV the next 16 (GCM uses 12 of them)
      - see `Outer protocols`_
    * - otherwise ``a1 & 0x02`` (AES), e.g. ``a1 02`` · ``a3 04`` with no
        ``a5`` on older module builds
-     - Legacy AES (:py:class:`SolixBLE.protocols.LegacyAesPath`): ``0005``
+     - Legacy AES (:py:class:`SolixBLE.protocols.LegacyAesPath`): ``x005``
        states AES (``a5 02``), ``4022`` sets the clock, ``4822`` returns the
        session key, ``4023`` binds the client
-     - plain only
-     - first the client id's and the serial's first 16 bytes; after ``4822``
-       the key it carries, same IV
+     - plain or encrypted
+     - until ``4822``, CBC under the client id's and the serial's first 16 bytes (plain) or the static key and IV (encrypted); after it, the key ``4822`` carries, with the serial (plain) or the static IV (encrypted)
      - ``4822``
    * - neither
      - none: ``connect()`` returns ``False`` and logs
@@ -511,10 +507,10 @@ Shared opening (``NegotiatedSession``):
     D->>C: x823
     Note over C: bind status logged
 
-- ``x`` is the flag nibble: ``0`` on the plain outer until keys are installed and ``4`` after (``0021``, then ``4022``), always ``4`` on the encrypted outer. Replies set ``0x800`` (``0801`` / ``4801``).
-- Before keys, the plain outer sends in clear and the encrypted outer under the static GCM key. Once ``x821`` installs the keys, the session cipher is CBC (plain) or GCM (encrypted).
-- The plain outer authorizes at ``0821``. The encrypted outer authorizes at ``4827`` status ``00``, the ``030101`` grant, or the first session push the client can decrypt (``on_session_push()``).
-- ``(+ client id)``: the plain outer inserts the client id as ``a2`` in ``0001``, ``0003``, ``0029``, ``0005`` and ``4022``; the encrypted outer sends none.
+- ``x`` is the flag nibble: ``0`` on the plain outer until a path installs keys and ``4`` after (``0021``, then ``4022``), always ``4`` on the encrypted outer. Replies set ``0x800`` (``0801`` / ``4801``).
+- Before keys, the plain outer sends in clear and the encrypted outer under the static GCM key. Once the path installs keys, the session cipher is the outer's: CBC (plain) or GCM (encrypted). The legacy path's bootstrap request is the one exception: ``encrypt_override()`` seals it in CBC on either outer until ``4822`` authorizes the path.
+- ECDH authorizes at ``0821`` on the plain outer; on the encrypted outer at ``4827`` status ``00``, the ``030101`` grant, or the first session push the client can decrypt (``on_session_push()``). Legacy AES authorizes at ``4822`` on either outer.
+- ``(+ client id)``: the plain outer inserts the client id as ``a2`` in ``0001``, ``0003``, ``0029``, ``0005``, ``4022`` and the legacy ``4023``; the encrypted outer sends none.
 
 
 .. note::
