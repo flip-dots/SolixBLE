@@ -20,6 +20,7 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from bleak_retry_connector import establish_connection
 from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Construct,
     Container,
 )
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
@@ -47,6 +48,7 @@ from SolixBLE.protocols import (
 )
 from SolixBLE.utilities import (
     _offset_seconds_west,
+    _parse_guarded,
     _to_bytes,
     generate_ecdh_key,
     get_posix_tz,
@@ -110,6 +112,12 @@ class SolixBLEDevice:
     #: strings (e.g. ``"c421"``) are accepted too; their flags are ignored.
     _TELEMETRY_COMMANDS: tuple[int | str, ...] = (0x402, 0x300, 0x405)
 
+    #: Command codes (hex) that carry a settings/status snapshot for this
+    #: device, separate from its regular telemetry stream (e.g the Prime
+    #: devices' ``ca00``/``4a00`` snapshot, requested on demand rather than
+    #: pushed continuously). Empty on models with no such snapshot.
+    _SNAPSHOT_COMMANDS: tuple[str, ...] = ()
+
     #: The BLE transport this device uses. Subclasses on the legacy transport
     #: (GATT service ``1780``) set :class:`~SolixBLE.transport.LegacyTransport`,
     #: those on service ``2215`` :class:`~SolixBLE.transport.Transport2215`.
@@ -159,6 +167,7 @@ class SolixBLEDevice:
         self._client: BleakClient | None = None
         self._fragment_buffers: dict[tuple[int, int], list[FragmentedPayload]] = {}
         self._data: ParameterDict | None = None
+        self._snapshot: ParameterDict | None = None
         self._last_data_timestamp: datetime | None = None
         self._last_packet_timestamp: datetime | None = None
         self._state_changed_callbacks: list[Callable[[], None]] = []
@@ -538,7 +547,7 @@ class SolixBLEDevice:
 
         The default implementation does nothing; subclasses can override it to,
         for example, send a subscribe command to keep a telemetry stream (see
-        :class:`~SolixBLE.devices.prime_charger_250w.PrimeCharger250w`).
+        :class:`~SolixBLE.prime_device.PrimeDevice`).
 
         :returns: Seconds to wait before calling again or None for not implemented.
         """
@@ -689,6 +698,34 @@ class SolixBLEDevice:
             if self._data
             else DEFAULT_METADATA_STRING
         )
+
+    def _tag(self, key: str, struct: Construct) -> Container | None:
+        """Parse a telemetry tag with the given construct.
+
+        .. note::
+           :collapsible: closed
+
+           The construct-based counterpart to :meth:`_parse_int`/
+           :meth:`_parse_string`, for devices converted to parse telemetry
+           with named :mod:`construct` ``Struct``/``BitStruct``/``FlagsEnum``
+           fields instead of hand-sliced bytes (Harvey's upstream #64 review
+           requirement). Guards the record's length before parsing rather
+           than wrapping :meth:`~construct.Construct.parse` in
+           ``try``/``except StreamError``, so a short or stale record is a
+           predictable ``None`` instead of a raised exception; see
+           :func:`~SolixBLE.utilities._construct_min_length` for how the
+           guard handles a trailing dynamically-sized field (a
+           length-prefixed string or a field-counted array) without a
+           hand-maintained length constant.
+
+        :param key: The telemetry tag (e.g ``"a5"``) to read.
+        :param struct: The construct to parse the tag's value with.
+        :returns: The parsed value, or None if the tag is absent or its
+            record is too short for ``struct``.
+        """
+        if self._data is None or key not in self._data:
+            return None
+        return _parse_guarded(self._data[key].value or b"", struct)
 
     def _decrypt_payload(self, payload: bytes) -> bytes:
         """Decrypt payload with the negotiated session, if one has started."""
@@ -851,6 +888,13 @@ class SolixBLEDevice:
         """Return the message types of this model's telemetry commands."""
         return {_as_command(command).msgtype for command in self._TELEMETRY_COMMANDS}
 
+    def _snapshot_msgtypes(self) -> set[int]:
+        """Return the message types of this model's snapshot commands."""
+        return {
+            PacketCommand.parse(bytes.fromhex(cmd)).msgtype
+            for cmd in self._SNAPSHOT_COMMANDS
+        }
+
     async def _process_session(
         self, msgtype: int, payload: bytes, *, encrypted: bool,
     ) -> None:
@@ -878,9 +922,68 @@ class SolixBLEDevice:
 
             return await self._process_telemetry(parameters)
 
+        # A settings/status snapshot, requested on demand
+        if msgtype in self._snapshot_msgtypes():
+            _LOGGER.debug(
+                "Received encrypted snapshot message!"
+                if encrypted
+                else "Received non-encrypted snapshot message!",
+            )
+            parameters = Parameters.parse(payload)
+
+            if encrypted and self._session is not None:
+                self._session.on_session_push()
+
+            return await self._process_snapshot(parameters)
+
         # Unknown messages
         _LOGGER.debug(f"Received unknown message of type: {msgtype:03x}")
         return None
+
+    async def _process_snapshot(self, parameters: ParameterDict) -> None:
+        """Process a settings/status snapshot from the device."""
+
+        state_changed = self._snapshot is None or parameters != self._snapshot
+
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(f"Snapshot parameters: {parameters.to_str(verbose=True)}")
+
+            if state_changed and self._snapshot is not None:
+                _LOGGER.debug(f"Snapshot changes: {parameters.diff(self._snapshot)}")
+
+        self._snapshot = parameters
+
+        if state_changed:
+            self._run_state_changed_callbacks()
+
+    def _record(self, key: str) -> bytes:
+        """Return a snapshot tag's value bytes, or empty bytes if absent.
+
+        :param key: The snapshot tag (e.g ``"aa"``) to read.
+        """
+        if self._snapshot is None or key not in self._snapshot:
+            return b""
+        return self._snapshot[key].value or b""
+
+    def _snapshot_struct(self, key: str, struct: Construct) -> Container | None:
+        """Parse a snapshot tag with the given construct.
+
+        .. note::
+           :collapsible: closed
+
+           The snapshot-stream counterpart to :meth:`_tag`: :meth:`_record`
+           reads from ``self._snapshot`` (the settings/status push handled
+           by :meth:`_process_snapshot`) rather than ``self._data`` (the
+           regular telemetry push handled by :meth:`_process_telemetry`).
+           Both streams guard and parse the same way, via
+           :func:`~SolixBLE.utilities._parse_guarded`.
+
+        :param key: The snapshot tag (e.g ``"aa"``) to read.
+        :param struct: The construct to parse the tag's value with.
+        :returns: The parsed value, or None if the tag is absent or its
+            record is too short for ``struct``.
+        """
+        return _parse_guarded(self._record(key), struct)
 
     async def _send_packet(
         self,

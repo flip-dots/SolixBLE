@@ -267,3 +267,20 @@ async def test_clear_fragmented_telemetry_is_telemetry(
 
     assert device._data is not None  # noqa: SLF001
     assert device._data["a2"].value_legacy[1:].decode() == SOLARBANK2_SERIAL  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_snapshot_messages_are_stored_separately_from_telemetry() -> None:
+    """A snapshot command is dispatched and stored apart from the telemetry stream."""
+    device = PrimeCharger160w(MOCK_BLE_DEVICE)
+    device._SNAPSHOT_COMMANDS = ("4a00",)  # noqa: SLF001
+
+    await device._process_session(  # noqa: SLF001
+        0xA00,
+        bytes.fromhex("b0020101"),
+        encrypted=False,
+    )
+
+    assert device._snapshot is not None  # noqa: SLF001
+    assert device._data is None  # noqa: SLF001
+    assert device._snapshot["b0"].value_legacy[1:].hex() == "01"  # noqa: SLF001

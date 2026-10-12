@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-from SolixBLE import C300
+from SolixBLE import C300, MagGo3in1, PrimeCharger160w, PrimePowerBank20k
 from SolixBLE.constructs import Channel, PacketCommand
 from SolixBLE.device import SolixBLEDevice
 from tests.const import MOCK_BLE_DEVICE
@@ -140,6 +140,17 @@ async def test_send_command_message_type(
         encrypted,
     )
     assert built["msgtype"] == AC_OUTPUT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "device_class",
+    [PrimeCharger160w, PrimePowerBank20k, MagGo3in1],
+)
+async def test_prime_keep_alive_opt_out(device_class: type[SolixBLEDevice]) -> None:
+    """A Prime device that sets no keep-alive interval sends nothing."""
+    device = device_class(MOCK_BLE_DEVICE)
+    assert await device._keep_alive() is None  # noqa: SLF001
 
 
 @pytest.mark.asyncio

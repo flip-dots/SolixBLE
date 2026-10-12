@@ -19,6 +19,13 @@ from tests.const import NEGOTIATION_RESPONSES_PRIME
 PRIME_CHARGER_250W_TEST_COMMANDS = [
     pytest.param(
         PrimeCharger250w,
+        "_keep_alive",
+        [],
+        [("420b", "a10121")],
+        id="prime_charger_250w_keep_alive",
+    ),
+    pytest.param(
+        PrimeCharger250w,
         "turn_usb_c1_on",
         [],
         [("4207", "a10121a2020100a3020101")],

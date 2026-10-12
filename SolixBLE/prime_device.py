@@ -4,11 +4,33 @@
 
 """
 
+import asyncio
 import logging
 
+from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Construct,
+    Container,
+    Int8ub,
+)
+
+from SolixBLE.const import (
+    DEFAULT_METADATA_BOOL,
+    DEFAULT_METADATA_FLOAT,
+    DEFAULT_METADATA_INT,
+    DEFAULT_METADATA_STRING,
+)
+from SolixBLE.constructs import (
+    PORT_FAULTS,
+    PORT_READING,
+    PORT_RECORD,
+    SCHEDULE_TRIGGER,
+    TIMER_COMMAND,
+    DecimalVersion,
+)
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.protocols import EncryptedOuter, Outer
-from SolixBLE.utilities import region
+from SolixBLE.states import DisplayTimeout, PortStatus
+from SolixBLE.utilities import _parse_guarded, region
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -18,6 +40,121 @@ TELEMETRY_PATTERN = "03000f"
 #: The UUID sent to the device during negotiation
 UUID_STRING = "79ebed35-dc9c-4904-b40c-72c4e863aa10"
 
+#: Command sent after connecting to start the telemetry stream. This must
+#: be sent every ~10 seconds or no telemetry will be sent by the device.
+CMD_SUB_AND_KEEP_ALIVE = "420b"
+
+PARAMETERS_KEEP_ALIVE = {
+    "a1": {
+        "value": "21",
+    },
+}
+
+#: Command that requests the snapshot (``4a00``, fragmented as ``ca00``).
+CMD_REQUEST_SNAPSHOT = "4200"
+
+#: Seconds between keep-alives for a device that streams. One ``420b`` buys
+#: ten ``4303`` pushes, and the cycle also fits the snapshot request, so 9 s
+#: keeps it inside the firmware's 10-push count.
+KEEP_ALIVE_INTERVAL = 9
+
+#: Seconds between the snapshot request and the stream trigger, so their
+#: replies don't collide.
+SNAPSHOT_TO_STREAM_DELAY = 0.4
+
+#: Port commands: on/off, daily schedule and countdown. Each takes the port's
+#: wire index, which each model numbers its own way.
+CMD_PORT_OUTPUT = "4207"
+CMD_PORT_SCHEDULE = "4208"
+CMD_PORT_TIMER = "4209"
+
+#: Settings commands that carry a single byte.
+CMD_DISPLAY_TIMEOUT = "4203"
+CMD_DISPLAY_BRIGHTNESS = "4204"
+CMD_CLOCK_FORMAT = "4210"
+
+PARAMETERS_ON_OFF = {
+    "a1": {
+        "value": "21",
+    },
+    "a2": {
+        "type": 1,
+        "value": lambda port: port,
+    },
+    "a3": {
+        "type": 1,
+        "value": lambda on: 1 if on else 0,
+    },
+}
+
+PARAMETERS_TIMER = {
+    "a1": {
+        "value": "21",
+    },
+    "a2": {
+        "type": 1,
+        "value": lambda port: port,
+    },
+    "a3": {
+        "type": 4,
+        "value": lambda seconds: TIMER_COMMAND.build(
+            {"enabled": 1 if seconds else 0, "seconds": seconds},
+        ),
+    },
+}
+
+#: One ``4208`` sets one time of a port's daily schedule: ``a3`` picks the
+#: time (1 on-time, 0 off-time) and ``a4`` carries it.
+SCHEDULE_ON_TIME = 1
+SCHEDULE_OFF_TIME = 0
+
+PARAMETERS_SCHEDULE = {
+    "a1": {
+        "value": "21",
+    },
+    "a2": {
+        "type": 1,
+        "value": lambda port: port,
+    },
+    "a3": {
+        "type": 1,
+        "value": lambda time: time,
+    },
+    "a4": {
+        "type": 3,
+        "value": lambda enabled, hour, minute, weekdays: SCHEDULE_TRIGGER.build(
+            {
+                "enabled": 1 if enabled else 0,
+                "hour": hour,
+                "minute": minute,
+                "weekdays": weekdays,
+            },
+        ),
+    },
+}
+
+PARAMETERS_SETTING = {
+    "a1": {
+        "value": "21",
+    },
+    "a2": {
+        "type": 1,
+        "value": lambda setting: setting,
+    },
+}
+
+#: Display timeouts a Prime device's ``4203`` setter and its snapshot's
+#: timeout field both use, keyed by the wire code.
+DISPLAY_TIMEOUTS = {
+    0: DisplayTimeout.S0,
+    1: DisplayTimeout.S30,
+    2: DisplayTimeout.S60,
+    3: DisplayTimeout.S300,
+    4: DisplayTimeout.S1800,
+}
+
+#: The reverse of :data:`DISPLAY_TIMEOUTS`, for building a ``4203`` payload.
+DISPLAY_TIMEOUT_CODES = {timeout: code for code, timeout in DISPLAY_TIMEOUTS.items()}
 
 
 class PrimeDevice(SolixBLEDevice):
@@ -34,6 +171,10 @@ class PrimeDevice(SolixBLEDevice):
 
     _UUID_STRING: str = UUID_STRING
 
+    #: Seconds between keep-alives for a device that streams ``4303``, or None
+    #: for one that needs no keep-alive.
+    _KEEP_ALIVE_INTERVAL: int | None = None
+
     async def _post_authorize(self) -> None:
         """Start the session the way the app does once the client is authorized.
 
@@ -41,7 +182,7 @@ class PrimeDevice(SolixBLEDevice):
         and the owner, which the device stores. The device treats a different
         owner as a new one, so the owner sent is this client's token.
         """
-        await self._send_command("4200", {
+        await self._send_command(CMD_REQUEST_SNAPSHOT, {
             "a1": {
                 "key": bytes.fromhex("a1"),
                 "type": None,
@@ -63,3 +204,185 @@ class PrimeDevice(SolixBLEDevice):
                 "value": self._client_token.encode(),
             },
         })
+
+    async def _keep_alive(self) -> int | None:
+        """Re-send the realtime trigger so the telemetry stream keeps flowing.
+
+        .. note::
+           :collapsible: closed
+
+           One ``420b`` buys ten ``4303`` pushes about a second apart, so a
+           device that streams must re-send it before the burst runs out.
+           Only a device that sets :attr:`_KEEP_ALIVE_INTERVAL` sends it. A
+           device with a snapshot (:attr:`_SNAPSHOT_COMMANDS` not empty) is
+           first asked for a fresh one, a short pause ahead of the trigger.
+
+        :returns: :attr:`_KEEP_ALIVE_INTERVAL`.
+        """
+        if self._KEEP_ALIVE_INTERVAL is None:
+            return None
+        if self._SNAPSHOT_COMMANDS:
+            await self._send_command(
+                cmd=CMD_REQUEST_SNAPSHOT,
+                parameters=PARAMETERS_KEEP_ALIVE,
+            )
+            await asyncio.sleep(SNAPSHOT_TO_STREAM_DELAY)
+        await self._send_command(
+            cmd=CMD_SUB_AND_KEEP_ALIVE,
+            parameters=PARAMETERS_KEEP_ALIVE,
+        )
+        return self._KEEP_ALIVE_INTERVAL
+
+    async def _turn_port(self, port: int, *, on: bool) -> None:
+        """Turn a switchable port on or off.
+
+        :param port: The port's wire index.
+        :param on: True to turn the port on, False to turn it off.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=CMD_PORT_OUTPUT,
+            parameters=PARAMETERS_ON_OFF,
+            port=port,
+            on=on,
+        )
+
+    async def _set_port_timer(self, port: int, seconds: int) -> None:
+        """Set a switchable port's countdown auto-off timer.
+
+        :param port: The port's wire index.
+        :param seconds: Seconds until shutdown, 0 to disarm the timer.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=CMD_PORT_TIMER,
+            parameters=PARAMETERS_TIMER,
+            port=port,
+            seconds=seconds,
+        )
+
+    async def _send_setting(self, cmd: str, setting: int | bytes) -> None:
+        """Send a settings command that carries a single byte.
+
+        :param cmd: The settings command.
+        :param setting: The byte to send, as an integer or built by a construct.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=cmd,
+            parameters=PARAMETERS_SETTING,
+            setting=setting,
+        )
+
+    def _snapshot_version(self, key: str) -> str:
+        """Read a firmware version a snapshot tag packs as decimal digits.
+
+        :param key: The snapshot tag (e.g ``"a2"``) to read.
+        :returns: The version (e.g ``"2.1.1.6"``), or
+            :data:`~SolixBLE.const.DEFAULT_METADATA_STRING` if no snapshot
+            has carried it.
+        """
+        version = _parse_guarded(self._record(key), DecimalVersion)
+        if version is None:
+            return DEFAULT_METADATA_STRING
+        return str(version)
+
+    def _port_fault(self, flag: str) -> bool | None:
+        """Read one flag of the snapshot's port fault bitmap.
+
+        :param flag: Name of the flag in :data:`~SolixBLE.constructs.PORT_FAULTS`.
+        :returns: The flag, or :data:`~SolixBLE.const.DEFAULT_METADATA_BOOL`
+            if no snapshot has carried it.
+        """
+        faults = self._snapshot_struct("a3", PORT_FAULTS)
+        if faults is None:
+            return DEFAULT_METADATA_BOOL
+        return bool(faults[flag])
+
+    def _port_record(self, key: str) -> Container | None:
+        """Parse a port's switch, schedule and timer from its snapshot record.
+
+        :param key: Key of the port's record (e.g ``"aa"``, ``"ab"``, ...).
+        :returns: The parsed :data:`~SolixBLE.constructs.PORT_RECORD`, or
+            None if no snapshot has carried it.
+        """
+        return self._snapshot_struct(key, PORT_RECORD)
+
+    def _port_schedule(self, key: str) -> Container | None:
+        """Read a port's daily on/off-time schedule from its snapshot record.
+
+        :param key: Key of the port's record (e.g ``"aa"``, ``"ab"``, ...).
+        :returns: A container with ``on_time`` and ``off_time``, each a
+            :data:`~SolixBLE.constructs.SCHEDULE_TRIGGER`, or None if no
+            snapshot has carried the record.
+        """
+        record = self._port_record(key)
+        if record is None:
+            return None
+        return Container(on_time=record.on_time, off_time=record.off_time)
+
+    def _port_timer(self, key: str) -> Container | None:
+        """Read a port's countdown auto-off timer from its snapshot record.
+
+        :param key: Key of the port's record (e.g ``"aa"``, ``"ab"``, ...).
+        :returns: The parsed :data:`~SolixBLE.constructs.TIMER_SETTING`, or
+            None if no snapshot has carried the record.
+        """
+        record = self._port_record(key)
+        if record is None:
+            return None
+        return record.timer
+
+    def _stream_port(self, key: str) -> Container | None:
+        """Return a port's realtime reading from the ``4303`` stream.
+
+        :param key: The stream tag (e.g ``"a2"``) for the port.
+        :returns: The parsed :data:`~SolixBLE.constructs.PORT_READING`, or
+            None if the stream hasn't carried this tag yet or the record is
+            too short to parse.
+        """
+        if self._data is None or key not in self._data:
+            return None
+        value = self._data[key].value or b""
+        if len(value) < PORT_READING.sizeof():
+            return None
+        return PORT_READING.parse(value)
+
+    def _port_status(self, key: str) -> PortStatus:
+        """Return a port's status from the ``4303`` stream.
+
+        :param key: The stream tag (e.g ``"a2"``) for the port.
+        """
+        reading = self._stream_port(key)
+        if reading is None:
+            return PortStatus.UNKNOWN
+        return PortStatus(reading.status)
+
+    def _port_reading(self, key: str, field: str, scale: float) -> float:
+        """Return a scaled field of a port's reading from the ``4303`` stream.
+
+        :param key: The stream tag (e.g ``"a2"``) for the port.
+        :param field: The :data:`~SolixBLE.constructs.PORT_READING` field to
+            read (``"voltage"``, ``"current"`` or ``"power"``).
+        :param scale: Divide the raw field by this to get real units.
+        """
+        reading = self._stream_port(key)
+        if reading is None:
+            return DEFAULT_METADATA_FLOAT
+        return float(getattr(reading, field)) / scale
+
+    def _snapshot_int(self, key: str, field: Construct = Int8ub) -> int:
+        """Parse a snapshot tag as a plain integer.
+
+        :param key: The snapshot tag (e.g ``"b0"``) to read.
+        :param field: The integer construct to parse the tag's value with.
+        :returns: The parsed value, or :data:`~SolixBLE.const.DEFAULT_METADATA_INT`
+            if the tag is absent or its record is too short for ``field``.
+        """
+        record = self._record(key)
+        if len(record) < field.sizeof():
+            return DEFAULT_METADATA_INT
+        return int(field.parse(record))

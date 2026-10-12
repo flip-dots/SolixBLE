@@ -25,6 +25,7 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     ExprAdapter,
     ExprValidator,
     Flag,
+    FlagsEnum,
     GreedyBytes,
     GreedyRange,
     Hex,
@@ -33,6 +34,7 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     Int8ub,
     Int8ul,
     Int16ul,
+    Int32ul,
     Nibble,
     Optional,
     RawCopy,
@@ -366,14 +368,14 @@ class ParameterContainer(Container):
         val_bytes = self.get("value") or b""
         return type_byte + val_bytes
 
-    def to_dict(self, types: bool | None = None) -> dict[str, str]:  # noqa: FBT001
+    def to_dict(self, types: bool | None = None) -> dict[str, str | int]:  # noqa: FBT001
         """Return possible representations of the parameter in dict form.
 
         :param: Parameter to be interpreted.
         :types: Display parameter with type information (T=y, F=n, N=both).
         :returns: Dictionary of encodings to decoded values.
         """
-        representation: dict[str, str] = {}
+        representation: dict[str, str | int] = {}
 
         # Representation where no type info is encoded
         p_bytes = self.value_legacy
@@ -445,10 +447,16 @@ modifying, encoding, and decoding payloads.
 """
 
 
-class ParameterDict(dict):
+class ParameterDict(dict[str, ParameterContainer]):
     """Subclass to allow for direct action on the paramaters type."""
 
-    def __init__(self, *args, prefix: bytes | None = None, **kwargs):
+    def __init__(
+        self,
+        *args: Any,
+        prefix: bytes | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Initialise with the usual dict arguments, plus the reply's status prefix."""
         super().__init__(*args, **kwargs)
         self.prefix = prefix
 
@@ -464,7 +472,7 @@ class ParameterDict(dict):
         :param old: Previous entry to compare against.
         :param types: Display parameter with type information (T=y, F=n, N=both).
         """
-        differences: dict[str, str] = {}
+        differences: dict[str, dict[str, str | int]] = {}
 
         changed = {k for k in old.keys() & self.keys() if old[k] != self[k]}
         added = self.keys() - old.keys()
@@ -563,4 +571,148 @@ Usage:
 
         plaintext_payload = Parameters.build(parameters)
 
+"""
+
+WeekdayMask = ExprAdapter(
+    Int8ub,
+    decoder=lambda obj, _: frozenset(bit for bit in range(7) if obj & (1 << bit)),
+    encoder=lambda obj, _: sum(1 << bit for bit in obj),
+)
+"""
+A device's weekday bitmask: bit 0 Monday through bit 6 Sunday, matching
+Python's own :py:meth:`date.weekday` convention. Bit 7 is unused.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        days = WeekdayMask.parse(b"\\x24")  # frozenset({2, 5}), Wed and Sat
+        mask = WeekdayMask.build(frozenset(range(7)))  # b"\\x7f", every day
+
+"""
+
+DecimalVersion = ExprAdapter(
+    Int16ul,
+    decoder=lambda obj, _: (
+        f"{obj // 1000}.{obj // 100 % 10}.{obj // 10 % 10}.{obj % 10}"
+    ),
+    encoder=lambda obj, _: int(obj.replace(".", "")),
+)
+"""
+A firmware version packed as a 16-bit integer whose last three decimal digits
+are the version's last three parts and whose thousands are the first, always
+four parts (``297`` is ``0.2.9.7``). Shared by the A2345 and the A91B2
+snapshot's version tag.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        version = DecimalVersion.parse(b"\\x44\\x08")  # "2.1.1.6" (2116)
+
+"""
+
+PORT_FAULTS = FlagsEnum(
+    Int16ul,
+    over_temperature=0x01,
+    usb_c1=0x02,
+    usb_c2=0x04,
+    usb_c3=0x08,
+    usb_c4=0x10,
+    usb_a_undervoltage=0x20,
+)
+"""
+A Prime device's port fault bitmap, confirmed identical on the A2345 and
+the A91B2: bit 0 an over-temperature guard, bits 1-4 USB-C 1-4, bit 5 the
+USB-A rail. Devices without a given port simply never see its bit set.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        faults = PORT_FAULTS.parse(a3_value)
+        if faults.over_temperature:
+            ...
+
+"""
+
+FIRMWARE_UPDATE = Struct(
+    "updating" / Flag,
+    "progress" / Int8ub,
+)
+"""
+A Prime device's firmware update state: set while an update is armed, which
+holds back the ``4303`` stream, then the update's progress in percent. The
+A2345 snapshot carries it at ``b2``, the A91B2 snapshot at ``af``.
+"""
+
+SCHEDULE_TRIGGER = Struct(
+    "enabled" / Int8ub,
+    "hour" / Int8ub,
+    "minute" / Int8ub,
+    "weekdays" / WeekdayMask,
+)
+"""
+One half (on-time or off-time) of a Prime port's daily schedule.
+
+``enabled`` is ``0``/``1``, or ``0xff`` when this half has never been set -
+the hour and minute then hold a stale default (``12:00``), so gate on
+``enabled`` rather than the time.
+"""
+
+TIMER_SETTING = Struct(
+    "enabled" / Int8ub,
+    "seconds" / Int32ul,
+    "remaining" / Int32ul,
+)
+"""
+A Prime port's countdown timer: whether it is armed, the duration set, and
+the seconds remaining. A disarmed (``enabled`` ``0``) timer keeps whatever
+``seconds``/``remaining`` it last held.
+"""
+
+TIMER_COMMAND = Struct(
+    "enabled" / Int8ub,
+    "seconds" / Int32ul,
+)
+"""
+The countdown a ``4209`` sets: whether it is armed, then its seconds. A
+duration of 0 disarms it.
+"""
+
+PORT_RECORD = Struct(
+    "switch" / Flag,
+    "on_time" / SCHEDULE_TRIGGER,
+    "off_time" / SCHEDULE_TRIGGER,
+    "timer" / TIMER_SETTING,
+    "priority" / Optional(Int8ub),
+)
+"""
+A Prime device's per-port snapshot record: on/off switch, the daily
+on-time/off-time schedule, the countdown timer, and - on ports that support
+the Port Priority charging mode - a trailing priority byte
+(:class:`~SolixBLE.states.PortPriority`). 18 bytes without it (the A91B2's
+AC and USB-C ports), 19 with it (the A2345's USB-C ports); ``priority``
+parses as ``None`` when the record ends before that byte.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        record = PORT_RECORD.parse(record_bytes)
+        if record.on_time.enabled == 1:
+            print(f"Turns on at {record.on_time.hour}:{record.on_time.minute:02}")
+
+"""
+
+PORT_READING = Struct(
+    "status" / Int8ub,
+    "voltage" / Int16ul,
+    "current" / Int16ul,
+    "power" / Int16ul,
+)
+"""
+A Prime device's per-port realtime reading (the ``4303`` stream): status,
+then voltage (mV), current (mA) and power (centiwatts). Shared by the USB-C
+and USB-A ports on both the A2345 and the A91B2.
 """
