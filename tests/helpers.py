@@ -542,3 +542,26 @@ def frame_header(cmd: str, pattern: str = "030001") -> Container:
     :returns: The parsed packet, with an empty payload.
     """
     return Packet.parse(build_frame(pattern, cmd))
+
+
+def negotiation_steps_through(
+    responses: dict[str, list[str]], stop_after: int,
+) -> list[tuple[bytes, list[bytes]]]:
+    """
+    Return a recorded negotiation's steps, up to and including one request.
+
+    Use to script a :class:`MockDevice` through a prefix of a recorded
+    negotiation (e.g. up to the clock/time zone exchange), before swapping in
+    a substitute reply for whatever request comes next.
+
+    :param responses: Maps a sent frame's bytes (as hex) to its replies
+        (as hex), in order, e.g. NEGOTIATION_RESPONSES_PRIME.
+    :param stop_after: The request's message (e.g. ``Negotiation.GET_AES_KEY``)
+        to stop after, inclusive.
+    """
+    steps = []
+    for sent, replies in responses.items():
+        steps.append((bytes.fromhex(sent), [bytes.fromhex(reply) for reply in replies]))
+        if Packet.parse(bytes.fromhex(sent)).message == stop_after:
+            break
+    return steps

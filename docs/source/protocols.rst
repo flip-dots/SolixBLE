@@ -766,14 +766,17 @@ a device:
   flowchart TD
       connect["connect()"]
       est["establish_connection()<br/>start_notify(UUID_TELEMETRY, _process_notification)"]
-      nego["_negotiate()<br/>until negotiated, the link drops,<br/>an UnsupportedNegotiation, or NEGOTIATION_TIMEOUT"]
-      init["_initiate_negotiations()<br/>again if the device sends nothing for<br/>NEGOTIATION_RESPONSE_TIMEOUT seconds"]
+      nego["_negotiate()<br/>until negotiated, the link drops,<br/>an UnsupportedNegotiation, NEGOTIATION_TIMEOUT,<br/>or pairing_required (registration status 09)"]
+      init["_initiate_negotiations()<br/>again if the device sends nothing for<br/>NEGOTIATION_RESPONSE_TIMEOUT seconds,<br/>never while pairing_required"]
       open["_session = NegotiatedSession(_outer_class(), self)<br/>_session.open(): sends CONNECT"]
       reply["each reply: _process_notification() -> _process_negotiation()<br/>-> NegotiatedSession.on_reply() -> on_plaintext()<br/>CONNECT, NEGOTIATE_CAPABILITY replies: handled by the session<br/>later: path.on_stage() (EcdhPath or LegacyAesPath)"]
       connect --> est --> nego --> init --> open
       open -.-> reply
       reply -.-> nego
-      nego --> done{"negotiated?"}
+      nego --> pair{"pairing_required?"}
+      pair -- yes --> wait["_wait_for_pairing_confirmation():<br/>runs the pairing callbacks once, then waits<br/>confirmation_window + PAIRING_CONFIRMATION_GRACE<br/>for the 030101 grant, without resending"]
+      wait --> done
+      pair -- no --> done{"negotiated?"}
       done -- yes --> auth["_on_authorized(): _outer_class = type(outer), _post_authorize()<br/>_post_connect(); the reconnect and keep-alive tasks start"]
       done -- no --> refused{"_reopen_if_refused():<br/>link dropped, no reply,<br/>outer was PlainOuter?"}
       refused -- yes --> reopen["_outer_class = EncryptedOuter"]
@@ -959,3 +962,55 @@ outer. It is handled by ``LegacyAesPath.on_stage()``.
     The Prime Charging Station 240W (A91B2) advertises capability ``00``, and the library follows it: the device opens on the plain outer, where ECDH runs in clear and authorizes at ``0821``. Its capability reply is ``a1 02 · a2 fd00 · a3 44 · a4 01 · a5 00``: it offers both ECDH and AES, and its auth method ``a5`` is ``00``.
 
     The device also answers the encrypted outer, although its capability byte lacks ``0x04``, and there only legacy AES authorizes it: stating AES in ``4005`` (``a5 02``), the ``4022`` key request CBC-sealed under the static key returns the session key in ``4822``, and the session then runs GCM under that key with the static nonce, with no ``4027``. ECDH on the encrypted outer completes the key exchange, but auth method ``00`` answers ``4027`` with ``4827 00`` and then drops the link. Neither encrypted-outer combination is how the library connects this device.
+
+
+.. _pairing-with-a-button-press:
+
+Pairing with a button press
+----------------------------
+
+Firmware that pairs clients checks the client token carried in the ECDH
+path's registration (``GET_AUTHENTICATION``). The first time it sees a token
+it answers with status ``09`` and a confirmation window in seconds, and waits
+for its button to be pressed. Once pressed, it pushes an unsolicited
+``GET_AUTHENTICATION`` reply with status ``00`` on pattern ``030101``, which
+authorizes the client the same way a direct ``00`` reply would - :py:meth:`connect()
+<SolixBLE.SolixBLEDevice.connect>` routes both through
+:py:meth:`EcdhPath._register() <SolixBLE.protocols.EcdhPath>`. The device
+then remembers the token, so a later connection with the same one is
+authorized at once. Firmware that doesn't pair clients answers ``00``
+straight away, and no account or cloud service is involved either way.
+
+Pass a stable ``client_token`` so the device recognises the client across
+runs, and register a callback to prompt the user when a press is needed:
+
+.. code-block:: python
+
+    device = PrimeCharger250w(ble_device, client_token=my_saved_token)
+    device.add_pairing_callback(lambda: print("Press the button on the device"))
+    await device.connect()
+
+The callback runs once, when the device first asks.
+:py:attr:`pairing_required <SolixBLE.SolixBLEDevice.pairing_required>` is
+True for as long as it is waiting. :py:meth:`connect()
+<SolixBLE.SolixBLEDevice.connect>` then waits for the press for the window
+the device announced
+(:py:attr:`announcement.confirmation_window <SolixBLE.SolixBLEDevice.announcement>`)
+plus :py:data:`PAIRING_CONFIRMATION_GRACE <SolixBLE.const.PAIRING_CONFIRMATION_GRACE>`,
+without resending the opening request meanwhile - resending it would start a
+fresh key exchange and void the confirmation already in progress. A connect
+that runs out of that window, or loses the link while waiting, returns
+False. Without a token the class identifier is used, which every client of
+that class shares, so the button only needs pressing once per class per
+firmware's memory of it.
+
+.. note::
+   :collapsible: closed
+
+   The firmware enrolls whatever bytes the token happens to be; a 16-byte
+   random value, a serial, and a longer cloud account id all take the same
+   path. On firmware that binds a device to an Anker account, sending that
+   account id as the token reproduces the same registration the app itself
+   sends, and the device answers ``00`` at once without a press - but
+   obtaining the account id needs the Anker cloud, which is why it isn't the
+   default here.
