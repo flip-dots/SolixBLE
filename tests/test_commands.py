@@ -5,14 +5,12 @@
 """
 
 import asyncio
-import time
 from contextlib import nullcontext
 from unittest import mock
 
 import pytest
 
 from SolixBLE.device import SolixBLEDevice
-from SolixBLE.prime_device import PrimeDevice
 from tests.const import MOCK_BLE_DEVICE
 from tests.devices.c300 import (
     C300_TEST_COMMANDS,
@@ -79,7 +77,6 @@ async def test_send_command(
     :param expected: Error or expected cmd and payload output.
     """
     device = device_class(MOCK_BLE_DEVICE)
-    device._negotiation_timestamp = time.time()
     device._client = mock.AsyncMock()
     device._encrypt_payload = lambda x: x
     with (
@@ -93,10 +90,7 @@ async def test_send_command(
 
         # The send command function automatically adds a
         # timestamp to the parameters which we need to account for
-        timestamp_bytes = (f"fe04{device._timestamp().hex()}"
-            if issubclass(device_class, PrimeDevice)
-            else f"fe0503{device._timestamp().hex()}"
-        )
+        timestamp_bytes = f"fe0503{device._timestamp().hex()}"
 
         for call in expected:
             mock_build.assert_called_once_with({
@@ -140,7 +134,6 @@ async def test_send_command_response(  # noqa: PLR0913, PLR0917
     :param returned: Expected return value of the function.
     """
     device = device_class(MOCK_BLE_DEVICE)
-    device._negotiation_timestamp = time.time()
     device._client = mock.AsyncMock()
     device._encrypt_payload = lambda x: x
 
@@ -158,10 +151,7 @@ async def test_send_command_response(  # noqa: PLR0913, PLR0917
 
         # The send command function automatically adds a
         # timestamp to the parameters which we need to account for
-        timestamp_bytes = (f"fe04{device._timestamp().hex()}"
-            if issubclass(device_class, PrimeDevice)
-            else f"fe0503{device._timestamp().hex()}"
-        )
+        timestamp_bytes = f"fe0503{device._timestamp().hex()}"
 
         for call in expected:
             mock_build.assert_called_once_with({

@@ -39,7 +39,7 @@ from tests.const import (
     NEGOTIATION_RESPONSES_PRIME,
     NEGOTIATION_RESPONSES_SOLIX,
 )
-from tests.helpers import MockDevice
+from tests.helpers import MockDevice, install_session_keys
 
 
 @pytest.mark.asyncio
@@ -1185,8 +1185,12 @@ async def test_negotiation(  # noqa: PLR0913
         assert await device.connect(), "Expected connect to return True"
 
         # Assert that the correct shared secret is calculated
+        assert device._session is not None
+        assert device._session.path is not None
+        keys = device._session.path.keys
+        assert keys is not None, "Expected the session to hold keys"
         assert (
-            bytes.fromhex(secret) == device._shared_secret
+            bytes.fromhex(secret) == keys.key + keys.iv
         ), "Shared secret does not match expected"
 
         mock_bluetooth.check_assertions()
@@ -1261,7 +1265,7 @@ def test_payload_decryption(
     """
 
     device = device_class(MOCK_BLE_DEVICE)
-    device._shared_secret = bytes.fromhex(secret)
+    install_session_keys(device, bytes.fromhex(secret))
 
     decrypted_bytes = device._decrypt_payload(bytes.fromhex(payload))
     assert decrypted_bytes.hex() == decrypted, "Payloads do not match!"
@@ -1479,7 +1483,7 @@ async def test_telemetry_packet_processing(  # noqa: PLR0913, PLR0917
         assert device.negotiated, "Expected connected to be True"
         mock_bluetooth.check_assertions()
 
-        device._shared_secret = bytes.fromhex(secret)
+        install_session_keys(device, bytes.fromhex(secret))
 
         for packet in packets:
             await mock_bluetooth.send_data([bytes.fromhex(packet)])
@@ -1559,7 +1563,7 @@ async def test_generic_packet_processing(  # noqa: PLR0913, PLR0917
             assert device.negotiated, "Expected connected to be True"
             mock_bluetooth.check_assertions()
 
-            device._shared_secret = bytes.fromhex(secret)
+            install_session_keys(device, bytes.fromhex(secret))
 
             for packet in packets:
                 await mock_bluetooth.send_data([bytes.fromhex(packet)])

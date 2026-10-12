@@ -19,9 +19,11 @@ from tests.const import (
     SOLARBANK2_CLEAR_TELEMETRY,
     SOLARBANK2_SERIAL,
 )
-from tests.helpers import MockDevice
+from tests.helpers import MockDevice, install_session_keys
 
 SECRET = bytes(range(32))
+STATUS_CONFIRM = 0x09
+CONFIRMATION_WINDOW = 30
 
 
 @pytest.mark.asyncio
@@ -30,25 +32,11 @@ async def test_grant_pattern_reaches_negotiation(
     fast_sleep: None,  # noqa: ARG001
     fast_timeouts: None,  # noqa: ARG001
 ) -> None:
-    """A ``4827`` pushed on ``030101`` is handled as the negotiation's ``4827``."""
+    """A ``4827`` pushed on ``030101`` reaches the negotiation's path."""
     device = PrimeCharger160w(MOCK_BLE_DEVICE)
-    requests = list(NEGOTIATION_RESPONSES_PRIME.items())
-    registration = next(
-        response
-        for _, responses in requests
-        for response in responses
-        if Packet.parse(bytes.fromhex(response)).cmd.hex() == "4827"
-    )
-    grant = Packet.build(
-        {
-            "pattern": bytes.fromhex("030101"),
-            "cmd": bytes.fromhex("4827"),
-            "payload_bytes": Packet.parse(bytes.fromhex(registration)).payload_bytes,
-        },
-    )
 
     async with MockDevice() as mock_bluetooth:
-        for expected, responses in requests:
+        for expected, responses in NEGOTIATION_RESPONSES_PRIME.items():
             mock_bluetooth.expect_ordered(
                 bytes.fromhex(expected),
                 [bytes.fromhex(response) for response in responses],
@@ -56,12 +44,20 @@ async def test_grant_pattern_reaches_negotiation(
         assert await device.connect()
         mock_bluetooth.check_assertions()
 
-        # The post-registration requests are sent again for the grant
-        for expected, _ in requests[-2:]:
-            mock_bluetooth.expect_ordered(bytes.fromhex(expected), [])
+        # A device-initiated 4827 under the session key, here asking for the
+        # button (status 09, a 30 s window)
+        grant = Packet.build(
+            {
+                "pattern": bytes.fromhex("030101"),
+                "cmd": bytes.fromhex("4827"),
+                "payload_bytes": device._encrypt_payload(bytes.fromhex("09a1021e00")),  # noqa: SLF001
+            },
+        )
         await mock_bluetooth.send_data([grant])
-        await asyncio.sleep(1)
-        mock_bluetooth.check_assertions()
+
+    assert device.announcement is not None
+    assert device.announcement.registration_status == STATUS_CONFIRM
+    assert device.announcement.confirmation_window == CONFIRMATION_WINDOW
 
 
 @pytest.mark.asyncio
@@ -142,7 +138,7 @@ async def test_flag_decides_decryption_and_reassembly(  # noqa: PLR0913, PLR0917
                 [bytes.fromhex(response) for response in responses],
             )
         assert await device.connect()
-        device._shared_secret = SECRET  # noqa: SLF001
+        install_session_keys(device, SECRET)
         await mock_bluetooth.send_data([frame])
 
     assert device._data is not None  # noqa: SLF001
@@ -177,7 +173,7 @@ async def test_two_futures_one_decrypt(
                 [bytes.fromhex(response) for response in responses],
             )
         assert await device.connect()
-        device._shared_secret = SECRET  # noqa: SLF001
+        install_session_keys(device, SECRET)
         loop = asyncio.get_running_loop()
         futures = [loop.create_future(), loop.create_future()]
         for future in futures:
@@ -189,6 +185,68 @@ async def test_two_futures_one_decrypt(
         await mock_bluetooth.send_data([frame])
 
     assert [future.result() for future in futures] == [plaintext, plaintext]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "cmd", "resolves"),
+    [
+        pytest.param("03010f", "c840", True, id="fragmented_encrypted"),
+        pytest.param("03010f", "4840", True, id="unfragmented_encrypted"),
+        pytest.param("03010f", "0840", True, id="clear"),
+        pytest.param("03000f", "4840", True, id="other_composer"),
+        pytest.param("03010f", "4841", False, id="other_msgtype"),
+        pytest.param("030111", "4840", False, id="other_channel"),
+    ],
+)
+async def test_future_matches_channel_and_msgtype(  # noqa: PLR0913, PLR0917
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+    pattern: str,
+    cmd: str,
+    resolves: bool,  # noqa: FBT001
+) -> None:
+    """A reply future waits for a channel and msgtype, whatever the flags."""
+    device = C300(MOCK_BLE_DEVICE)
+    plaintext = bytes.fromhex("00a10101")
+    flags = bytes.fromhex(cmd)[0]
+    payload = (
+        AES.new(SECRET[:16], AES.MODE_CBC, iv=SECRET[16:]).encrypt(pad(plaintext, 16))
+        if flags & 0x40
+        else plaintext
+    )
+    # A 0x80 frame opens its payload with index << 4 | total; one fragment is 11
+    fragment = b"\x11" if flags & 0x80 else b""
+    frame = Packet.build(
+        {
+            "pattern": bytes.fromhex(pattern),
+            "cmd": bytes.fromhex(cmd),
+            "payload_bytes": fragment + payload,
+        },
+    )
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        install_session_keys(device, SECRET)
+
+        # Registered the way get_status_update() listens for its reply
+        future = asyncio.get_running_loop().create_future()
+        device._register_future(  # noqa: SLF001
+            future,
+            bytes.fromhex("03010f"),
+            bytes.fromhex("c840"),
+        )
+        await mock_bluetooth.send_data([frame])
+
+    assert future.done() is resolves
+    if resolves:
+        assert future.result() == plaintext
 
 
 @pytest.mark.asyncio

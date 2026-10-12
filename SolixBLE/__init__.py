@@ -25,6 +25,7 @@ from .devices import (
 )
 from .factory import device_class_from_advertisement
 from .prime_device import PrimeDevice
+from .protocols import UnsupportedNegotiation
 from .states import (
     ChargingStatus,
     ChargingStatusF3800,
@@ -34,11 +35,9 @@ from .states import (
     PortStatus,
     TemperatureUnit,
 )
-from .utilities import discover_devices
+from .utilities import discover_devices, set_region
 
 __all__ = [
-    "SolixBLEDevice",
-    "PrimeDevice",
     "C300",
     "C300DC",
     "C800",
@@ -47,21 +46,25 @@ __all__ = [
     "F2000",
     "F2600",
     "F3800",
-    "Solarbank2",
-    "Solarbank3",
-    "PrimeCharger160w",
-    "PrimeCharger250w",
-    "PrimePowerBank20k",
-    "MagGo3in1",
-    "Generic",
     "ChargingStatus",
     "ChargingStatusF3800",
     "DisplayTimeout",
+    "Generic",
     "LightStatus",
-    "PortStatus",
-    "TemperatureUnit",
+    "MagGo3in1",
     "PortOverload",
-    "discover_devices",
+    "PortStatus",
+    "PrimeCharger160w",
+    "PrimeCharger250w",
+    "PrimeDevice",
+    "PrimePowerBank20k",
+    "Solarbank2",
+    "Solarbank3",
+    "SolixBLEDevice",
+    "TemperatureUnit",
     "capability_from_advertisement",
     "device_class_from_advertisement",
+    "discover_devices",
+    "set_region",
+    "UnsupportedNegotiation",
 ]
