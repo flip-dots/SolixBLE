@@ -14,6 +14,16 @@ from ..const import (
 from ..device import SolixBLEDevice
 from ..states import ChargingStatusF3800, PortStatus
 
+#: Command sent after connecting to start the telemetry stream. Like the C1000(X)
+#: Gen 2, the F3800 streams nothing until it receives this subscribe command.
+CMD_SUBSCRIBE = "4040"
+
+PARAMETERS_SUBSCRIBE = {
+    "a1": {
+        "value": "21",
+    },
+}
+
 CMD_AC_OUTPUT = "404a"
 CMD_DC_OUTPUT = "404b"
 
@@ -56,6 +66,20 @@ class F3800(SolixBLEDevice):
     """
 
     _EXPECTED_TELEMETRY_LENGTH: int = 253
+
+    #: The F3800 pushes its telemetry on ``c840`` in addition to the gen-1 codes.
+    _TELEMETRY_COMMANDS: tuple[str, ...] = ("c840", "c402", "4300", "c405")
+
+    async def _post_connect(self) -> None:
+        """Subscribe to telemetry once connected.
+
+        The F3800 completes the encrypted handshake but streams no telemetry
+        until it receives this command, so we send it after every (re)connection.
+        """
+        await self._send_command(
+            cmd=CMD_SUBSCRIBE,
+            parameters=PARAMETERS_SUBSCRIBE,
+        )
 
     @property
     def hours_remaining(self) -> float:
