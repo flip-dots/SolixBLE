@@ -19,6 +19,13 @@ from tests.const import NEGOTIATION_RESPONSES_SOLIX
 F3800_TEST_COMMANDS = [
     pytest.param(
         F3800,
+        "_post_connect",
+        [],
+        [("4040", "a10121")],
+        id="f3800_subscribe",
+    ),
+    pytest.param(
+        F3800,
         "turn_ac_on",
         [],
         [("404a", "a10121a2020101")],
