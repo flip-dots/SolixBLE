@@ -5,14 +5,10 @@
 """
 
 from ..const import DEFAULT_METADATA_FLOAT
-from ..prime_device import PrimeDevice
+from ..prime_device import KEEP_ALIVE_INTERVAL, PrimeDevice
 from ..states import PortStatus
 
-#: Command sent after connecting to start the telemetry stream. This must
-#: be sent every ~10 seconds or no telemetry will be sent by the device.
-CMD_SUB_AND_KEEP_ALIVE = "420b"
 SUB_AND_KEEP_ALIVE_PAYLOAD = "a10121"
-KEEP_ALIVE_INTERNAL = 10
 
 CMD_USB_OUTPUT = "4207"
 CMD_USB_TIMER = "4209"
@@ -45,12 +41,6 @@ PARAMETERS_TIMER = {
     },
 }
 
-PARAMETERS_KEEP_ALIVE = {
-    "a1": {
-        "value": "21",
-    },
-}
-
 class PrimeCharger250w(PrimeDevice):
     """
     Anker Prime Charger (250W) model.
@@ -61,12 +51,7 @@ class PrimeCharger250w(PrimeDevice):
 
     _TELEMETRY_COMMANDS = ("4303", "ca00")
 
-    async def _keep_alive(self) -> int | None:
-        await self._send_command(
-            cmd=CMD_SUB_AND_KEEP_ALIVE,
-            parameters=PARAMETERS_KEEP_ALIVE,
-        )
-        return KEEP_ALIVE_INTERNAL
+    _KEEP_ALIVE_INTERVAL = KEEP_ALIVE_INTERVAL
 
     @property
     def usb_port_c1(self) -> PortStatus:

@@ -23,8 +23,8 @@ class PortStatus(Enum):
     INPUT = 2
 
     @classmethod
-    def from_input_only(cls, value: int):
-        """Custom factory for ports which only support being inputs."""
+    def from_input_only(cls, value: int) -> "PortStatus":
+        """Build a status for a port that only supports being an input."""
 
         # If it would be an output (i.e 1) set it to input (i.e 2).
         if value == PortStatus.OUTPUT.value:
@@ -109,6 +109,9 @@ class DisplayTimeout(Enum):
     #: The status of the display timeout is unknown.
     UNKNOWN = -1
 
+    #: Never times out.
+    S0 = 0
+
     #: 20 seconds.
     S20 = 20
 
@@ -124,6 +127,7 @@ class DisplayTimeout(Enum):
     #: 1800 seconds (30m).
     S1800 = 1800
 
+
 class TemperatureUnit(Enum):
     """The status of the temperature unit of the device."""
 
@@ -135,6 +139,7 @@ class TemperatureUnit(Enum):
 
     #: Display unit is Fahrenheit.
     FAHRENHEIT = 1
+
 
 class GridStatus(Enum):
     """The grid connection status."""
@@ -215,3 +220,19 @@ class PortOverload(Enum):
 
     #: USB C3 overload detected.
     USB_C3 = 10
+
+
+class PortPriority(Enum):
+    """The priority of a port in the Port Priority charging mode."""
+
+    #: The priority is unknown.
+    UNKNOWN = -1
+
+    #: Not set, outside the Port Priority strategy.
+    UNSET = 0
+
+    #: Normal priority.
+    NORMAL = 1
+
+    #: Designated to take precedence.
+    DESIGNATED = 2

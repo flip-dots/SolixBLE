@@ -8,13 +8,20 @@ from unittest import mock
 
 import pytest
 
-from SolixBLE.constructs import Packet
+from SolixBLE.const import DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_INT
+from SolixBLE.constructs import PORT_RECORD, Packet, Parameters
 from SolixBLE.prime_device import PrimeDevice
+from SolixBLE.states import PortStatus
 from tests.const import MOCK_BLE_DEVICE
 from tests.helpers import install_session_keys
 
 #: Client token the post-authorize test registers as the owner.
 OWNER_TOKEN = "owner-token"  # noqa: S105
+
+#: USB-C1 reading from a real captured 4303-stream record.
+A4_VOLTAGE = 19.712
+A4_CURRENT = 0.435
+A4_POWER = 7.88
 
 
 @pytest.mark.parametrize(
@@ -53,7 +60,9 @@ OWNER_TOKEN = "owner-token"  # noqa: S105
     ],
 )
 def test_negotiation_encryption_session(
-    packet: str, decrypted_payload: str, shared_secret: str
+    packet: str,
+    decrypted_payload: str,
+    shared_secret: str,
 ):
     """
     Test that the encrypted packets produced by the library
@@ -98,7 +107,9 @@ async def test_post_authorize_sends_region_and_owner(
 
     with (
         mock.patch.object(
-            prime, "_encrypt_payload", side_effect=lambda payload: payload,
+            prime,
+            "_encrypt_payload",
+            side_effect=lambda payload: payload,
         ),
         mock.patch("SolixBLE.constructs.Packet.build") as mock_build,
         mock.patch("SolixBLE.SolixBLEDevice.negotiated", return_value=True),
@@ -117,9 +128,75 @@ async def test_post_authorize_sends_region_and_owner(
             "cmd": bytes.fromhex("420a"),
             "payload_bytes": bytes.fromhex(
                 "a10121"
-                + "a203025553"
-                + "a30c04" + OWNER_TOKEN.encode().hex()
-                + f"fe0503{timestamp}",
+                "a203025553"
+                "a30c04" + OWNER_TOKEN.encode().hex() + f"fe0503{timestamp}",
             ),
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_port_reading() -> None:
+    """A port's status, voltage, current and power come from the 4303 stream."""
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+    await prime._process_telemetry(  # noqa: SLF001
+        Parameters.parse(bytes.fromhex("a4080401004db3011403")),
+    )
+
+    assert prime._port_status("a4") is PortStatus.OUTPUT  # noqa: SLF001
+    assert prime._port_reading("a4", "voltage", scale=1000.0) == A4_VOLTAGE  # noqa: SLF001
+    assert prime._port_reading("a4", "current", scale=1000.0) == A4_CURRENT  # noqa: SLF001
+    assert prime._port_reading("a4", "power", scale=100.0) == A4_POWER  # noqa: SLF001
+
+
+def test_stream_port_absent_defaults() -> None:
+    """A port never reported in the stream reads as unknown/default."""
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+
+    assert prime._port_status("a4") is PortStatus.UNKNOWN  # noqa: SLF001
+    reading = prime._port_reading("a4", "voltage", scale=1000.0)  # noqa: SLF001
+    assert reading == DEFAULT_METADATA_FLOAT
+
+
+@pytest.mark.asyncio
+async def test_snapshot_int_and_struct() -> None:
+    """A snapshot tag parses through a plain integer field or a construct."""
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+    await prime._process_snapshot(  # noqa: SLF001
+        Parameters.parse(
+            bytes.fromhex(
+                "b0020101aa140401ff0c0000ff0c000000580200000000000000",
+            ),
+        ),
+    )
+
+    assert prime._snapshot_int("b0") == 1  # noqa: SLF001
+
+    record = prime._snapshot_struct("aa", PORT_RECORD)  # noqa: SLF001
+    assert record is not None
+    assert record.switch is True
+    assert record.priority == 0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_struct_too_short_for_required_prefix() -> None:
+    """A record shorter than PORT_RECORD's 18-byte required prefix reads as None.
+
+    ``priority`` has no static size (it's optional), so the length guard
+    must fall back to the required prefix rather than crash computing it.
+    """
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+    await prime._process_snapshot(  # noqa: SLF001
+        Parameters.parse(bytes.fromhex("aa0f04" + "01ff0c0000ff0c00000058020000")),
+    )
+
+    record = prime._snapshot_struct("aa", PORT_RECORD)  # noqa: SLF001
+    assert record is None
+
+
+def test_snapshot_absent_defaults() -> None:
+    """A snapshot tag never received reads as the default/None."""
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+
+    assert prime._snapshot_int("b0") == DEFAULT_METADATA_INT  # noqa: SLF001
+    assert prime._snapshot_struct("aa", PORT_RECORD) is None  # noqa: SLF001
