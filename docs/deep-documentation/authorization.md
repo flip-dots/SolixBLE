@@ -29,12 +29,12 @@ A policy byte the module stores as `{auth_mode, auth_timeout, keep_unauth_mode}`
 
 | device | route | authorizes at |
 |---|---|---|
-| A1783 | encrypted ECDH, `4027` with an enrolled id | `4827 00` |
+| A1783 | encrypted ECDH, `4027` | `4827 00` once `a2` is enrolled; a new id needs one button press |
 | A2345 | encrypted ECDH, `4027` | `4827 00` |
 | A2345 | cleartext ECDH (`0005 a5 40`) | `0821`; `4200` / `420a` / `420b` answered with no `4027` |
 | A91B2 (`auth_mode 0`) | cleartext ECDH | `0821` |
 | A91B2 | legacy confer on either outer | `4822` |
-| AS220 S2000 | encrypted ECDH, `4027` with a 36-byte client UUID | `4827 00`; a new token needs one press of the Power button |
+| AS220 S2000 | encrypted ECDH, `4027` | `4827 00` once `a2` is enrolled; a new id needs one press of the Power button |
 
 `0027` on an `auth_mode 0` unit answers `00` and drops the link 19 ms later, so a client must not send it there.
 
@@ -50,12 +50,22 @@ A policy byte the module stores as `{auth_mode, auth_timeout, keep_unauth_mode}`
 | 0 or ≥ 4 | `00`, then the module disconnects; also `auth_mode` 3 with no `a3` and no account saved |
 
 - `01`: `a2` missing or > 63 B, a password > 16 B, a policy hook missing; on module v0.3.3.0 also "not ECDH-done or not encrypted".
-- `a2` is any byte string: an account, a serial, a 16-byte token, a 36-byte UUID and a 40-byte owner id all take the same path. Each new value costs one press; an enrolled value is accepted silently from then on.
+- `a2` is any byte string of 1–63 B. The module checks only whether it is already enrolled; no length or content selects a different path (module v0.2.9.7 and v0.3.3.0). Each new value costs one press; an enrolled value is accepted silently from then on.
 - `a3` = the serial with no `a2` answers `01` (`Set Account ID Failed`).
 - After ECDH against an unknown client, an A2345 sends `4827 09 a1 02 1e00` on its own about 94 ms after the `4822` ack, before any `4027`; a client that does send `4027` gets the `09` as the reply.
 - The link stays up during the window; it drops `auth_timeout + 5` s later if nobody presses.
 - The account id is on the wire before the grant (in `4029` and the first session frame), so the press authorizes this client; it doesn't deliver the account.
-- The S2000 is single-owner: binding a new token replaces the previous one, the phone app's included.
+- Enrolled ids (module v0.3.3.0) are kept in a 16-slot ring, persisted under the key `ble_user_accounts`. Under `auth_mode` 1 and 2 a new id is appended and the earlier ones stay valid, the phone app's included; the 17th overwrites the oldest. `auth_mode` 3 and 4 clear the ring before adding, so they keep one owner. An unbind wipes the ring.
+- An id is stored only when it is under 48 bytes as a string. A 48–63-byte `a2` passes the check above and is authorized for that session after the press, but isn't saved, so every reconnect needs another press.
+- `0023` doesn't enroll: its `a2` sets only the account id used for cloud binding. A `4027` with a new id plus the press is the whole enrollment.
+
+Values seen enrolled:
+
+| device (module build) | `a2` values |
+|---|---|
+| A2345 (v0.2.9.7) | a serial, a 15-byte ASCII string, a 16-byte token, a 36-byte UUID string, the 40-byte owner id |
+| A1783 (v0.3.0.6, v0.3.3.0) | the 40-byte owner id (the phone app's, always `a2 28`), a 36-character UUID string |
+| AS220 S2000 (v0.3.3.0) | a 36-character UUID string (the one published client) |
 
 Registration on a unit with no enrolled client (A2345):
 
@@ -108,6 +118,9 @@ v0.3.0.6 had the same `auth_mode` but refused none of these. The Prime module v0
 | open with `4001` under the static key when the advert capability is `04` | module v0.3.3.0 drops a cleartext `0001` |
 | after encrypted-outer ECDH (`4001`), send `0027` with an enrolled id or the account before any opcode ≥ `0x40`; never send `0027` to an `auth_mode 0` unit | a `4001` ECDH session is authorized only by `0027`; cleartext ECDH authorizes at `0821` and legacy confer at `0822`; on `auth_mode 0` `0027` disconnects |
 | route `030101` | the button grant arrives there |
+| expect module frames nobody asked for: `4827 09` before any `4027` (A2345), `4827 00` on `030101` after the press, `4900 01` on a shared link | each matches a msgtype a client may be waiting on |
+| treat a reply whose status isn't `00` as a failure, not as the answer, and tolerate a second frame on the same msgtype | a decrypt-failure `01` and the real reply can arrive 1 ms apart on the same channel and msgtype |
+| run one client per BLE link | the module keeps one session key per link; a second client's ECDH replaces it ([framing.md](framing.md#status-byte)) |
 | send an ECDH bit in `0005 a5` (`44` encrypted, `40` cleartext) with `a6` = `0803 a5` | only ECDH sets capability mode 4 and lets `0021` through |
 | send `0022 a3` as a 4-byte signed offset computed at send time | the device reads 4 bytes; DST and non-US zones |
 | derive every TLV length from its value | TZ strings vary (`JST-9` 5, `CET-1CEST,M3.5.0,M10.5.0/3` 26); serials are 16 or 17 B |

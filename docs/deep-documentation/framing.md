@@ -51,7 +51,7 @@ Channels of the ESP32-C3 comms module (C-series Gen 2 builds v0.3.0.6 / v0.3.3.0
 | `0x80` | fragment: the first payload byte is `index << 4 \| total`; the receiver reassembles and clears the flag |
 | `0xc0` | both |
 
-`c900` = flags `0xc0` + msgtype `0x900`, the response to `0x100`. MQTT frames carry flag nibble `0` (`0421`, not `c421`), so `0425`, `4425` and `c425` are one message. Key on the msgtype, never the literal cmd.
+`c900` = flags `0xc0` + msgtype `0x900`, the response to `0x100`. The same msgtype arrives as `4900` (flag `0x40` only) when the reply fits one write: an A1783's one-byte decrypt-failure `01` ("Status byte") comes back `4900`, on the same channel as the fragmented `c900` snapshot. MQTT frames carry flag nibble `0` (`0421`, not `c421`), so `0425`, `4425` and `c425` are one message. Key on the msgtype, never the literal cmd.
 
 **The comms-chip boundary.** On the app channels (`0x0f` / `0x11`) a msgtype with `(opcode & ~0x800) < 0x40` is handled by the comms chip (negotiation, admin, WiFi, OTA); `≥ 0x40` is forwarded unchanged to the device controller. One dispatch table serves every port (BLE, controller UART, cloud), keyed by channel alone.
 
@@ -79,6 +79,7 @@ Status requests and telemetry by family:
 A response payload starts with a 1-byte status; pushes have none, so a `c900` and a `c421` carry the same fields one byte apart.
 
 - `00` success, `01` fail, `02` account check failed and `04` parameter check failed (a required field missing) are the module's wire codes.
+- A session frame that fails to decrypt under the link's current key gets a one-byte `01` from the comms module itself (module v0.3.3.0), on the request's own pattern and sealed under the current key: a `4100` sent under a stale session is answered `4900 01` on `03000f` instead of `c900` on `03010f`. The frame isn't relayed to the device controller and the link stays up, so every such frame gets the same 17-byte reply (`01` + tag) until the client renegotiates. This is the case when two clients share one BLE connection, for example through a relay: the module keeps one session key per link, and the second client's ECDH replaces the first's ([authorization.md](authorization.md#client-checklist)).
 - Codes above `04` are per opcode: `4827` `09` = awaiting the button, `0827` `0a` / `0b` = wrong password, `0824` `23` / `24` = WiFi connect failed / activation missing IP.
 - The OTA replies (`4064` / `0864` device OTA, `402f` / `082f` module OTA data) and the device controller's `0x80c` OTA chunk reply use `10` / `11` / `12` for complete / image failed to finalize / resend. Outside OTA the modules send no `11`.
 - The app names statuses through an enum (`success`, `fail`, `accountVerifyFailed`, `timestampVerifyFailed`, `parameterVerifyFailed`, `noMoreData`, `lowPower`, WiFi `scanFailed` … `activateCommFailed`, `crc32VerifyFailed`, `fireWarmVerifyFailed`, `needAuthentication`, `authPasswordWrong`, `authRetryExceeded`), but it maps wire bytes onto that enum per opcode, so an enum ordinal is not a wire code.

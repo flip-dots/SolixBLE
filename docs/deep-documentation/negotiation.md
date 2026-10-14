@@ -101,7 +101,7 @@ c900 ←  status snapshot (fragmented, 253 + rest), then c421 pushes
 
 Frame lengths of the app's A1783 sends (plaintext + 26): `4001` 32, `4003` 39, `4029` 32, `4005` 45, `4021` 92, `4022` 62 (a 22-byte TZ such as `EST5EDT,M3.2.0,M11.1.0`; 66 with the 26-byte CET string above), `4027` 74; a bind adds `4023` (70 B plaintext: `a1`, `a2` account, `a3` serial, `a4`; 96 B frame).
 
-On the A2345 the app also sends `a2` on every negotiation request except `4021`, empty (`a2 00`) when it has nothing: `4001` 34, `4003` 41, `4029` 74 (`a2 28 <account>`), `4005` 47, `4021` 92, `4022` 64, `4027` 74. The S2000 app path sends `4027 a2` as a 36-byte client UUID.
+On the A2345 the app also sends `a2` on every negotiation request except `4021`, empty (`a2 00`) when it has nothing: `4001` 34, `4003` 41, `4029` 74 (`a2 28 <account>`), `4005` 47, `4021` 92, `4022` 64, `4027` 74. The one published S2000 client sends `4027 a2` as a 36-character UUID string; any enrollable id works ([authorization.md](authorization.md)).
 
 ## Cleartext ECDH, worked example (A91B2)
 

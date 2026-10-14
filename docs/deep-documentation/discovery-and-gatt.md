@@ -4,13 +4,15 @@ How an Anker BLE device is found, identified before connecting, and reached once
 
 ## Transport families
 
-The Anker app scans with one fixed service filter, the same in every app version from 2.8.1 (2024) to 3.23.0:
+The Anker app's add-device scan uses one service filter, logged unchanged from app 2.8.1 (2024) to 3.23.0:
 
 ```
 scan serviceIDs [0000ff09, 00002215, 00001780, 00001770, 000017a0, 000017a1, 000017a2, 00002540, 0000effe]
 ```
 
-Each entry is a 16-bit service UUID (Bluetooth base form `0000xxxx-0000-1000-8000-00805f9b34fb`) that a device family advertises. The app's string table also carries the 128-bit GATT triples the families serve once connected:
+Reconnecting to a device it already knows, app 2.8.1–3.4.2 scans `[0000ff09]` alone (an A91B2's home page going from `bleDisconnected` to `bleSearching`).
+
+Each entry is a 16-bit service UUID (Bluetooth base form `0000xxxx-0000-1000-8000-00805f9b34fb`) that a device family advertises. The app's compiled string table (Android app 3.22.0) also carries the 128-bit GATT triples the families serve once connected:
 
 | advertised | GATT service | write (commands) | notify (frames) | products | frames |
 |---|---|---|---|---|---|

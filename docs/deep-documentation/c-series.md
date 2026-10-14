@@ -274,7 +274,7 @@ Builds this section describes: display board (MainMcu) v1.2.1.1 and v1.2.1.6, co
 
 | item | value |
 |---|---|
-| pattern | requests on `03000f`; module-local replies on `03000f`; replies relayed from the display board and all pushes on `03010f` |
+| pattern | requests on `03000f`; module-local replies on `03000f` (the decrypt-failure `01` included); replies relayed from the display board and all pushes on `03010f` |
 | trailers | `fe 05 03 <u32 LE epoch>` and `fd 0e 00 <13 ASCII digits>` (ms epoch, the app's transaction id). The display board stores each trailer when present (`fd` ≤ 15 B, `fe` ≤ 4 B, independently); `fe` never sets the clock |
 | reply `a1` | display-board replies carry `30 \|` the request's low nibble; the realtime-data replies and pushes carry `31`, or `34` while the unit is cloud-bound and on WiFi |
 
@@ -291,6 +291,7 @@ The display-board MCU builds every telemetry frame; the comms module forwards th
 |---|---|---|---|
 | `c421` | BLE notify, `03010f` | pushed on change while the `4057` countdown runs (about one per second when values move) | work-info TLV |
 | `c900` | BLE | reply to `4100` | status `00` + the same TLV as `c421`, so one byte longer |
+| `4900` | BLE, `03000f` | a `4100` the comms module can't decrypt | status `01` only, 17 B with the tag; from the module, not the display board ([framing.md](framing.md#status-byte)) |
 | `0421` / `0900` | MQTT `param_info`, `a1 34` | device cadence / reply to `0100` | the same TLV |
 | `4425` / `0425` | BLE and MQTT | a backup-plan window start or end, or a debounced grid loss | event report ("Event report") |
 | `c490` | BLE notify, op `0x490` | every 540 s | protobuf statistics ("c490") |
@@ -311,6 +312,7 @@ c900 ←  00 | <work-info TLV>                         one snapshot, normally fo
 - `4057` (anker-solix-api `realtime_trigger`; the Prime counterpart is `420b`) starts or stops `c421` pushes. Start and stop take effect within seconds: the first `c421` follows the start ack, and the stream is already silent when a stop is acked.
 - The countdown is 2 × `a3` ticks of the ~1 s push timer and counts down only while no BLE client is connected. On a connected link the stream runs until a stop. `a3` is read as the low 16 bits of the value, so a type-`03` 4-byte `a3` (anker-solix-api's form) is accepted too; it isn't clamped and wraps above 32767.
 - `4100` (the app's `getAllDeviceInfo`) draws one `c900`, normally followed by one `c421`. A bare `a1 01 21` works; the app sends `a2 0a 04 01 00 03 17 00 01 00 00 00`, an app-version descriptor (`03 17 00` = app 3.23.0). Bit 0 of that `a2`'s byte 5 selects `a3[10:12]` (`silentRechargePower`) = 1000, else 600.
+- A `4100` sent under a session the module no longer holds gets `4900 01` on `03000f` instead (A1783, module v0.3.3.0). Seen with two clients on one relayed BLE connection: the second client's ECDH replaced the session key, the first client's polls each got the same `4900 01`, and the second client's own polls kept getting `c900` on `03010f` in between. Both replies are msgtype `0900` on channel `0x0f`, so a client has to check the status byte before taking a `0900` as its snapshot.
 - The app sends `0057` with `a2 01 a3 2c01` every few minutes while it is open, mostly over MQTT.
 - **`a2 = 0` stops `c421`.** After a stop, `c490` posts were absent for over an hour as well (A1783); a client that wants telemetry never sends `a2 00`, at teardown included. A plain disconnect leaves the stream running for the countdown.
 
@@ -1177,6 +1179,7 @@ Firmware sets seen together on the A1783:
 | MCU | BMS | expansion BMS | module | c490 schema |
 |---|---|---|---|---|
 | v1.0.4.3 | v1.1.3.3 | — | v0.2.7.5 | `_0002` |
+| v1.2.1.1 | v1.9.2.2 | v1.1.3.3 (the BP2000 as shipped) | v0.3.0.6 | `_0005` |
 | v1.2.1.1 | v1.9.2.2 | v1.9.2.2 | v0.3.0.6 | `_0005` |
 | v1.2.1.6 | v1.9.3.3 | v1.9.3.3 | v0.3.3.0 | `_0009` |
 
