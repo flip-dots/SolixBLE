@@ -11,3 +11,11 @@ C1000(X) G2
 .. autoclass:: SolixBLE.devices.c1000g2.DisplayLanguage
    :members:
    :undoc-members:
+
+.. autoclass:: SolixBLE.devices.c1000g2.TariffType
+   :members:
+   :undoc-members:
+
+.. autoclass:: SolixBLE.devices.c1000g2.DisplayPlan
+
+.. autoclass:: SolixBLE.devices.c1000g2.TouPeriod

@@ -4,6 +4,7 @@
 
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 
@@ -12,6 +13,7 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     BitsInteger,
     BitStruct,
     Bytes,
+    Container,
     ExprAdapter,
     Flag,
     FlagsEnum,
@@ -32,6 +34,7 @@ from SolixBLE.const import (
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
 )
+from SolixBLE.constructs import WeekdayMask
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.states import LightStatus, PortStatus
 
@@ -56,6 +59,69 @@ class DisplayLanguage(Enum):
 
     #: Japanese.
     JAPANESE = 4
+
+
+class TariffType(Enum):
+    """A time-of-use tariff period."""
+
+    #: The tariff is unknown.
+    UNKNOWN = -1
+
+    #: No tariff period is active.
+    NONE = 0
+
+    #: Peak.
+    PEAK = 1
+
+    #: Mid-peak.
+    MID_PEAK = 2
+
+    #: Off-peak.
+    OFF_PEAK = 3
+
+
+@dataclass(frozen=True)
+class TouPeriod:
+    """One period of a time-of-use plan, in whole hours.
+
+    :param tariff: Tariff of the period.
+    :param start_hour: First hour of the period, 0-23.
+    :param end_hour: Hour the period ends, 1-24.
+    """
+
+    tariff: TariffType
+    start_hour: int
+    end_hour: int
+
+
+@dataclass(frozen=True)
+class DisplayPlan:
+    """The display's clock screen and its day / night schedule.
+
+    :param screensaver_enabled: Whether the clock screensaver shows.
+    :param clock_theme: Clock theme, 1-based as the app numbers them.
+    :param clock_24h: Whether the clock shows 24-hour time.
+    :param day_start: Start of the day period, minutes from midnight.
+    :param day_end: End of the day period, minutes from midnight.
+    :param weekdays: Days the schedule applies, 0 Monday to 6 Sunday.
+    :param night_enabled: Whether a separate night period is set.
+    :param day_brightness: Day brightness in % (5 or 20).
+    :param night_brightness: Night brightness in % (5 or 20).
+    :param night_start: Start of the night period, minutes from midnight.
+    :param night_end: End of the night period, minutes from midnight.
+    """
+
+    screensaver_enabled: bool
+    clock_theme: int
+    clock_24h: bool
+    day_start: int
+    day_end: int
+    weekdays: frozenset[int]
+    night_enabled: bool
+    day_brightness: int
+    night_brightness: int
+    night_start: int
+    night_end: int
 
 
 VERSION_QUAD = ExprAdapter(
@@ -260,6 +326,48 @@ A4_SETTINGS = Struct(
 Settings (``a4``): 26 bytes, plus a 7-byte tail holding the flag byte on
 firmware from v1.2.1.6.
 """
+
+DA_DISPLAY_PLAN = Struct(
+    "screensaver_and_theme" / Int8ub,
+    "theme_download_state" / Int8ub,
+    "theme_id" / Int32ul,
+    "theme_size" / Int32ul,
+    "clock_24h" / Flag,
+    "day_start" / Int16ul,
+    "day_end" / Int16ul,
+    "weekdays" / WeekdayMask,
+    "night_enabled" / Flag,
+    "day_brightness_level" / Int8ub,
+    "night_brightness_level" / Int8ub,
+    "night_start" / Int16ul,
+    "night_end" / Int16ul,
+)
+"""
+Clock screen (``da``): bit 7 of ``screensaver_and_theme`` is the
+screensaver switch and the low bits the theme; times are minutes from
+midnight.
+"""
+
+#: Display brightness percentages by the level the device stores (0 or 1).
+DISPLAY_PLAN_BRIGHTNESS = (5, 20)
+
+#: Screensaver switch bit of the clock screen's theme byte.
+SCREENSAVER_BIT = 0x80
+
+#: Epoch the device sends for a window with no end.
+NO_END = 0xFFFFFFFF
+
+
+def epoch_to_local(value: int) -> datetime | None:
+    """Read a u32 epoch the way the device reports windows.
+
+    :param value: The epoch.
+    :returns: The local time, or None for 0 (no window) and for no end.
+    """
+    if value in (0, NO_END):
+        return None
+    return datetime.fromtimestamp(value)  # noqa: DTZ006  # naive local, as the base device
+
 
 #: Command sent after connecting to start the telemetry stream. Unlike the gen-1
 #: models, the Gen 2 streams nothing until it receives this subscribe command.
@@ -927,3 +1035,146 @@ class C1000G2(SolixBLEDevice):
             return DisplayLanguage(settings.display_language)
         except ValueError:
             return DisplayLanguage.UNKNOWN
+
+    @property
+    def display_plan(self) -> DisplayPlan | None:
+        """The display's clock screen and its day / night schedule.
+
+        :returns: The display plan, or None without data.
+        """
+        plan = self._tag("da", DA_DISPLAY_PLAN)
+        if plan is None:
+            return None
+
+        return DisplayPlan(
+            screensaver_enabled=bool(plan.screensaver_and_theme & SCREENSAVER_BIT),
+            clock_theme=(plan.screensaver_and_theme & ~SCREENSAVER_BIT) + 1,
+            clock_24h=plan.clock_24h,
+            day_start=plan.day_start,
+            day_end=plan.day_end,
+            weekdays=plan.weekdays,
+            night_enabled=plan.night_enabled,
+            day_brightness=DISPLAY_PLAN_BRIGHTNESS[plan.day_brightness_level & 1],
+            night_brightness=DISPLAY_PLAN_BRIGHTNESS[plan.night_brightness_level & 1],
+            night_start=plan.night_start,
+            night_end=plan.night_end,
+        )
+
+    @property
+    def tou_enabled(self) -> bool | None:
+        """Whether the time-of-use plan is switched on.
+
+        :returns: True if on, False if off, or default bool value.
+        """
+        tou = self._tag("d9", D9_TOU)
+        return DEFAULT_METADATA_BOOL if tou is None else bool(tou.tou_mode)
+
+    @property
+    def active_tariff(self) -> TariffType:
+        """Tariff of the time-of-use period in force.
+
+        .. note::
+           A period is in force only while the device is bound to an Anker
+           account and on WiFi, has AC input and the clock is inside one of
+           :attr:`tou_periods`; otherwise this reads NONE.
+
+        :returns: Active tariff, NONE, or UNKNOWN.
+        """
+        tou = self._tag("d9", D9_TOU)
+        if tou is None:
+            return TariffType.UNKNOWN
+        try:
+            return TariffType(tou.active_tariff)
+        except ValueError:
+            return TariffType.UNKNOWN
+
+    @property
+    def reserve_battery_percentage(self) -> int:
+        """Battery percentage the time-of-use plan keeps in reserve.
+
+        :returns: Reserve percentage or default int value.
+        """
+        tou = self._tag("d9", D9_TOU)
+        return DEFAULT_METADATA_INT if tou is None else tou.reserve_battery_percentage
+
+    @property
+    def tou_periods(self) -> list[TouPeriod]:
+        """Periods of the time-of-use plan.
+
+        :returns: The periods in the order stored, empty without data.
+        """
+        tou = self._tag("d9", D9_TOU)
+        if tou is None:
+            return []
+
+        periods = []
+        for period in tou.periods:
+            try:
+                tariff = TariffType(period.tariff)
+            except ValueError:
+                tariff = TariffType.UNKNOWN
+            periods.append(TouPeriod(tariff, period.start_hour, period.end_hour))
+        return periods
+
+    @property
+    def fast_charging_plan_enabled(self) -> bool | None:
+        """Whether the Fast Charging Plan (a scheduled backup charge) is on.
+
+        :returns: True if on, False if off, or default bool value.
+        """
+        backup = self._backup()
+        if backup is None:
+            return DEFAULT_METADATA_BOOL
+        enabled: bool = backup.fast_charging_plan_enabled
+        return enabled
+
+    @property
+    def storm_guard_enabled(self) -> bool | None:
+        """Whether Storm Guard (a backup charge ahead of severe weather) is on.
+
+        :returns: True if on, False if off, or default bool value.
+        """
+        backup = self._backup()
+        if backup is None:
+            return DEFAULT_METADATA_BOOL
+        enabled: bool = backup.storm_guard_enabled
+        return enabled
+
+    @property
+    def fast_charging_plan_window(
+        self,
+    ) -> tuple[datetime | None, datetime | None] | None:
+        """Start and end of the window the Fast Charging Plan stores.
+
+        :returns: (start, end) local times, an end of None meaning no end, or
+            None without data or with no window stored.
+        """
+        backup = self._backup()
+        if backup is None:
+            return None
+        start = epoch_to_local(backup.fast_charging_plan_start)
+        end = epoch_to_local(backup.fast_charging_plan_end)
+        return (start, end) if start is not None else None
+
+    @property
+    def backup_window(self) -> tuple[datetime | None, datetime | None] | None:
+        """Start and end of the backup window running now, from either plan.
+
+        :returns: (start, end) local times, an end of None meaning no end, or
+            None while no window runs.
+        """
+        backup = self._backup()
+        if backup is None:
+            return None
+        start = epoch_to_local(backup.backup_window_start)
+        end = epoch_to_local(backup.backup_window_end)
+        return (start, end) if start is not None else None
+
+    def _backup(self) -> Container | None:
+        """Parse the backup-plan tail of the time-of-use block.
+
+        :returns: The parsed tail, or None without data or on firmware that
+            doesn't send it.
+        """
+        tou = self._tag("d9", D9_TOU)
+        return None if tou is None else tou.backup

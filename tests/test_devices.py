@@ -32,7 +32,7 @@ from SolixBLE import (
     TemperatureUnit,
 )
 from SolixBLE.constructs import Parameters
-from SolixBLE.devices.c1000g2 import DisplayLanguage
+from SolixBLE.devices.c1000g2 import DisplayLanguage, DisplayPlan, TariffType
 from SolixBLE.devices.solarbank2 import MaxLoadSB2
 from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
 from tests.const import (
@@ -311,6 +311,27 @@ from tests.helpers import MockDevice, install_session_keys
                 "display_mode": LightStatus.LOW,
                 "display_timeout": 30,
                 "display_language": DisplayLanguage.GERMAN,
+                "tou_enabled": False,
+                "active_tariff": TariffType.NONE,
+                "reserve_battery_percentage": 25,
+                "tou_periods": [],
+                "fast_charging_plan_enabled": False,
+                "storm_guard_enabled": True,
+                "fast_charging_plan_window": None,
+                "backup_window": None,
+                "display_plan": DisplayPlan(
+                    screensaver_enabled=False,
+                    clock_theme=1,
+                    clock_24h=True,
+                    day_start=480,
+                    day_end=1380,
+                    weekdays=frozenset(range(7)),
+                    night_enabled=False,
+                    day_brightness=5,
+                    night_brightness=5,
+                    night_start=0,
+                    night_end=0,
+                ),
             },
             id="c1000g2",
         ),
@@ -355,6 +376,8 @@ from tests.helpers import MockDevice, install_session_keys
                 "display_mode": LightStatus.LOW,
                 "display_timeout": 60,
                 "display_language": DisplayLanguage.ENGLISH,
+                "reserve_battery_percentage": 25,
+                "storm_guard_enabled": False,
             },
             id="c1000g2_ac_off",
         ),
