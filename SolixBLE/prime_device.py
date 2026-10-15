@@ -181,6 +181,10 @@ class PrimeDevice(SolixBLEDevice):
 
     _OUTER_HINT: type[Outer] = EncryptedOuter
 
+    #: A Prime's ``0300`` is telemetry only where :attr:`_TELEMETRY_COMMANDS`
+    #: lists ``4300``; the A2345's is a stats push the module sends only to MQTT.
+    _ALWAYS_TELEMETRY_MSGTYPES: frozenset[int] = frozenset()
+
     _UUID_STRING: str = UUID_STRING
 
     #: Seconds between keep-alives for a device that streams ``4303``, or None

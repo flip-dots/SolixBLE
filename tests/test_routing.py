@@ -10,7 +10,16 @@ import pytest
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
-from SolixBLE import C300, C1000G2, PrimeCharger160w, Solarbank2
+from SolixBLE import (
+    C300,
+    C1000,
+    C1000G2,
+    PrimeCharger160w,
+    PrimeCharger250w,
+    PrimeDevice,
+    Solarbank2,
+    SolixBLEDevice,
+)
 from SolixBLE.constructs import Channel, Parameters
 from tests.const import (
     MOCK_BLE_DEVICE,
@@ -42,6 +51,23 @@ C1000G2_C900 = (
     "9a67189c63ca93cd948a6da6578d91d61acc94399fd4b4af041007302ade58ea6112444e6a49"
     "52306a267e7a79706ca3c1c00700537f81f4044d11c36b1be33b721d8d09735c29"
 )
+
+# A real Prime 160W 4300 telemetry frame on 030111, encrypted under its
+# secret (tests/test_devices.py "prime_telemetry_packet")
+PRIME_160W_SECRET = bytes.fromhex(
+    "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
+)
+PRIME_160W_4300 = bytes.fromhex(
+    "ff09da00030111430057e9a883d95e4bc95b5be2baa1c366331abb929258ab5077108dc19725"
+    "4092ef1372bd5a26ef6b51d61dc87082ca8e7985aacad07f64181902c70c0502de2418e366f5"
+    "f700b13049d9b857e95c85c66a32d64fcf31c8eead9e025ed69c1440170cca149e038501a954"
+    "4b1baa044a6a65392e154357e137d917fc834e019012a01b9bd18d5ca7dc22bdb0204b0629b3"
+    "f738f34bafdc26f6bb0781cec80fe547674a6a7a341a018ce3ac81e6eb6b5110d3311db692d1"
+    "74fe363acec5ba606a24b92dcc95a6cdd8fee1843a26694ddd23ac74",
+)
+
+# A minimal 4300 telemetry payload for the non-Prime models
+TELEMETRY_4300 = bytes.fromhex("a10131a2020101")
 
 
 @pytest.mark.asyncio
@@ -363,3 +389,68 @@ async def test_status_only_reply_never_resolves_a_waiter(
     parameters = Parameters.parse(payload)
     assert parameters.status == 0
     assert C1000G2_SERIAL in parameters["a2"].value_legacy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("device_class", "is_telemetry"),
+    [
+        pytest.param(PrimeCharger250w, False, id="a2345_ignores_0300"),
+        pytest.param(PrimeCharger160w, True, id="prime_listing_4300_keeps_it"),
+    ],
+)
+async def test_prime_4300_is_telemetry_only_where_listed(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+    device_class: type[PrimeDevice],
+    is_telemetry: bool,  # noqa: FBT001
+) -> None:
+    """An encrypted ``4300`` is telemetry on a Prime only if its model lists it.
+
+    The frame is the 160W's real telemetry; the A2345's ``0300`` is a stats
+    push that never reaches a BLE client, so its class leaves ``4300`` out.
+    """
+    device = device_class(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_PRIME.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        install_session_keys(device, PRIME_160W_SECRET)
+        await mock_bluetooth.send_data([PRIME_160W_4300])
+
+    assert (device._data is not None) is is_telemetry  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("device_class", [C1000, C1000G2])
+async def test_base_devices_keep_4300_as_telemetry(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+    device_class: type[SolixBLEDevice],
+) -> None:
+    """A non-Prime model reads an encrypted ``4300`` as telemetry, listed or not."""
+    device = device_class(MOCK_BLE_DEVICE)
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        install_session_keys(device, SECRET)
+        frame = build_frame(
+            "03010f",
+            "4300",
+            device._encrypt_payload(TELEMETRY_4300),  # noqa: SLF001
+        )
+        await mock_bluetooth.send_data([frame])
+
+    assert device._data == Parameters.parse(TELEMETRY_4300)  # noqa: SLF001

@@ -43,17 +43,25 @@ A `420b` buys exactly 10 `4303` pushes, about 1 s apart (about 10 s); the payloa
 
 ### `0300` stats push (A2345, A91B2)
 
-Every 10 min, on MQTT `state_info`, only while the cloud link is up:
+MQTT only. The module routes a frame by its `a1` low nibble, and `32` (low nibble 2) goes to `state_info`, never to a BLE client. So SolixBLE doesn't decode it, and `PrimeDevice` doesn't treat message type `0x300` as telemetry (a Prime model that streams on `4300`, such as the A2687, lists it in `_TELEMETRY_COMMANDS`).
+
+It is sent every 10 min, only while the cloud link is up:
 
 ```
 a1 01 32                                   marker (MQTT)
 a2 0e 04 | 0b | bc07 0a00 0000 0a00 0000 0000
            active-port bitmap 0b = ports 1, 2, 4
-           6 × u16 LE port power, 0.1 W: 198.0, 1.0, 0, 1.0, 0, 0
-a3 03 02 d007                              total 200.0 W (0.1 W)
+           6 × u16 LE port power, 0.01 W: 19.80, 0.10, 0, 0.10, 0, 0
+a3 03 02 d007                              total 20.00 W (0.01 W)
 a4 02 01 00                                s8 UTC offset, hours (0 here)
 fe 05 03 00b95569                          RTC epoch
 ```
+
+- Bitmap bit 0 = C1 … bit 3 = C4, bit 4 = A1, bit 5 = A2, set when that port's status is 1 (the same status the `4303` / `4a00` port blocks carry).
+- Per-port power is in 0.01 W, the port blocks' unit. The A2345 computes it from the PD controller's voltage and current and rounds it down to a multiple of 0.1 W, while the port blocks report a separately measured power, so the two can differ slightly. The A91B2 sends its port readings at full 0.01 W resolution.
+- `a3` is the device's own sum of the six, in 0.01 W.
+- `a4` is the same UTC offset as `0312`'s `a3`.
+- The A91B2 sends the same layout and slots; its AC outlets have none.
 
 The module adds a JSON status `{version, battery, rssi, ssid, bssid, ip}` on the same topic.
 
@@ -376,7 +384,7 @@ All payloads follow `a1 01 21`; the reply is the `0x0800` response with `<status
 
 | push | when | payload |
 |---|---|---|
-| `4300` | every 10 min (MQTT `state_info`) | "`0300` stats push", above |
+| `0300` | every 10 min, MQTT `state_info` only, never on BLE | "`0300` stats push", above |
 | `4303` | during a `420b` burst | realtime stream (above) |
 | `4304` | any plug / unplug | `a2 03 <u16 LE port bitmask>` `fe`; sent twice when cloud-bound (`a1 64`, then `44`) |
 | `4305` | Secret Features | `a2` `00` prompt, `01` Feature Expert, `04` / `05` Expression |
@@ -545,8 +553,8 @@ The `0300` stats push has the A2345's layout:
 
 ```
 a1 01 32
-a2 0e 04 | 04 | 0000 0000 c800 0000 0000 0000   bitmap 04 = port 3; port 3 = 20.0 W
-a3 03 02 c800                                    total 20.0 W
+a2 0e 04 | 04 | 0000 0000 c800 0000 0000 0000   bitmap 04 = port 3; port 3 = 2.00 W
+a3 03 02 c800                                    total 2.00 W
 a4 02 01 00                                      UTC offset, hours
 fe 05 03 00b95569                                RTC epoch
 ```

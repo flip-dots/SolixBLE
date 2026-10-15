@@ -592,13 +592,17 @@ and trigger any registered device state update callbacks.
       chan -- "not 0x0f / 0x11" --> drop["logged, dropped"]
       chan -- "0x0f / 0x11" --> encq{"encrypted?"}
       encq -- yes --> dec["_decrypt_payload() -> session.decrypt(), once"]
-      encq -- no --> fut
-      dec --> fut{"future for channel + msgtype?<br/>(_future_key(): the composer<br/>and flags don't matter)"}
+      encq -- no --> bare
+      dec --> bare{"status byte only, on a<br/>telemetry or snapshot msgtype?"}
+      bare -- yes --> bdrop["dropped: a bare status<br/>carries no data"]
+      bare -- no --> fut{"future for channel + msgtype?<br/>(_future_key(): the composer<br/>and flags don't matter)"}
       fut -- yes --> setres["future.set_result(payload)<br/>(_listen_for_packet())"]
       fut -- no --> sess["_process_session(msgtype, payload, encrypted=...)"]
-      sess --> tel{"msgtype 0x300 or in<br/>_TELEMETRY_COMMANDS?"}
+      sess --> tel{"msgtype in _ALWAYS_TELEMETRY_MSGTYPES<br/>(0x300; none on the Primes)<br/>or in _TELEMETRY_COMMANDS?"}
       tel -- yes --> telem["Parameters.parse()<br/>encrypted -> session.on_session_push()<br/>_process_telemetry() -> state callbacks"]
-      tel -- no --> logged["logged"]
+      tel -- no --> snap{"msgtype in _SNAPSHOT_COMMANDS?"}
+      snap -- yes --> snapshot["_process_snapshot() -> state callbacks"]
+      snap -- no --> logged["logged"]
 
 - ``_send_command()`` raises ``ConnectionError`` until the device is negotiated.
 - The library sends every packet whole; only received packets are reassembled.
