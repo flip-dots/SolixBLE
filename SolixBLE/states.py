@@ -4,6 +4,7 @@
 
 """
 
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -111,6 +112,9 @@ class DisplayTimeout(Enum):
 
     #: Never times out.
     S0 = 0
+
+    #: 10 seconds.
+    S10 = 10
 
     #: 20 seconds.
     S20 = 20
@@ -236,3 +240,90 @@ class PortPriority(Enum):
 
     #: Designated to take precedence.
     DESIGNATED = 2
+
+
+class ClockFormat(Enum):
+    """The format of the clock on the display of the device."""
+
+    #: The clock format is unknown.
+    UNKNOWN = -1
+
+    #: 12 hour clock.
+    HOUR_12 = 0
+
+    #: 24 hour clock.
+    HOUR_24 = 1
+
+
+class ClockTheme(Enum):
+    """The clock display theme of a Prime device, valued by its wire index."""
+
+    #: The theme is unknown.
+    UNKNOWN = -1
+
+    #: Built-in theme, labelled Theme 1 in the app.
+    THEME_1 = 0
+
+    #: Built-in theme, labelled Theme 2 in the app.
+    THEME_2 = 1
+
+    #: Built-in theme, labelled Theme 3 in the app.
+    THEME_3 = 2
+
+    #: A theme from Anker's online catalog.
+    CATALOG = 3
+
+    #: An image uploaded in the app.
+    CUSTOM = 5
+
+
+@dataclass(frozen=True)
+class PortSchedule:
+    """A Prime port's daily schedule: an on-time and an off-time.
+
+    Each time has its own switch, which is None when that time has never
+    been set; its hour and minute then hold a stale default, so check the
+    switch before the time. Weekdays run 0 (Monday) to 6 (Sunday), and no
+    weekdays means the time fires once.
+    """
+
+    #: Whether the on-time is armed, or None if it has never been set.
+    on_time_enabled: bool | None
+
+    #: Hour the port turns on.
+    on_time_hour: int
+
+    #: Minute the port turns on.
+    on_time_minute: int
+
+    #: Weekdays the port turns on.
+    on_time_weekdays: frozenset[int]
+
+    #: Whether the off-time is armed, or None if it has never been set.
+    off_time_enabled: bool | None
+
+    #: Hour the port turns off.
+    off_time_hour: int
+
+    #: Minute the port turns off.
+    off_time_minute: int
+
+    #: Weekdays the port turns off.
+    off_time_weekdays: frozenset[int]
+
+
+@dataclass(frozen=True)
+class PortTimer:
+    """A Prime port's countdown auto-off timer.
+
+    A disarmed timer keeps its last duration and remaining seconds.
+    """
+
+    #: Whether the countdown is armed.
+    enabled: bool
+
+    #: Countdown duration in seconds.
+    seconds: int
+
+    #: Seconds left on the countdown.
+    remaining: int

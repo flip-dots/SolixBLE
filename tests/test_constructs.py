@@ -10,6 +10,7 @@ from SolixBLE.constructs import (
     PORT_READING,
     PORT_RECORD,
     SCHEDULE_TRIGGER,
+    SCHEDULE_UNSET,
     TIMER_SETTING,
     DecimalVersion,
     PacketCommand,
@@ -17,9 +18,6 @@ from SolixBLE.constructs import (
     Parameters,
     WeekdayMask,
 )
-
-#: SCHEDULE_TRIGGER's enable byte when a schedule half has never been set.
-SCHEDULE_UNSET = 0xFF
 
 
 @pytest.mark.parametrize(

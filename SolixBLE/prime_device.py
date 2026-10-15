@@ -24,12 +24,13 @@ from SolixBLE.constructs import (
     PORT_READING,
     PORT_RECORD,
     SCHEDULE_TRIGGER,
+    SCHEDULE_UNSET,
     TIMER_COMMAND,
     DecimalVersion,
 )
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.protocols import EncryptedOuter, Outer
-from SolixBLE.states import DisplayTimeout, PortStatus
+from SolixBLE.states import DisplayTimeout, PortSchedule, PortStatus, PortTimer
 from SolixBLE.utilities import _parse_guarded, region
 
 _LOGGER = logging.getLogger(__name__)
@@ -157,6 +158,17 @@ DISPLAY_TIMEOUTS = {
 DISPLAY_TIMEOUT_CODES = {timeout: code for code, timeout in DISPLAY_TIMEOUTS.items()}
 
 
+def _schedule_enabled(enabled: int) -> bool | None:
+    """Return a schedule half's switch, or None if it has never been set.
+
+    :param enabled: The half's :data:`~SolixBLE.constructs.SCHEDULE_TRIGGER`
+        ``enabled`` byte.
+    """
+    if enabled == SCHEDULE_UNSET:
+        return None
+    return bool(enabled)
+
+
 class PrimeDevice(SolixBLEDevice):
     """
     This is a base class based upon SolixBLEDevice which contains logic
@@ -263,6 +275,36 @@ class PrimeDevice(SolixBLEDevice):
             seconds=seconds,
         )
 
+    async def _send_schedule(self, port: int, schedule: PortSchedule) -> None:
+        """Send both times of a port's daily schedule, on-time then off-time.
+
+        :param port: The port's wire index.
+        :param schedule: The schedule to store; a time whose switch is None
+            is sent switched off.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=CMD_PORT_SCHEDULE,
+            parameters=PARAMETERS_SCHEDULE,
+            port=port,
+            time=SCHEDULE_ON_TIME,
+            enabled=schedule.on_time_enabled,
+            hour=schedule.on_time_hour,
+            minute=schedule.on_time_minute,
+            weekdays=schedule.on_time_weekdays,
+        )
+        await self._send_command(
+            cmd=CMD_PORT_SCHEDULE,
+            parameters=PARAMETERS_SCHEDULE,
+            port=port,
+            time=SCHEDULE_OFF_TIME,
+            enabled=schedule.off_time_enabled,
+            hour=schedule.off_time_hour,
+            minute=schedule.off_time_minute,
+            weekdays=schedule.off_time_weekdays,
+        )
+
     async def _send_setting(self, cmd: str, setting: int | bytes) -> None:
         """Send a settings command that carries a single byte.
 
@@ -311,30 +353,41 @@ class PrimeDevice(SolixBLEDevice):
         """
         return self._snapshot_struct(key, PORT_RECORD)
 
-    def _port_schedule(self, key: str) -> Container | None:
+    def _port_schedule(self, key: str) -> PortSchedule | None:
         """Read a port's daily on/off-time schedule from its snapshot record.
 
         :param key: Key of the port's record (e.g ``"aa"``, ``"ab"``, ...).
-        :returns: A container with ``on_time`` and ``off_time``, each a
-            :data:`~SolixBLE.constructs.SCHEDULE_TRIGGER`, or None if no
-            snapshot has carried the record.
+        :returns: The schedule, or None if no snapshot has carried the record.
         """
         record = self._port_record(key)
         if record is None:
             return None
-        return Container(on_time=record.on_time, off_time=record.off_time)
+        on_time, off_time = record.on_time, record.off_time
+        return PortSchedule(
+            on_time_enabled=_schedule_enabled(on_time.enabled),
+            on_time_hour=on_time.hour,
+            on_time_minute=on_time.minute,
+            on_time_weekdays=on_time.weekdays,
+            off_time_enabled=_schedule_enabled(off_time.enabled),
+            off_time_hour=off_time.hour,
+            off_time_minute=off_time.minute,
+            off_time_weekdays=off_time.weekdays,
+        )
 
-    def _port_timer(self, key: str) -> Container | None:
+    def _port_timer(self, key: str) -> PortTimer | None:
         """Read a port's countdown auto-off timer from its snapshot record.
 
         :param key: Key of the port's record (e.g ``"aa"``, ``"ab"``, ...).
-        :returns: The parsed :data:`~SolixBLE.constructs.TIMER_SETTING`, or
-            None if no snapshot has carried the record.
+        :returns: The timer, or None if no snapshot has carried the record.
         """
         record = self._port_record(key)
         if record is None:
             return None
-        return record.timer
+        return PortTimer(
+            enabled=bool(record.timer.enabled),
+            seconds=record.timer.seconds,
+            remaining=record.timer.remaining,
+        )
 
     def _stream_port(self, key: str) -> Container | None:
         """Return a port's realtime reading from the ``4303`` stream.

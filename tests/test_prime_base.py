@@ -6,7 +6,7 @@
 import pytest
 
 from SolixBLE.const import DEFAULT_METADATA_STRING
-from SolixBLE.constructs import FIRMWARE_UPDATE, Packet, Parameters
+from SolixBLE.constructs import DISPLAY, FIRMWARE_UPDATE, Packet, Parameters
 from SolixBLE.prime_device import (
     CMD_CLOCK_FORMAT,
     CMD_DISPLAY_TIMEOUT,
@@ -16,6 +16,7 @@ from SolixBLE.prime_device import (
     SCHEDULE_ON_TIME,
     PrimeDevice,
 )
+from SolixBLE.states import ClockTheme, PortSchedule
 from tests.const import MOCK_BLE_DEVICE, NEGOTIATION_RESPONSES_PRIME
 from tests.helpers import MockDevice
 
@@ -197,3 +198,80 @@ async def test_snapshot_version(snapshot: str, version: str) -> None:
     await device._process_snapshot(Parameters.parse(bytes.fromhex(snapshot)))  # noqa: SLF001
 
     assert device._snapshot_version("a2") == version  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_send_schedule(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A schedule goes out as two 4208s, on-time then off-time.
+
+    The on-time is prime.md's captured 4208 (port 2, enabled, 12:00, once);
+    an off-time never set (None) goes out switched off.
+    """
+    device = PrimeDevice(MOCK_BLE_DEVICE)
+    schedule = PortSchedule(
+        on_time_enabled=True,
+        on_time_hour=12,
+        on_time_minute=0,
+        on_time_weekdays=frozenset(),
+        off_time_enabled=None,
+        off_time_hour=12,
+        off_time_minute=0,
+        off_time_weekdays=frozenset(),
+    )
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_PRIME.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        mock_bluetooth.expect_ordered(None)
+        mock_bluetooth.expect_ordered(None)
+        await device._send_schedule(2, schedule)  # noqa: SLF001
+
+    sent = [Packet.parse(write) for write in mock_bluetooth.writes[-2:]]
+    assert [packet.cmd.hex() for packet in sent] == ["4208", "4208"]
+    assert [
+        device._decrypt_payload(packet.payload_bytes).hex()  # noqa: SLF001
+        for packet in sent
+    ] == [
+        "a10121a2020102a3020101a40503010c0000" + TIMESTAMP_TRAILER,
+        "a10121a2020102a3020100a40503000c0000" + TIMESTAMP_TRAILER,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "on", "theme"),
+    [
+        pytest.param("83", True, 3, id="a2345_clock_on_network_theme"),
+        pytest.param("02", False, 2, id="a2345_clock_off_theme_3"),
+        pytest.param("82", True, 2, id="a91b2_clock_on_theme_3"),
+    ],
+)
+def test_display(value: str, on: bool, theme: int) -> None:  # noqa: FBT001
+    """The display byte reads as the clock's on/off state and theme index."""
+    display = DISPLAY.parse(bytes.fromhex(value))
+    assert (display.on, display.theme) == (on, theme)
+    assert DISPLAY.build(display).hex() == value
+
+
+@pytest.mark.parametrize(
+    ("value", "theme"),
+    [
+        pytest.param("80", ClockTheme.THEME_1, id="theme_1"),
+        pytest.param("81", ClockTheme.THEME_2, id="theme_2"),
+        pytest.param("82", ClockTheme.THEME_3, id="theme_3"),
+        pytest.param("83", ClockTheme.CATALOG, id="catalog"),
+        pytest.param("85", ClockTheme.CUSTOM, id="custom"),
+    ],
+)
+def test_clock_theme(value: str, theme: ClockTheme) -> None:
+    """The display byte's theme index is the ClockTheme value (4205 a2 0x80 | index)."""
+    display = DISPLAY.parse(bytes.fromhex(value))
+    assert ClockTheme(display.theme) is theme
+    assert DISPLAY.build({"on": True, "theme": theme.value}).hex() == value
