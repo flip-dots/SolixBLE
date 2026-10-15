@@ -86,7 +86,7 @@ Request `4200` (`a1 01 21 fe 05 03 <ts>`).
 | `b4` | 1 | knob direction: 0 forward, 1 backward | `420e`; report `4310` |
 | `b5` | 1 | clock: 0 12 h, 1 24 h | `4210` |
 | `b6` | 1 | constant `01` | — |
-| `b7` | 2 | `ff`, then 6 when the USB-PD controllers report PD revision ≥ 4 (device identity supported), else 2; v1.9.0.4 sent `ff 00` | — |
+| `b7` | 2 | `ff`, then 6 when all five ports' USB-PD controllers report protocol revision ≥ 4, else 2. With `bf` it gates only the on-screen name of an identified device; `bd` / `be` populate either way. v1.9.0.4 sent `ff 00` | — |
 | `b8` | 7 | custom charge profile: profile number, auto-exit switch, per-port power limits | `4206 a2=5 a3` |
 | `b9` | 5 | screensaver active hours `[startH, startM, endH, endM, weekmask]` | `4213` |
 | `ba` | 12 | 4 × `{custom USB protocol set, 0, 0}` | — |
@@ -94,7 +94,7 @@ Request `4200` (`a1 01 21 fe 05 03 <ts>`).
 | `bc` | 1 | constant `01` | — |
 | `bd` | 16 | 4 × `{u16 VID, u16 PID}` per USB-C port: the connected device's USB-PD Discover Identity; `{fffa, fffb}` no device, `{0, 0}` identity not read | — |
 | `be` | 16 | 4 × `{u16 class, u16 code}` per USB-C port: the device identity resolved from `bd` (below); `ffff` none | — |
-| `bf` | 1 | device-identification switch | `4223` |
+| `bf` | 1 | device-identification switch (the app's Charging Device Identification): gates the on-screen device name; `bd` / `be` populate either way | `4223` |
 | `fe` | u32 | RTC epoch | — |
 
 The wire order puts `bf` before `bd`.
@@ -133,7 +133,7 @@ b3 02 01 3c                          brightness 60 %
 b4 02 01 00                          knob forward
 b5 02 01 01                          24 h clock
 b6 02 01 01                          constant
-b7 03 02 ff 02                       PD revision < 4 on every port
+b7 03 02 ff 02                       not every controller at PD revision ≥ 4
 b8 08 04 01 00 46 41 2d 2d 18        custom charge profile
 b9 06 04 00 00 00 00 7f              screensaver hours 00:00–00:00, every day
 ba 0d 04 3b 00 00 ×4                 custom USB protocol set 0x3b on each USB-C
@@ -394,7 +394,7 @@ All payloads follow `a1 01 21`; the reply is the `0x0800` response with `<status
 
 Sending a `43xx` back is acked (`4b0a`) but not applied; the setters are the `42xx`. A cloud-bound unit's pushes carry `a1 64` / `44` (the cloud lanes) instead of `31`.
 
-The A2345 also pushes `0312` on `state_info`, every 60 s while the holiday switch is on, the cloud link is up and a country is set: `a1 01 32 a2 03 04 <2 ASCII country> a3 05 03 <int32 LE UTC offset, hours> fe`.
+The A2345 also pushes `0312`, MQTT only: its `a1 32` routes to `state_info`, never to a BLE client, so SolixBLE doesn't decode it. It comes every 60 s while the holiday switch is on, the cloud link is up and a country is set: `a1 01 32 a2 03 04 <2 ASCII country> a3 05 03 <int32 LE UTC offset, hours> fe`.
 
 **Markers.** A reply carries `0x30 |` the request's low nibble: BLE `21` → `31`, MQTT `22` → `34` (the snapshot answers MQTT with `64`). Pushes pick theirs from the link state: `31` with only BLE up; with the cloud link up `0300` / `0312` carry `32` (state topic), `4303` / `4306` `34`, `4304` is sent twice (`64`, then `44`), and the other pushes `64` (`param_info`). `0300`, `0306` and `0312` go out only with the cloud link up.
 
