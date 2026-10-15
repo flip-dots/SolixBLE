@@ -610,3 +610,64 @@ A Prime device's per-port realtime reading (the ``4303`` stream): status,
 then voltage (mV), current (mA) and power (centiwatts). Shared by the USB-C
 and USB-A ports on both the A2345 and the A91B2.
 """
+
+USB_PD_IDENTITY = Struct(
+    "vid" / Int16ul,
+    "pid" / Int16ul,
+)
+"""
+The USB vendor and product ID a connected device reports over USB-PD.
+``{0xfffa, 0xfffb}`` when no device is connected.
+"""
+
+USB_PD_IDENTITIES = Struct(
+    "usb_c1" / USB_PD_IDENTITY,
+    "usb_c2" / USB_PD_IDENTITY,
+    "usb_c3" / USB_PD_IDENTITY,
+    "usb_c4" / USB_PD_IDENTITY,
+)
+"""
+The USB-PD identity on each USB-C port: the A2345 snapshot's ``bd``, and
+the ``0303`` stream's ``a8``.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        ids = USB_PD_IDENTITIES.parse(bd_value)
+        print(f"{ids.usb_c1.vid:04x}:{ids.usb_c1.pid:04x}")  # 05ac:7311
+
+"""
+
+#: :data:`DEVICE_IDENTITY` field value for a device class or code the
+#: charger couldn't identify.
+IDENTITY_NONE = 0xFFFF
+
+DEVICE_IDENTITY = Struct(
+    "device_class" / Int16ul,
+    "code" / Int16ul,
+)
+"""
+The charger's identification of a connected device: its vendor class and
+model code (see :mod:`SolixBLE.usb_pd_identity`), each
+:data:`IDENTITY_NONE` when unidentified.
+"""
+
+DEVICE_IDENTITIES = Struct(
+    "usb_c1" / DEVICE_IDENTITY,
+    "usb_c2" / DEVICE_IDENTITY,
+    "usb_c3" / DEVICE_IDENTITY,
+    "usb_c4" / DEVICE_IDENTITY,
+)
+"""
+The device identified on each USB-C port: the A2345 snapshot's ``be``, and
+the ``0303`` stream's ``a9``.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        ids = DEVICE_IDENTITIES.parse(be_value)
+        name = device_name(ids.usb_c2.device_class, ids.usb_c2.code)
+
+"""
