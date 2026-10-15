@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 
 from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Container,
     FlagsEnum,
     Int8ub,
     Int32ul,
@@ -21,8 +22,16 @@ from SolixBLE.const import (
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
 )
-from SolixBLE.constructs import DISPLAY, FIRMWARE_UPDATE, WeekdayMask
+from SolixBLE.constructs import (
+    DEVICE_IDENTITIES,
+    DISPLAY,
+    FIRMWARE_UPDATE,
+    IDENTITY_NONE,
+    USB_PD_IDENTITIES,
+    WeekdayMask,
+)
 from SolixBLE.prime_device import (
+    CMD_CLOCK_FORMAT,
     CMD_DISPLAY_BRIGHTNESS,
     CMD_DISPLAY_TIMEOUT,
     DISPLAY_TIMEOUT_CODES,
@@ -30,7 +39,16 @@ from SolixBLE.prime_device import (
     KEEP_ALIVE_INTERVAL,
     PrimeDevice,
 )
-from SolixBLE.states import ClockTheme, DisplayTimeout, PortPriority, PortStatus
+from SolixBLE.states import (
+    ClockFormat,
+    ClockTheme,
+    DisplayTimeout,
+    PortPriority,
+    PortSchedule,
+    PortStatus,
+    PortTimer,
+)
+from SolixBLE.usb_pd_identity import device_name, vendor_name
 
 #: The wire index the port commands take for each port: USB C1-C4 are 0-3,
 #: and 4 switches both USB A outlets together.
@@ -41,6 +59,10 @@ PORT_INDEX = {
     "usb_c4": 3,
     "usb_a1_a2": 4,
 }
+
+#: A USB-PD vendor ID that means no device (``{0xfffa, 0xfffb}``), or one that
+#: answered without device identity (``{0, 0}``).
+PD_VID_NONE = (0xFFFA, 0x0000)
 
 CMD_DISPLAY = 0x205
 CMD_CHARGING_MODE = 0x206
@@ -546,6 +568,10 @@ class PrimeCharger250w(PrimeDevice):
     def compatibility_mode_enabled(self) -> bool | None:
         """Whether the charger's compatibility mode is on.
 
+        .. note::
+           This is the app's "Maximum Compatibility", which can speed up
+           charging of some drones' battery compartments.
+
         :returns: True if on, False if off, or default bool value before any
             snapshot.
         """
@@ -560,6 +586,10 @@ class PrimeCharger250w(PrimeDevice):
         """Whether the charger shows the identified device's name on its screen.
 
         This is the app's Charging Device Identification.
+
+        .. note::
+           Device identification works only while compatibility mode
+           (:attr:`compatibility_mode_enabled`) is off.
 
         :returns: True if on, False if off, or default bool value before any
             snapshot.
@@ -621,6 +651,265 @@ class PrimeCharger250w(PrimeDevice):
             return DEFAULT_METADATA_INT
 
         return int(update.progress)
+
+    @property
+    def clock_format(self) -> ClockFormat:
+        """Format of the clock on the display.
+
+        :returns: Clock format or unknown if no snapshot has been received.
+        """
+        try:
+            return ClockFormat(self._snapshot_int("b5"))
+        except ValueError:
+            return ClockFormat.UNKNOWN
+
+    @property
+    def usb_c1_schedule(self) -> PortSchedule | None:
+        """USB C1 Port daily on/off schedule.
+
+        :returns: Schedule of the USB C1 port or None before any snapshot.
+        """
+        return self._port_schedule("aa")
+
+    @property
+    def usb_c1_timer(self) -> PortTimer | None:
+        """USB C1 Port auto-off timer.
+
+        :returns: Timer of the USB C1 port or None before any snapshot.
+        """
+        return self._port_timer("aa")
+
+    @property
+    def usb_c2_schedule(self) -> PortSchedule | None:
+        """USB C2 Port daily on/off schedule.
+
+        :returns: Schedule of the USB C2 port or None before any snapshot.
+        """
+        return self._port_schedule("ab")
+
+    @property
+    def usb_c2_timer(self) -> PortTimer | None:
+        """USB C2 Port auto-off timer.
+
+        :returns: Timer of the USB C2 port or None before any snapshot.
+        """
+        return self._port_timer("ab")
+
+    @property
+    def usb_c3_schedule(self) -> PortSchedule | None:
+        """USB C3 Port daily on/off schedule.
+
+        :returns: Schedule of the USB C3 port or None before any snapshot.
+        """
+        return self._port_schedule("ac")
+
+    @property
+    def usb_c3_timer(self) -> PortTimer | None:
+        """USB C3 Port auto-off timer.
+
+        :returns: Timer of the USB C3 port or None before any snapshot.
+        """
+        return self._port_timer("ac")
+
+    @property
+    def usb_c4_schedule(self) -> PortSchedule | None:
+        """USB C4 Port daily on/off schedule.
+
+        :returns: Schedule of the USB C4 port or None before any snapshot.
+        """
+        return self._port_schedule("ad")
+
+    @property
+    def usb_c4_timer(self) -> PortTimer | None:
+        """USB C4 Port auto-off timer.
+
+        :returns: Timer of the USB C4 port or None before any snapshot.
+        """
+        return self._port_timer("ad")
+
+    @property
+    def usb_a1_a2_schedule(self) -> PortSchedule | None:
+        """USB A1 and A2 Port daily on/off schedule.
+
+        :returns: Schedule of USB A1 and A2 or None before any snapshot.
+        """
+        return self._port_schedule("ae")
+
+    @property
+    def usb_a1_a2_timer(self) -> PortTimer | None:
+        """USB A1 and A2 Port auto-off timer.
+
+        :returns: Timer of USB A1 and A2 or None before any snapshot.
+        """
+        return self._port_timer("ae")
+
+    def _usb_pd_identity(self, port: str) -> Container | None:
+        """Read the USB-PD vendor and product ID a USB C port's device reports.
+
+        :param port: The port's field name (``"usb_c1"`` - ``"usb_c4"``).
+        :returns: The identity, or None if no device answered with one.
+        """
+        identities = self._stream_or_snapshot("a8", "bd", USB_PD_IDENTITIES)
+        if identities is None or identities[port].vid in PD_VID_NONE:
+            return None
+
+        return identities[port]
+
+    def _device_name(self, port: str) -> str | None:
+        """Name the device the charger identified on a USB C port.
+
+        :param port: The port's field name (``"usb_c1"`` - ``"usb_c4"``).
+        :returns: The firmware's name for the device, else its vendor's, or
+            None if the charger identified neither.
+        """
+        identities = self._stream_or_snapshot("a9", "be", DEVICE_IDENTITIES)
+        if identities is None or identities[port].device_class == IDENTITY_NONE:
+            return None
+
+        identity = identities[port]
+        return device_name(identity.device_class, identity.code) or vendor_name(
+            identity.device_class,
+        )
+
+    @property
+    def usb_c1_vendor_id(self) -> int:
+        """USB vendor ID of the device on USB C1, from USB-PD.
+
+        :returns: The vendor ID or default int value if none was reported.
+        """
+        identity = self._usb_pd_identity("usb_c1")
+        return DEFAULT_METADATA_INT if identity is None else int(identity.vid)
+
+    @property
+    def usb_c1_product_id(self) -> int:
+        """USB product ID of the device on USB C1, from USB-PD.
+
+        :returns: The product ID or default int value if none was reported.
+        """
+        identity = self._usb_pd_identity("usb_c1")
+        return DEFAULT_METADATA_INT if identity is None else int(identity.pid)
+
+    @property
+    def usb_c1_device(self) -> str | None:
+        """Device the charger identified on USB C1.
+
+        .. note::
+           :collapsible: closed
+
+           The charger names the models in its own table (iPhones, iPads,
+           MacBooks, Lenovo laptops); any other device it recognises is named
+           by its vendor. The name is the firmware's model name; the app may
+           show the series instead. The device identification setting doesn't
+           affect it.
+
+        :returns: The device's name, or None if the charger identified none.
+        """
+        return self._device_name("usb_c1")
+
+    @property
+    def usb_c2_vendor_id(self) -> int:
+        """USB vendor ID of the device on USB C2, from USB-PD.
+
+        :returns: The vendor ID or default int value if none was reported.
+        """
+        identity = self._usb_pd_identity("usb_c2")
+        return DEFAULT_METADATA_INT if identity is None else int(identity.vid)
+
+    @property
+    def usb_c2_product_id(self) -> int:
+        """USB product ID of the device on USB C2, from USB-PD.
+
+        :returns: The product ID or default int value if none was reported.
+        """
+        identity = self._usb_pd_identity("usb_c2")
+        return DEFAULT_METADATA_INT if identity is None else int(identity.pid)
+
+    @property
+    def usb_c2_device(self) -> str | None:
+        """Device the charger identified on USB C2.
+
+        .. note::
+           :collapsible: closed
+
+           The charger names the models in its own table (iPhones, iPads,
+           MacBooks, Lenovo laptops); any other device it recognises is named
+           by its vendor. The name is the firmware's model name; the app may
+           show the series instead. The device identification setting doesn't
+           affect it.
+
+        :returns: The device's name, or None if the charger identified none.
+        """
+        return self._device_name("usb_c2")
+
+    @property
+    def usb_c3_vendor_id(self) -> int:
+        """USB vendor ID of the device on USB C3, from USB-PD.
+
+        :returns: The vendor ID or default int value if none was reported.
+        """
+        identity = self._usb_pd_identity("usb_c3")
+        return DEFAULT_METADATA_INT if identity is None else int(identity.vid)
+
+    @property
+    def usb_c3_product_id(self) -> int:
+        """USB product ID of the device on USB C3, from USB-PD.
+
+        :returns: The product ID or default int value if none was reported.
+        """
+        identity = self._usb_pd_identity("usb_c3")
+        return DEFAULT_METADATA_INT if identity is None else int(identity.pid)
+
+    @property
+    def usb_c3_device(self) -> str | None:
+        """Device the charger identified on USB C3.
+
+        .. note::
+           :collapsible: closed
+
+           The charger names the models in its own table (iPhones, iPads,
+           MacBooks, Lenovo laptops); any other device it recognises is named
+           by its vendor. The name is the firmware's model name; the app may
+           show the series instead. The device identification setting doesn't
+           affect it.
+
+        :returns: The device's name, or None if the charger identified none.
+        """
+        return self._device_name("usb_c3")
+
+    @property
+    def usb_c4_vendor_id(self) -> int:
+        """USB vendor ID of the device on USB C4, from USB-PD.
+
+        :returns: The vendor ID or default int value if none was reported.
+        """
+        identity = self._usb_pd_identity("usb_c4")
+        return DEFAULT_METADATA_INT if identity is None else int(identity.vid)
+
+    @property
+    def usb_c4_product_id(self) -> int:
+        """USB product ID of the device on USB C4, from USB-PD.
+
+        :returns: The product ID or default int value if none was reported.
+        """
+        identity = self._usb_pd_identity("usb_c4")
+        return DEFAULT_METADATA_INT if identity is None else int(identity.pid)
+
+    @property
+    def usb_c4_device(self) -> str | None:
+        """Device the charger identified on USB C4.
+
+        .. note::
+           :collapsible: closed
+
+           The charger names the models in its own table (iPhones, iPads,
+           MacBooks, Lenovo laptops); any other device it recognises is named
+           by its vendor. The name is the firmware's model name; the app may
+           show the series instead. The device identification setting doesn't
+           affect it.
+
+        :returns: The device's name, or None if the charger identified none.
+        """
+        return self._device_name("usb_c4")
 
     def _port_priority(self, key: str) -> PortPriority:
         """Read a USB C port's priority from its snapshot record.
@@ -861,6 +1150,51 @@ class PrimeCharger250w(PrimeDevice):
         """
         await self._set_port_timer(PORT_INDEX["usb_a1_a2"], time)
 
+    async def set_schedule_usb_c1(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB C1.
+
+        :param schedule: The on-time and off-time to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(PORT_INDEX["usb_c1"], schedule)
+
+    async def set_schedule_usb_c2(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB C2.
+
+        :param schedule: The on-time and off-time to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(PORT_INDEX["usb_c2"], schedule)
+
+    async def set_schedule_usb_c3(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB C3.
+
+        :param schedule: The on-time and off-time to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(PORT_INDEX["usb_c3"], schedule)
+
+    async def set_schedule_usb_c4(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB C4.
+
+        :param schedule: The on-time and off-time to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(PORT_INDEX["usb_c4"], schedule)
+
+    async def set_schedule_usb_a1_a2(self, schedule: PortSchedule) -> None:
+        """Set the daily on/off schedule for USB A1 and A2.
+
+        :param schedule: The on-time and off-time to store.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_schedule(PORT_INDEX["usb_a1_a2"], schedule)
+
     async def set_display_timeout(self, timeout: DisplayTimeout) -> None:  # noqa: ASYNC109  # shared device API
         """Set the display timeout.
 
@@ -960,6 +1294,19 @@ class PrimeCharger250w(PrimeDevice):
             raise ValueError(msg)
         await self._send_setting(CMD_DISPLAY_BRIGHTNESS, brightness)
 
+    async def set_clock_format(self, clock_format: ClockFormat) -> None:
+        """Set the format of the clock on the display.
+
+        :param clock_format: The clock format.
+        :raises ValueError: If the format is unknown.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        if clock_format is ClockFormat.UNKNOWN:
+            msg = "Cannot set an unknown clock format"
+            raise ValueError(msg)
+        await self._send_setting(CMD_CLOCK_FORMAT, clock_format.value)
+
     async def set_charging_mode(self, mode: ChargingMode) -> None:
         """Set how the charger shares its output between its ports.
 
@@ -982,6 +1329,9 @@ class PrimeCharger250w(PrimeDevice):
 
         Designating ports switches the charger to the Port Priority charging
         mode.
+
+        .. note::
+           This is the app's "Port Priority Allocation" charging mode.
 
         :param ports: Up to two USB C port numbers (1-4), or none.
         :raises ValueError: If a port isn't a USB C port or more than two are
@@ -1013,6 +1363,9 @@ class PrimeCharger250w(PrimeDevice):
     async def turn_compatibility_mode_on(self) -> None:
         """Turn the charger's compatibility mode on.
 
+        .. note::
+           Device identification stops working while compatibility mode is on.
+
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
@@ -1028,6 +1381,9 @@ class PrimeCharger250w(PrimeDevice):
 
     async def turn_device_identification_on(self) -> None:
         """Turn on identifying the devices plugged into the charger.
+
+        .. note::
+           Device identification works only while compatibility mode is off.
 
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.

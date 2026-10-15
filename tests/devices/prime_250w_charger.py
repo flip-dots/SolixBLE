@@ -12,7 +12,7 @@ from SolixBLE.devices.prime_charger_250w import (
     PrimeCharger250w,
     ScreensaverWindow,
 )
-from SolixBLE.states import ClockTheme, DisplayTimeout
+from SolixBLE.states import ClockFormat, ClockTheme, DisplayTimeout
 from tests.const import NEGOTIATION_RESPONSES_PRIME
 
 ########################
@@ -229,6 +229,20 @@ PRIME_CHARGER_250W_TEST_COMMANDS = [
         [101],
         ValueError,
         id="prime_charger_250w_display_brightness_invalid",
+    ),
+    pytest.param(
+        PrimeCharger250w,
+        "set_clock_format",
+        [ClockFormat.HOUR_24],
+        [("4210", "a10121a2020101")],
+        id="prime_charger_250w_clock_format",
+    ),
+    pytest.param(
+        PrimeCharger250w,
+        "set_clock_format",
+        [ClockFormat.UNKNOWN],
+        ValueError,
+        id="prime_charger_250w_clock_format_unknown",
     ),
     pytest.param(
         PrimeCharger250w,

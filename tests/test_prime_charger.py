@@ -18,7 +18,13 @@ from SolixBLE.devices.prime_charger_250w import (
     ScreensaverWindow,
 )
 from SolixBLE.protocols import NegotiatedSession
-from SolixBLE.states import ClockTheme, PortPriority
+from SolixBLE.states import (
+    ClockFormat,
+    ClockTheme,
+    PortPriority,
+    PortSchedule,
+    PortTimer,
+)
 from tests.const import MOCK_BLE_DEVICE, NEGOTIATION_RESPONSES_PRIME
 from tests.helpers import MockDevice
 
@@ -80,6 +86,52 @@ UPDATE_PROGRESS = 42
 #: Firmware that predates the PD revision check (v1.9.0.4) reports ff 00.
 SNAPSHOT_PD_UNCHECKED = "b70302ff00"
 
+#: A ca00 snapshot carrying only the USB C1 record: the port turns on at 08:00
+#: and off at 22:00 every day, and the timer is armed for 3600 s with 1800 s
+#: left.
+SNAPSHOT_C1 = "a10131aa1404010108007f0116007f01100e00000807000000fe05033d7ab569"
+EVERY_DAY = frozenset(range(7))
+C1_SCHEDULE = PortSchedule(
+    on_time_enabled=True,
+    on_time_hour=8,
+    on_time_minute=0,
+    on_time_weekdays=EVERY_DAY,
+    off_time_enabled=True,
+    off_time_hour=22,
+    off_time_minute=0,
+    off_time_weekdays=EVERY_DAY,
+)
+C1_TIMER = PortTimer(enabled=True, seconds=3600, remaining=1800)
+
+#: An idle port's record in SNAPSHOT_FULL: both times never set (12:00 kept
+#: behind them) and the timer off, holding its 600 s default.
+IDLE_SCHEDULE = PortSchedule(None, 12, 0, frozenset(), None, 12, 0, frozenset())
+IDLE_TIMER = PortTimer(enabled=False, seconds=600, remaining=0)
+
+#: SNAPSHOT_FULL's USB-PD identities: C1 and C2 report Apple's vendor ID, C3
+#: has no device and C4 answered without an identity. The charger names C2's
+#: model and only C1's vendor.
+FULL_IDENTITIES = [
+    (0x05AC, 0x7311, "Apple"),
+    (0x05AC, 0x7117, "iPad Pro M4"),
+    (DEFAULT_METADATA_INT, DEFAULT_METADATA_INT, None),
+    (DEFAULT_METADATA_INT, DEFAULT_METADATA_INT, None),
+]
+
+#: A 4303 stream frame whose a8 / a9 carry a Samsung device on C2 and an Anker
+#: power bank on C3.
+STREAM_IDENTITIES = (
+    "a10131a2080401881329016400a30804014024d8061c06a4080401004d9d08ee10a5080401"
+    "084d1809b311a6080401801364003100a70804018013b7003100a8110400000000e8040000"
+    "1a290b1100000000a91104ffffffff0200ffff0a000200fffffffffe05033d7ab569"
+)
+STREAM_IDENTITY_LIST = [
+    (DEFAULT_METADATA_INT, DEFAULT_METADATA_INT, None),
+    (0x04E8, 0x0000, "Samsung"),
+    (0x291A, 0x110B, "Power Bank 20K"),
+    (DEFAULT_METADATA_INT, DEFAULT_METADATA_INT, None),
+]
+
 
 @pytest.mark.asyncio
 async def test_snapshot_fills_snapshot_not_telemetry() -> None:
@@ -123,6 +175,23 @@ async def test_snapshot_runs_state_changed_callbacks() -> None:
     )
 
     assert seen == [True]
+
+
+@pytest.mark.asyncio
+async def test_reset_clears_snapshot_with_data() -> None:
+    """The snapshot survives a reset that keeps data, not one that drops it."""
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    await device._process_session(  # noqa: SLF001
+        msgtype=0xA00,
+        payload=bytes.fromhex(SNAPSHOT_VERSION),
+        encrypted=False,
+    )
+
+    device._reset_session(reset_data=False)  # noqa: SLF001
+    assert device.software_version == "2.1.1.6"
+
+    device._reset_session()  # noqa: SLF001
+    assert device.software_version == DEFAULT_METADATA_STRING
 
 
 @pytest.mark.asyncio
@@ -407,6 +476,114 @@ async def test_snapshot_decodes_update_and_pd_gate() -> None:
     assert device.firmware_updating is True
     assert device.firmware_update_progress == UPDATE_PROGRESS
     assert device.device_name_display_supported is True
+
+
+@pytest.mark.asyncio
+async def test_snapshot_decodes_schedule_and_timer() -> None:
+    """A port record carries its daily schedule and its countdown timer."""
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    assert device.usb_c1_schedule is None
+    assert device.usb_c1_timer is None
+
+    await device._process_session(  # noqa: SLF001
+        msgtype=0xA00,
+        payload=bytes.fromhex(SNAPSHOT_C1),
+        encrypted=False,
+    )
+
+    assert device.usb_c1_schedule == C1_SCHEDULE
+    assert device.usb_c1_timer == C1_TIMER
+    assert device.usb_c2_schedule is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_decodes_idle_ports_and_clock() -> None:
+    """Idle port records read as never-set schedules; b5 is the clock format."""
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    assert device.clock_format == ClockFormat.UNKNOWN
+
+    await device._process_session(  # noqa: SLF001
+        msgtype=0xA00,
+        payload=bytes.fromhex(SNAPSHOT_FULL),
+        encrypted=False,
+    )
+
+    assert device.clock_format == ClockFormat.HOUR_12
+    assert device.usb_a1_a2_schedule == IDLE_SCHEDULE
+    assert device.usb_a1_a2_timer == IDLE_TIMER
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time")
+async def test_set_schedule_sends_on_time_then_off_time() -> None:
+    """Setting a schedule sends the on-time, then the off-time."""
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._client = mock.AsyncMock()  # noqa: SLF001
+    schedule = PortSchedule(
+        on_time_enabled=True,
+        on_time_hour=1,
+        on_time_minute=0,
+        on_time_weekdays=EVERY_DAY,
+        off_time_enabled=None,
+        off_time_hour=23,
+        off_time_minute=0,
+        off_time_weekdays=frozenset({2}),
+    )
+    with (
+        mock.patch.object(device, "_encrypt_payload", side_effect=lambda x: x),
+        mock.patch("SolixBLE.constructs.Packet.build") as build,
+        mock.patch("SolixBLE.SolixBLEDevice.negotiated", return_value=True),
+    ):
+        await device.set_schedule_usb_c2(schedule)
+
+    timestamp = f"fe0503{device._timestamp().hex()}"  # noqa: SLF001
+    sent = [call.args[0] for call in build.call_args_list]
+    assert [block["msgtype"] for block in sent] == [0x208, 0x208]
+    assert [block["payload_bytes"].hex() for block in sent] == [
+        f"a10121a2020101a3020101a405030101007f{timestamp}",
+        f"a10121a2020101a3020100a4050300170004{timestamp}",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_decodes_usb_pd_identity() -> None:
+    """Bd carries each port's USB-PD vendor and product, be what it names."""
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    await device._process_session(  # noqa: SLF001
+        msgtype=0xA00,
+        payload=bytes.fromhex(SNAPSHOT_FULL),
+        encrypted=False,
+    )
+
+    assert [
+        (
+            getattr(device, f"usb_c{port}_vendor_id"),
+            getattr(device, f"usb_c{port}_product_id"),
+            getattr(device, f"usb_c{port}_device"),
+        )
+        for port in range(1, 5)
+    ] == FULL_IDENTITIES
+
+
+@pytest.mark.asyncio
+async def test_stream_identity_overrides_snapshot() -> None:
+    """The stream's a8 / a9 win over the snapshot's bd / be once they arrive."""
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    for msgtype, payload in ((0xA00, SNAPSHOT_FULL), (0x303, STREAM_IDENTITIES)):
+        await device._process_session(  # noqa: SLF001
+            msgtype=msgtype,
+            payload=bytes.fromhex(payload),
+            encrypted=False,
+        )
+
+    assert [
+        (
+            getattr(device, f"usb_c{port}_vendor_id"),
+            getattr(device, f"usb_c{port}_product_id"),
+            getattr(device, f"usb_c{port}_device"),
+        )
+        for port in range(1, 5)
+    ] == STREAM_IDENTITY_LIST
 
 
 @pytest.mark.asyncio
