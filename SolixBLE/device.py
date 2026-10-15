@@ -863,6 +863,17 @@ class SolixBLEDevice:
                 payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Plain-text payload: {payload.hex()}")
 
+            # A bare status on a telemetry or snapshot message (e.g the 01 for
+            # a frame the device couldn't decrypt) carries no data for a
+            # waiter or the stored state
+            data_msgtypes = self._telemetry_msgtypes() | self._snapshot_msgtypes()
+            if (
+                packet.msgtype in data_msgtypes | {TELEMETRY_MSGTYPE}
+                and not Parameters.parse(payload)
+            ):
+                _LOGGER.debug(f"Ignoring status-only {packet.msgtype:03x}: {payload.hex()}")
+                return None
+
             # If the packet has a future registered then we just trigger that
             # future instead of processing it here, matched on the channel and
             # message type whatever the composer and flags
@@ -872,7 +883,8 @@ class SolixBLEDevice:
                     "Packet has future(s) registered. Triggering future(s) and ignoring packet..."
                 )
                 for future in self._packet_futures[key]:
-                    future.set_result(payload)
+                    if not future.done():
+                        future.set_result(payload)
                 return None
 
             return await self._process_session(

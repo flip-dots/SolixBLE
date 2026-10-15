@@ -10,8 +10,8 @@ import pytest
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
-from SolixBLE import C300, PrimeCharger160w, Solarbank2
-from SolixBLE.constructs import Channel
+from SolixBLE import C300, C1000G2, PrimeCharger160w, Solarbank2
+from SolixBLE.constructs import Channel, Parameters
 from tests.const import (
     MOCK_BLE_DEVICE,
     NEGOTIATION_RESPONSES_PRIME,
@@ -24,6 +24,24 @@ from tests.helpers import MockDevice, build_frame, install_session_keys
 SECRET = bytes(range(32))
 STATUS_CONFIRM = 0x09
 CONFIRMATION_WINDOW = 30
+
+# A 4900 01 on 03000f and a c900 on 03010f carrying the "c1000g2" telemetry
+# from tests/test_devices.py, both under the C1000 telemetry secret
+C1000G2_SECRET = bytes.fromhex(
+    "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
+)
+C1000G2_SERIAL = b"APCDK961F37400290"
+C1000G2_STATUS_ONLY = "ff091a0003000f4900a451c312c33d39d6d8aa4c1e080c2331aa"
+C1000G2_C900 = (
+    "ff092b0103010fc90011224e04412b2fafda5bef3c3e2b9f8b6e54f1a26604abd9767926af3e"
+    "3916b42c4c1123e96abb2e8b8de6c51194a732957b2a20914d578c15b5474dca0af68aa31ecf"
+    "1407b6d598a1e0f392388b09c3f33beff099ab21db546fb84888da68b07ba1feb33d613ac06f"
+    "323d2a078c76683d09a57e18276cba0ef0cc7b04327353a05ca10a0a0acf40257c3531ffbe00"
+    "444cb5887fc6629c541bbf071c50e70b78d5e7a7d4018faee05c941ee95c73afc832b038df61"
+    "d02aa25b1cff15bd031289a8ffcc701a779c15d42d97a4c66f0a85ae90fd16e0fa806fa2470e"
+    "9a67189c63ca93cd948a6da6578d91d61acc94399fd4b4af041007302ade58ea6112444e6a49"
+    "52306a267e7a79706ca3c1c00700537f81f4044d11c36b1be33b721d8d09735c29"
+)
 
 
 @pytest.mark.asyncio
@@ -284,3 +302,64 @@ async def test_snapshot_messages_are_stored_separately_from_telemetry() -> None:
     assert device._snapshot is not None  # noqa: SLF001
     assert device._data is None  # noqa: SLF001
     assert device._snapshot["b0"].value_legacy[1:].hex() == "01"  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_status_only_reply_keeps_snapshot(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A bare status reply on a snapshot command leaves the stored snapshot."""
+    device = C300(MOCK_BLE_DEVICE)
+    device._SNAPSHOT_COMMANDS = ("4a00",)  # noqa: SLF001
+    frames = [
+        build_frame("03010f", "0a00", bytes.fromhex(payload))
+        for payload in ("b0020101", "01")
+    ]
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        await mock_bluetooth.send_data(frames)
+
+    assert device._snapshot is not None  # noqa: SLF001
+    assert device._snapshot["b0"].value_legacy[1:].hex() == "01"  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_status_only_reply_never_resolves_a_waiter(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A status update in flight gets the c900 after a 4900 01, not the 01."""
+    device = C1000G2(MOCK_BLE_DEVICE)
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        install_session_keys(device, C1000G2_SECRET)
+
+        # Listening the way get_status_update() does for its reply
+        reply = asyncio.create_task(
+            device._listen_for_packet(Channel.SESSION, 0x900),  # noqa: SLF001
+        )
+        await asyncio.sleep(0)
+        await mock_bluetooth.send_data(
+            [bytes.fromhex(C1000G2_STATUS_ONLY), bytes.fromhex(C1000G2_C900)],
+        )
+        payload = await reply
+
+    assert payload is not None
+    parameters = Parameters.parse(payload)
+    assert parameters.status == 0
+    assert C1000G2_SERIAL in parameters["a2"].value_legacy
