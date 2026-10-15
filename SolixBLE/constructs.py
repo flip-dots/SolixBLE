@@ -671,3 +671,37 @@ Usage:
         name = device_name(ids.usb_c2.device_class, ids.usb_c2.code)
 
 """
+
+SummaryPayload = Struct(
+
+    # Routing of the post (e.g ``a1 01 31``)
+    "echo" / Parameter,
+
+    # The protobuf, as parameter a2 with a 2 byte length that counts its
+    # 04 type byte and the protobuf
+    Const(b"\xa2"),
+    "length" / Int16ul,
+    Const(b"\x04"),
+    "protobuf" / Bytes(this.length - 1),
+
+    # The schema the protobuf follows, a null terminated name
+    "schema" / Optional(Parameter),
+)
+"""
+Decoded payload of a protobuf device-summary post (e.g the C2000 Gen 2's
+``c490``): a protobuf encoded against a named schema, wrapped in parameters.
+Its ``a2`` is longer than one length byte can describe, so it has a 2 byte
+length.
+
+Structure: <a1 Parameter> <a2 1B> <Length 2B> <Type 1B> <Protobuf nB> <a3 Parameter>.
+
+Usage:
+
+    .. code-block:: python
+       :linenos:
+
+        summary = SummaryPayload.parse(plaintext_payload)
+        schema = bytes(summary.schema.value).rstrip(b"\\x00").decode("ascii")
+        fields = walk_protobuf(summary.protobuf)
+
+"""
