@@ -52,6 +52,48 @@ C1000G2_TEST_COMMANDS = [
         [("4102", "a10121a2020100")],
         id="c1000g2_dc_off",
     ),
+    pytest.param(
+        C1000G2,
+        "set_max_battery_percentage",
+        [100],
+        [("4103", "a10121aa020164")],
+        id="c1000g2_max_battery",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_min_battery_percentage",
+        [10],
+        [("4103", "a10121ab02010a")],
+        id="c1000g2_min_battery",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_min_battery_percentage",
+        [-1],
+        ValueError,
+        id="c1000g2_min_battery_out_of_range",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_ac_charging_power",
+        [1200],
+        [("4101", "a10121a40302b004")],
+        id="c1000g2_ac_charging_power",
+    ),
+    pytest.param(
+        C1000G2,
+        "turn_ac_fast_charge_on",
+        [],
+        [("4101", "a10121a7020101")],
+        id="c1000g2_fast_charge_on",
+    ),
+    pytest.param(
+        C1000G2,
+        "turn_ac_fast_charge_off",
+        [],
+        [("4101", "a10121a7020100")],
+        id="c1000g2_fast_charge_off",
+    ),
 ]
 
 

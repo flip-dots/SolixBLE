@@ -402,6 +402,68 @@ PARAMETERS_OFF = {
     },
 }
 
+#: The AC group takes its charging power limit at a4 as a u16 of watts.
+PARAMETERS_AC_CHARGING_POWER = {
+    "a1": {
+        "value": "21",
+    },
+    "a4": {
+        "type": 2,
+        # _to_bytes passes keyword arguments by the lambda's parameter names
+        "value": lambda watts: Int16ul.build(watts),  # noqa: PLW0108
+    },
+}
+
+#: Largest AC charging power limit the 16-bit field can carry (W).
+MAX_AC_CHARGING_POWER_FIELD = 0xFFFF
+
+PARAMETERS_AC_FAST_CHARGE = {
+    "a1": {
+        "value": "21",
+    },
+    "a7": {
+        "type": 1,
+        "value": lambda on: 1 if on else 0,
+    },
+}
+
+#: System group: display, SoC limits, language and the outage alert.
+CMD_SYSTEM = "4103"
+
+PARAMETERS_MAX_BATTERY = {
+    "a1": {
+        "value": "21",
+    },
+    "aa": {
+        "type": 1,
+        "value": lambda percentage: percentage,
+    },
+}
+
+PARAMETERS_MIN_BATTERY = {
+    "a1": {
+        "value": "21",
+    },
+    "ab": {
+        "type": 1,
+        "value": lambda percentage: percentage,
+    },
+}
+
+#: Highest battery percentage for the charge cap and discharge floor.
+MAX_PERCENTAGE = 100
+
+
+def _validate_percentage(percentage: int) -> None:
+    """Range-check a charge cap or discharge floor.
+
+    :param percentage: Battery percentage.
+    :raises ValueError: If out of range.
+    """
+    if not 0 <= percentage <= MAX_PERCENTAGE:
+        msg = f"Percentage must be 0-{MAX_PERCENTAGE}"
+        raise ValueError(msg)
+
 
 class C1000G2(SolixBLEDevice):
     """
@@ -465,6 +527,104 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_OFF)
+
+    async def set_max_battery_percentage(self, percentage: int) -> None:
+        """Set the charge cap, above which the device stops charging.
+
+        .. warning::
+           The firmware accepts any percentage, not only the 80-100 the app
+           offers. Setting it very low leaves the battery nearly empty.
+
+        :param percentage: Charge cap, 0-100.
+        :raises ValueError: If the percentage is out of range.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        _validate_percentage(percentage)
+        await self._send_command(
+            cmd=CMD_SYSTEM,
+            parameters=PARAMETERS_MAX_BATTERY,
+            percentage=percentage,
+        )
+
+    async def set_min_battery_percentage(self, percentage: int) -> None:
+        """Set the discharge floor, below which the device stops discharging.
+
+        .. warning::
+           The firmware accepts any percentage, not only the 1-20 the app
+           offers. On the C2000 Gen 2 the floor also picks which battery runs:
+           an expansion battery below it is left unused.
+
+        :param percentage: Discharge floor, 0-100.
+        :raises ValueError: If the percentage is out of range.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        _validate_percentage(percentage)
+        await self._send_command(
+            cmd=CMD_SYSTEM,
+            parameters=PARAMETERS_MIN_BATTERY,
+            percentage=percentage,
+        )
+
+    async def set_ac_charging_power(self, watts: int) -> None:
+        """Set the AC charging power limit in watts.
+
+        .. note::
+           :collapsible: closed
+
+           The firmware takes any 16-bit value, so the only bound applied is
+           the device's reported :attr:`max_input_power` once telemetry has
+           arrived. The app offers 100-1200 W in steps of 100 on a C1000 Gen 2
+           and 500-1800 W on a C2000 Gen 2.
+
+        :param watts: AC charging power limit, 1 up to :attr:`max_input_power`.
+        :raises ValueError: If power value is out of valid range.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        ceiling = (
+            self.max_input_power
+            if self.max_input_power > 0
+            else MAX_AC_CHARGING_POWER_FIELD
+        )
+        if not 1 <= watts <= ceiling:
+            msg = f"AC charging power must be between 1 and {ceiling} W"
+            raise ValueError(msg)
+
+        await self._send_command(
+            cmd=CMD_AC_OUTPUT,
+            parameters=PARAMETERS_AC_CHARGING_POWER,
+            watts=watts,
+        )
+
+    async def turn_ac_fast_charge_on(self) -> None:
+        """Turn ultrafast AC charging on.
+
+        .. note::
+           While a time-of-use tariff period is in force the device ignores
+           this; :attr:`ac_fast_charge_enabled` shows whether it took.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=CMD_AC_OUTPUT,
+            parameters=PARAMETERS_AC_FAST_CHARGE,
+            on=True,
+        )
+
+    async def turn_ac_fast_charge_off(self) -> None:
+        """Turn ultrafast AC charging off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(
+            cmd=CMD_AC_OUTPUT,
+            parameters=PARAMETERS_AC_FAST_CHARGE,
+            on=False,
+        )
 
     @property
     def serial_number(self) -> str:
