@@ -1388,6 +1388,7 @@ class SolixBLEDevice:
 
         if reset_data:
             self._data = None
+            self._snapshot = None
             self._last_data_timestamp = None
 
         self._fragment_buffers = {}
