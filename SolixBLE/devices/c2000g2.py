@@ -45,6 +45,7 @@ from SolixBLE.devices.c1000g2 import (
     CMD_AC_OUTPUT,
     CMD_DC_OUTPUT,
     CMD_SUBSCRIBE,
+    CMD_SYSTEM,
     DISPLAY_PLAN_BRIGHTNESS,
     NO_END,
     PARAMETERS_SUBSCRIBE,
@@ -247,30 +248,6 @@ PARAMETERS_TIMER = {
     },
 }
 
-#: The AC group takes its charging power limit at a4 as a u16 of watts.
-PARAMETERS_AC_CHARGING_POWER = {
-    "a1": {
-        "value": "21",
-    },
-    "a4": {
-        "type": 2,
-        "value": lambda watts: Int16ul.build(watts),  # noqa: PLW0108
-    },
-}
-
-#: Largest AC charging power limit the 16-bit field can carry (W).
-MAX_AC_CHARGING_POWER_FIELD = 0xFFFF
-
-PARAMETERS_AC_FAST_CHARGE = {
-    "a1": {
-        "value": "21",
-    },
-    "a7": {
-        "type": 1,
-        "value": lambda on: 1 if on else 0,
-    },
-}
-
 #: The AC group switches the AC input off with ab = 1 (a u16).
 PARAMETERS_AC_INPUT = {
     "a1": {
@@ -281,9 +258,6 @@ PARAMETERS_AC_INPUT = {
         "value": lambda off: Int16ul.build(1 if off else 0),
     },
 }
-
-#: System group: display, SoC limits, language and the outage alert.
-CMD_SYSTEM = "4103"
 
 PARAMETERS_DISPLAY = {
     "a1": {
@@ -326,26 +300,6 @@ PARAMETERS_DISPLAY_LANGUAGE = {
     },
 }
 
-PARAMETERS_MAX_BATTERY = {
-    "a1": {
-        "value": "21",
-    },
-    "aa": {
-        "type": 1,
-        "value": lambda percentage: percentage,
-    },
-}
-
-PARAMETERS_MIN_BATTERY = {
-    "a1": {
-        "value": "21",
-    },
-    "ab": {
-        "type": 1,
-        "value": lambda percentage: percentage,
-    },
-}
-
 PARAMETERS_OUTAGE_ALERT = {
     "a1": {
         "value": "21",
@@ -355,9 +309,6 @@ PARAMETERS_OUTAGE_ALERT = {
         "value": lambda on: 1 if on else 0,
     },
 }
-
-#: Highest battery percentage for the charge cap and discharge floor.
-MAX_PERCENTAGE = 100
 
 #: Backup-plan group: a3 = 3 selects the backup plans, a4 the plan and a5
 #: switches it.
@@ -511,17 +462,6 @@ def _validate_display_plan(plan: DisplayPlan) -> None:
     brightness = (plan.day_brightness, plan.night_brightness)
     if not all(value in DISPLAY_PLAN_BRIGHTNESS for value in brightness):
         msg = f"Display brightness must be one of {DISPLAY_PLAN_BRIGHTNESS} %"
-        raise ValueError(msg)
-
-
-def _validate_percentage(percentage: int) -> None:
-    """Range-check a charge cap or discharge floor.
-
-    :param percentage: Battery percentage.
-    :raises ValueError: If out of range.
-    """
-    if not 0 <= percentage <= MAX_PERCENTAGE:
-        msg = f"Percentage must be 0-{MAX_PERCENTAGE}"
         raise ValueError(msg)
 
 
@@ -1069,45 +1009,6 @@ class C2000G2(C1000G2):
 
         await self._send_command(cmd=CMD_DISPLAY_PLAN, parameters=parameters)
 
-    async def set_max_battery_percentage(self, percentage: int) -> None:
-        """Set the charge cap, above which the device stops charging.
-
-        .. warning::
-           The firmware accepts any percentage, not only the 80-100 the app
-           offers. Setting it very low leaves the battery nearly empty.
-
-        :param percentage: Charge cap, 0-100.
-        :raises ValueError: If the percentage is out of range.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        _validate_percentage(percentage)
-        await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_MAX_BATTERY,
-            percentage=percentage,
-        )
-
-    async def set_min_battery_percentage(self, percentage: int) -> None:
-        """Set the discharge floor, below which the device stops discharging.
-
-        .. warning::
-           The firmware accepts any percentage, not only the 1-20 the app
-           offers. The floor also picks which battery the C2000 Gen 2 runs
-           from: an expansion battery below it is left unused.
-
-        :param percentage: Discharge floor, 0-100.
-        :raises ValueError: If the percentage is out of range.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        _validate_percentage(percentage)
-        await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_MIN_BATTERY,
-            percentage=percentage,
-        )
-
     async def set_ac_timer(self, seconds: int) -> None:
         """Set the AC auto-off timer.
 
@@ -1132,64 +1033,6 @@ class C2000G2(C1000G2):
             cmd=CMD_DC_OUTPUT,
             parameters=PARAMETERS_TIMER,
             seconds=seconds,
-        )
-
-    async def set_ac_charging_power(self, watts: int) -> None:
-        """Set the AC charging power limit in watts.
-
-        .. note::
-           :collapsible: closed
-
-           The firmware takes any 16-bit value, so the only bound applied is
-           the device's reported :attr:`max_input_power` once telemetry has
-           arrived. The app offers 500-1800 W in steps of 100.
-
-        :param watts: AC charging power limit, 1 up to :attr:`max_input_power`.
-        :raises ValueError: If power value is out of valid range.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        ceiling = (
-            self.max_input_power
-            if self.max_input_power > 0
-            else MAX_AC_CHARGING_POWER_FIELD
-        )
-        if not 1 <= watts <= ceiling:
-            msg = f"AC charging power must be between 1 and {ceiling} W"
-            raise ValueError(msg)
-
-        await self._send_command(
-            cmd=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_AC_CHARGING_POWER,
-            watts=watts,
-        )
-
-    async def turn_ac_fast_charge_on(self) -> None:
-        """Turn ultrafast AC charging on.
-
-        .. note::
-           While a time-of-use tariff period is in force the device ignores
-           this; :attr:`ac_fast_charge_enabled` shows whether it took.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(
-            cmd=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_AC_FAST_CHARGE,
-            on=True,
-        )
-
-    async def turn_ac_fast_charge_off(self) -> None:
-        """Turn ultrafast AC charging off.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(
-            cmd=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_AC_FAST_CHARGE,
-            on=False,
         )
 
     async def turn_ac_input_on(self) -> None:
