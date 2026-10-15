@@ -90,7 +90,10 @@ def _filter_kwargs(function: Callable, args: dict) -> dict:
     return {k: v for k, v in args.items() if k in signature.parameters and k != "self"}
 
 
-def _to_bytes(data: bytes | str | int | Callable | None, **kwargs: dict) -> bytes:
+def _to_bytes(
+    data: bytes | str | int | Callable[..., bytes | str | int | None] | None,
+    **kwargs: object,
+) -> bytes:
     """Return input in byte form.
 
     Lambda functions are executed using keyword arguments.

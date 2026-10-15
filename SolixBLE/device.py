@@ -1002,7 +1002,7 @@ class SolixBLEDevice:
         channel: int,
         command: Container,
         parameters: dict[str, Any],
-        **kwargs: dict,
+        **kwargs: object,
     ) -> None:
         """
         Build and send packet to device.
@@ -1082,7 +1082,7 @@ class SolixBLEDevice:
         parameters: dict[str, Any] | None = None,
         *,
         cmd: str | bytes | None = None,
-        **kwargs: dict,
+        **kwargs: object,
     ) -> None:
         """Send a command to the device.
 
