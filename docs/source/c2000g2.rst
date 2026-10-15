@@ -1,0 +1,44 @@
+C2000(X) G2
+===========
+
+.. autoclass:: SolixBLE.C2000G2
+   :members:
+   :inherited-members: connect, disconnect, add_callback, remove_callback, connected, available, address, name, supports_telemetry, last_update
+   :special-members: __init__
+   :member-order: groupwise
+   :no-index:
+
+The C2000(X) Gen 2 has one expansion slot, for a BP2000 or BP3000. Its
+``c490`` device summary (:attr:`~SolixBLE.C2000G2.summary`) reports per-battery
+health, cell voltages, temperatures and lifetime energy counters that the
+regular telemetry doesn't carry.
+
+.. autoclass:: SolixBLE.devices.c2000g2.AcInputState
+   :members:
+   :undoc-members:
+
+.. autoclass:: SolixBLE.devices.c2000g2.BmsFault
+   :members:
+   :undoc-members:
+
+.. autoclass:: SolixBLE.devices.c2000g2.DeviceEventType
+   :members:
+   :undoc-members:
+
+.. autoclass:: SolixBLE.devices.c2000g2.DisplayLanguage
+   :members:
+   :undoc-members:
+
+.. autoclass:: SolixBLE.devices.c2000g2.OtaBlockReason
+   :members:
+   :undoc-members:
+
+.. autoclass:: SolixBLE.devices.c2000g2.TariffType
+   :members:
+   :undoc-members:
+
+.. autoclass:: SolixBLE.devices.c2000g2.DeviceEvent
+
+.. autoclass:: SolixBLE.devices.c2000g2.DisplayPlan
+
+.. autoclass:: SolixBLE.devices.c2000g2.TouPeriod
