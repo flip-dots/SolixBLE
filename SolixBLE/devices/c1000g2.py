@@ -9,17 +9,23 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     Bytes,
     ExprAdapter,
     Flag,
+    FlagsEnum,
     Int8sb,
     Int8ub,
     Int16ul,
     Int32ul,
     Optional,
+    Padding,
     PascalString,
     Struct,
     this,
 )
 
-from SolixBLE.const import DEFAULT_METADATA_INT, DEFAULT_METADATA_STRING
+from SolixBLE.const import (
+    DEFAULT_METADATA_FLOAT,
+    DEFAULT_METADATA_INT,
+    DEFAULT_METADATA_STRING,
+)
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.states import PortStatus
 
@@ -119,6 +125,79 @@ Time-of-use plan (``d9``), then the backup-plan tail: the running window's
 type, each plan's switch, the Fast Charging Plan's stored window and the
 running window (0 when none runs).
 """
+
+A3_STATUS = Struct(
+    "work_status" / Int8ub,
+    "error_code" / Int8ub,
+    "package_count" / Int8ub,
+    "package_use_count" / Int8ub,
+    "max_input_power" / Int16ul,
+    "upgrade_progress" / Int8ub,
+    "wifi_signal_strength" / Int8ub,
+    "mtu_size" / Int16ul,
+    "silent_recharge_power" / Optional(Int16ul),
+    "weak_light_lock_flag" / Optional(Int8ub),
+)
+"""
+Status (``a3``). The last two fields are absent on firmware that predates
+them.
+"""
+
+F9_VERSIONS = Struct(
+    "controller" / VERSION_QUAD,
+    "sub_controller" / VERSION_QUAD,
+    "mppt" / VERSION_QUAD,
+    "inverter" / VERSION_QUAD,
+    "bms" / VERSION_QUAD,
+    "expansion_bms" / VERSION_QUAD,
+    "module" / VERSION_QUAD,
+)
+"""Firmware versions (``f9``), seven slots."""
+
+FA_CAPABILITIES = Struct(
+    "ac_energy_mode" / Flag,
+    "car_charge_mode" / Flag,
+    "parallel_upgrade" / Flag,
+    "get_upgrade_info" / Flag,
+    Padding(1),
+    "features"
+    / FlagsEnum(
+        Int8ub,
+        transaction_id=0x01,
+        memory_switch=0x02,
+        backup_disaster=0x04,
+        upgrade_record=0x08,
+        screen_time_period=0x10,
+        output_status=0x20,
+        charging_limits=0x40,
+        set_country_code=0x80,
+    ),
+    "more_features"
+    / FlagsEnum(
+        Int8ub,
+        pps_tou=0x01,
+        memory_switch_two=0x02,
+        silent_recharge=0x04,
+        outage_alert=0x08,
+        ac_input_disable=0x10,
+    ),
+)
+"""
+Capability flags (``fa``), named as the app names them without their
+``support`` prefix.
+"""
+
+#: The capability flags that take a whole byte each.
+CAPABILITY_BYTES = (
+    "ac_energy_mode",
+    "car_charge_mode",
+    "parallel_upgrade",
+    "get_upgrade_info",
+)
+
+#: Time remaining (0.1 h) that means there is no estimate: the battery's
+#: 0xFFFF minutes, scaled.
+NO_ESTIMATE = 10923
 
 #: Command sent after connecting to start the telemetry stream. Unlike the gen-1
 #: models, the Gen 2 streams nothing until it receives this subscribe command.
@@ -320,10 +399,16 @@ class C1000G2(SolixBLEDevice):
         return DEFAULT_METADATA_INT if ac is None else ac.output.power
 
     @property
-    def solar_port(self) -> PortStatus:
-        """Solar Port Status.
+    def dc_input_port(self) -> PortStatus:
+        """DC input (XT-60i) port status.
 
-        :returns: Status of the solar port.
+        The one DC input port, whatever is plugged into it: a solar array, the
+        12 V car-socket adapter or the Alternator Charger.
+
+        PortStatus.INPUT signifies a source is present, NOT_CONNECTED that the
+        port is empty. Presence only; it does not imply current is flowing.
+
+        :returns: Status of the DC input port.
         """
         port = self._tag("a8", PORT_STATUS_POWER)
         return (
@@ -333,13 +418,33 @@ class C1000G2(SolixBLEDevice):
         )
 
     @property
-    def solar_power_in(self) -> int:
-        """Solar/DC Power In (watts).
+    def solar_port(self) -> PortStatus:
+        """Alias of :attr:`dc_input_port`, which takes more than a solar array.
 
-        :returns: Solar/DC power in or default int value.
+        :returns: Status of the DC input port.
+        """
+        return self.dc_input_port
+
+    @property
+    def dc_input_power(self) -> int:
+        """DC input (XT-60i) power in (watts).
+
+        .. note::
+           Reads 0 while the battery is above its charge cap, even with a
+           source attached.
+
+        :returns: DC input power or default int value.
         """
         port = self._tag("a8", PORT_STATUS_POWER)
         return DEFAULT_METADATA_INT if port is None else port.power
+
+    @property
+    def solar_power_in(self) -> int:
+        """Alias of :attr:`dc_input_power`, which takes more than a solar array.
+
+        :returns: DC input power or default int value.
+        """
+        return self.dc_input_power
 
     @property
     def usb_port_c1(self) -> PortStatus:
@@ -454,3 +559,139 @@ class C1000G2(SolixBLEDevice):
         """
         tou = self._tag("d9", D9_TOU)
         return DEFAULT_METADATA_INT if tou is None else tou.min_battery_percentage
+
+    @property
+    def ac_input_port(self) -> PortStatus:
+        """AC input (mains) status.
+
+        PortStatus.INPUT signifies the mains lead is plugged in, NOT_CONNECTED
+        that it is not. Presence only; it does not imply current is flowing.
+
+        :returns: Status of the AC input.
+        """
+        ac = self._tag("a7", A7_AC)
+        return (
+            PortStatus.UNKNOWN
+            if ac is None
+            else PortStatus.from_input_only(ac.input_status)
+        )
+
+    @property
+    def max_input_power(self) -> int:
+        """Most charge-input power the unit can draw (W).
+
+        :returns: Maximum input power in watts, or default int value if there
+            is no data.
+        """
+        status = self._tag("a3", A3_STATUS)
+        return DEFAULT_METADATA_INT if status is None else status.max_input_power
+
+    @property
+    def time_remaining(self) -> float:
+        """Time remaining to full or empty, in hours.
+
+        Counts down to full while input exceeds output, else to empty.
+
+        :returns: Hours remaining, or default float value if there is no data
+            or no estimate.
+        """
+        power = self._tag("a6", A6_POWER)
+        if power is None or power.time_remaining == NO_ESTIMATE:
+            return DEFAULT_METADATA_FLOAT
+        tenths: int = power.time_remaining
+        return tenths / 10.0
+
+    @property
+    def hours_remaining(self) -> float:
+        """Time remaining to full/empty, with whole days overflowed out.
+
+        :returns: Hours remaining, or default float value if there is no data.
+        """
+        if self.time_remaining == DEFAULT_METADATA_FLOAT:
+            return DEFAULT_METADATA_FLOAT
+        return round(divmod(self.time_remaining, 24)[1], 1)
+
+    @property
+    def days_remaining(self) -> int:
+        """Time remaining to full/empty, whole days only.
+
+        :returns: Days remaining, or default int value if there is no data.
+        """
+        if self.time_remaining == DEFAULT_METADATA_FLOAT:
+            return DEFAULT_METADATA_INT
+        return int(divmod(self.time_remaining, 24)[0])
+
+    @property
+    def software_version(self) -> str:
+        """Main software version.
+
+        :returns: Firmware version or default str value.
+        """
+        versions = self._tag("f9", F9_VERSIONS)
+        return DEFAULT_METADATA_STRING if versions is None else versions.controller
+
+    @property
+    def software_version_controller(self) -> str:
+        """Software version of the controller (the DC-DC stage).
+
+        :returns: Firmware version or default str value.
+        """
+        versions = self._tag("f9", F9_VERSIONS)
+        return DEFAULT_METADATA_STRING if versions is None else versions.sub_controller
+
+    @property
+    def software_version_inverter(self) -> str:
+        """Software version of the inverter (the AC-DC stage).
+
+        .. note::
+           Reads 0.0.0.0 whenever the inverter is not energised, so a zero
+           here means idle rather than absent.
+
+        :returns: Firmware version or default str value.
+        """
+        versions = self._tag("f9", F9_VERSIONS)
+        return DEFAULT_METADATA_STRING if versions is None else versions.inverter
+
+    @property
+    def software_version_bms(self) -> str:
+        """Software version of the main battery's management system.
+
+        :returns: Firmware version or default str value.
+        """
+        versions = self._tag("f9", F9_VERSIONS)
+        return DEFAULT_METADATA_STRING if versions is None else versions.bms
+
+    @property
+    def software_version_module(self) -> str:
+        """Software version of the wireless module.
+
+        :returns: Firmware version or default str value.
+        """
+        versions = self._tag("f9", F9_VERSIONS)
+        return DEFAULT_METADATA_STRING if versions is None else versions.module
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        """Optional features the firmware declares it supports.
+
+        .. note::
+           :collapsible: closed
+
+           The names are the app's capability flags without their ``support``
+           prefix (e.g ``pps_tou``, ``ac_input_disable``). They are constants
+           of each firmware build.
+
+        :returns: Names of the supported features, empty without data.
+        """
+        flags = self._tag("fa", FA_CAPABILITIES)
+        if flags is None:
+            return frozenset()
+
+        names = {name for name in CAPABILITY_BYTES if flags[name]}
+        for group in (flags.features, flags.more_features):
+            names |= {
+                name
+                for name, on in group.items()
+                if on is True and not name.startswith("_")
+            }
+        return frozenset(names)

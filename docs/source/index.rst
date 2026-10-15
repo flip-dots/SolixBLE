@@ -39,7 +39,7 @@ Power station support
 Parameter               C300(X)  C300(X) DC C800(X)   C1000(X)  C1000 G2  C2000 G2  F2000 (767)  F2600  F3800
 ======================= ======== ========== ========= ========= ========= ========= ============ ====== ======
 Charging status         ✅       ✅         ❌        ❌        ❌        ✅        ❌           ✅     ✅
-Time remaining          ✅       ✅         ✅        ✅        ❌        ✅        ✅           ✅     ✅
+Time remaining          ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
 Battery percentage      ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
 Battery health          ❌       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ❌
 Temperature             ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
@@ -66,7 +66,7 @@ Display brightness ctrl ✅       ✅         ✅        ✅        ❌        �
 Display brightness stat ❌       ✅         ❌        ❌        ❌        ✅        ❌           ✅     ❌
 Display timeout ctrl    ✅       ✅         ✅        ✅        ❌        ✅        ❌           ✅     ❌
 Display timeout stat    ❌       ✅         ❌        ❌        ❌        ✅        ❌           ✅     ❌
-Firmware version        ✅       ✅         ✅        ✅        ❌        ✅        ✅           ✅     ✅
+Firmware version        ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
 Serial number           ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
 Expansion temperature   N/A      N/A        N/A       ✅        N/A       ✅        ✅           ✅     ❌
 Expansion percentage    N/A      N/A        N/A       ✅        N/A       ✅        ✅           ✅     ✅
