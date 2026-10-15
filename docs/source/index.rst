@@ -61,11 +61,11 @@ USB Port status         ✅       ✅         ❌        ❌        ✅        �
 Light control           ✅       ✅         ✅        ✅        ❌        ❌        ❌           ✅     ❌
 Light status            ✅       ✅         ❌        ❌        N/A       N/A       ❌           ✅     ❌
 Display on/off control  ✅       ✅         ✅        ✅        ❌        ✅        ❌           ✅     ❌
-Display on/off status   ❌       ✅         ❌        ❌        ❌        ✅        ❌           ✅     ❌
+Display on/off status   ❌       ✅         ❌        ❌        ✅        ✅        ❌           ✅     ❌
 Display brightness ctrl ✅       ✅         ✅        ✅        ❌        ✅        ❌           ✅     ❌
-Display brightness stat ❌       ✅         ❌        ❌        ❌        ✅        ❌           ✅     ❌
+Display brightness stat ❌       ✅         ❌        ❌        ✅        ✅        ❌           ✅     ❌
 Display timeout ctrl    ✅       ✅         ✅        ✅        ❌        ✅        ❌           ✅     ❌
-Display timeout stat    ❌       ✅         ❌        ❌        ❌        ✅        ❌           ✅     ❌
+Display timeout stat    ❌       ✅         ❌        ❌        ✅        ✅        ❌           ✅     ❌
 Firmware version        ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
 Serial number           ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
 Expansion temperature   N/A      N/A        N/A       ✅        N/A       ✅        ✅           ✅     ❌

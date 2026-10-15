@@ -32,6 +32,7 @@ from SolixBLE import (
     TemperatureUnit,
 )
 from SolixBLE.constructs import Parameters
+from SolixBLE.devices.c1000g2 import DisplayLanguage
 from SolixBLE.devices.solarbank2 import MaxLoadSB2
 from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
 from tests.const import (
@@ -295,6 +296,21 @@ from tests.helpers import MockDevice, install_session_keys
                     "pps_tou",
                     "memory_switch_two",
                 }),
+                "ac_timer_remaining": 0,
+                "ac_timer": None,
+                "dc_timer_remaining": 0,
+                "dc_timer": None,
+                "ac_charging_power": 1200,
+                "ac_frequency": 50,
+                "ac_fast_charge_enabled": False,
+                "power_saving_mode_enabled": True,
+                "dc_power_saving_mode_enabled": False,
+                "port_memory_enabled": False,
+                "device_timeout": 0,
+                "is_display_on": False,
+                "display_mode": LightStatus.LOW,
+                "display_timeout": 30,
+                "display_language": DisplayLanguage.GERMAN,
             },
             id="c1000g2",
         ),
@@ -330,6 +346,15 @@ from tests.helpers import MockDevice, install_session_keys
                 "software_version_module": "0.2.9.6",
                 "max_input_power": 1200,
                 "ac_input_port": PortStatus.NOT_CONNECTED,
+                "ac_charging_power": 600,
+                "ac_frequency": 50,
+                "power_saving_mode_enabled": True,
+                "port_memory_enabled": False,
+                "device_timeout": 240,
+                "is_display_on": True,
+                "display_mode": LightStatus.LOW,
+                "display_timeout": 60,
+                "display_language": DisplayLanguage.ENGLISH,
             },
             id="c1000g2_ac_off",
         ),

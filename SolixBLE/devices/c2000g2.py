@@ -7,14 +7,12 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
-    BitsInteger,
-    BitStruct,
     Const,
     Container,
     Flag,
@@ -22,8 +20,6 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     Int8ub,
     Int16ul,
     Int32ul,
-    Optional,
-    Padding,
     PascalString,
     Struct,
 )
@@ -43,6 +39,7 @@ from SolixBLE.constructs import (
 )
 from SolixBLE.devices.c1000g2 import (
     A3_STATUS,
+    A4_SETTINGS,
     A5_BATTERY,
     C1000G2,
     CMD_AC_OUTPUT,
@@ -51,6 +48,7 @@ from SolixBLE.devices.c1000g2 import (
     D9_TOU,
     PARAMETERS_SUBSCRIBE,
     VERSION_QUAD,
+    DisplayLanguage,
 )
 from SolixBLE.devices.c2000g2_summary import SUMMARY_MAPS
 from SolixBLE.parsing import SummaryField, name_summary, walk_protobuf
@@ -59,28 +57,6 @@ from SolixBLE.states import ChargingStatus, DisplayTimeout, LightStatus
 from SolixBLE.utilities import _parse_guarded
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class DisplayLanguage(Enum):
-    """The language of the device's display."""
-
-    #: The language is unknown.
-    UNKNOWN = -1
-
-    #: English.
-    ENGLISH = 0
-
-    #: Chinese.
-    CHINESE = 1
-
-    #: French.
-    FRENCH = 2
-
-    #: German.
-    GERMAN = 3
-
-    #: Japanese.
-    JAPANESE = 4
 
 
 class AcInputState(Enum):
@@ -269,39 +245,6 @@ class DeviceEvent:
     battery_percentage: int | None
     received: datetime
 
-
-A4_FLAGS = BitStruct(
-    Padding(4),
-    "ac_input_state" / BitsInteger(2),
-    "outage_alert_enabled" / Flag,
-    Padding(1),
-)
-"""The settings flag byte (``a4[31]``): the AC input state and the outage alert."""
-
-A4_SETTINGS = Struct(
-    "ac_timer_remaining" / Int32ul,
-    "ac_charging_power" / Int16ul,
-    "ac_frequency" / Int8ub,
-    "power_saving_mode_enabled" / Flag,
-    "dc_timer_remaining" / Int32ul,
-    "dc_power_saving_mode_enabled" / Flag,
-    "device_timeout" / Int16ul,
-    "display_timeout" / Int16ul,
-    "display_mode" / Int8ub,
-    Padding(1),
-    "temperature_unit_fahrenheit" / Flag,
-    "ac_fast_charge_enabled" / Flag,
-    "is_display_on" / Flag,
-    "port_memory_enabled" / Flag,
-    "max_battery_percentage" / Int8ub,
-    "min_battery_percentage" / Int8ub,
-    "display_language" / Int8ub,
-    "flags" / Optional(Struct(Padding(5), "flags" / A4_FLAGS, Padding(1))),
-)
-"""
-Settings (``a4``): 26 bytes, plus a 7-byte tail holding the flag byte on
-firmware from v1.2.1.6.
-"""
 
 C0_EXPANSION = Struct(
     "serial_number" / PascalString(Int8ub, "ascii"),
@@ -974,176 +917,6 @@ class C2000G2(C1000G2):
     ############
     # Settings #
     ############
-
-    @property
-    def ac_timer_remaining(self) -> int:
-        """Time remaining on AC timer.
-
-        :returns: Seconds remaining or default int value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        return DEFAULT_METADATA_INT if settings is None else settings.ac_timer_remaining
-
-    @property
-    def ac_timer(self) -> datetime | None:
-        """Timestamp of AC timer.
-
-        :returns: Timestamp of when AC timer expires or None.
-        """
-        if self.ac_timer_remaining not in (DEFAULT_METADATA_INT, 0):
-            now = datetime.now()  # noqa: DTZ005  # naive local, as the base device
-            return now + timedelta(seconds=self.ac_timer_remaining)
-        return None
-
-    @property
-    def dc_timer_remaining(self) -> int:
-        """Time remaining on DC (car socket) timer.
-
-        :returns: Seconds remaining or default int value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        return DEFAULT_METADATA_INT if settings is None else settings.dc_timer_remaining
-
-    @property
-    def dc_timer(self) -> datetime | None:
-        """Timestamp of DC (car socket) timer.
-
-        :returns: Timestamp of when DC timer expires or None.
-        """
-        if self.dc_timer_remaining not in (DEFAULT_METADATA_INT, 0):
-            now = datetime.now()  # noqa: DTZ005  # naive local, as the base device
-            return now + timedelta(seconds=self.dc_timer_remaining)
-        return None
-
-    @property
-    def ac_charging_power(self) -> int:
-        """Configured AC charging power limit in watts.
-
-        :returns: AC charging power limit or default int value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        return DEFAULT_METADATA_INT if settings is None else settings.ac_charging_power
-
-    @property
-    def ac_frequency(self) -> int:
-        """AC output frequency (Hz).
-
-        :returns: Frequency in Hz, or default int value if there is no data.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        return DEFAULT_METADATA_INT if settings is None else settings.ac_frequency
-
-    @property
-    def ac_fast_charge_enabled(self) -> bool | None:
-        """Whether ultrafast AC charging is enabled.
-
-        :returns: True if enabled, False if disabled, or default bool value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        if settings is None:
-            return DEFAULT_METADATA_BOOL
-        enabled: bool = settings.ac_fast_charge_enabled
-        return enabled
-
-    @property
-    def power_saving_mode_enabled(self) -> bool | None:
-        """Whether power saving mode is enabled on the AC output.
-
-        .. note::
-           Enabled, the AC output switches itself off below 14 W.
-
-        :returns: True if enabled, False if disabled, or default bool value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        if settings is None:
-            return DEFAULT_METADATA_BOOL
-        enabled: bool = settings.power_saving_mode_enabled
-        return enabled
-
-    @property
-    def dc_power_saving_mode_enabled(self) -> bool | None:
-        """Whether power saving mode is enabled on the DC (car socket) output.
-
-        .. note::
-           Enabled, the DC output switches itself off below 3 W.
-
-        :returns: True if enabled, False if disabled, or default bool value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        if settings is None:
-            return DEFAULT_METADATA_BOOL
-        enabled: bool = settings.dc_power_saving_mode_enabled
-        return enabled
-
-    @property
-    def port_memory_enabled(self) -> bool | None:
-        """Whether output ports return to their previous state after a restart.
-
-        :returns: True if enabled, False if disabled, or default bool value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        if settings is None:
-            return DEFAULT_METADATA_BOOL
-        enabled: bool = settings.port_memory_enabled
-        return enabled
-
-    @property
-    def device_timeout(self) -> int:
-        """Configured device timeout in minutes.
-
-        :returns: Configured device timeout (0 for never) or default int value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        return DEFAULT_METADATA_INT if settings is None else settings.device_timeout
-
-    @property
-    def is_display_on(self) -> bool | None:
-        """Whether the LCD display is on.
-
-        :returns: True if on, False if off, or default bool value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        if settings is None:
-            return DEFAULT_METADATA_BOOL
-        is_display_on: bool = settings.is_display_on
-        return is_display_on
-
-    @property
-    def display_mode(self) -> LightStatus:
-        """Configured display brightness level.
-
-        :returns: Display brightness as LightStatus (LOW/MEDIUM/HIGH) or UNKNOWN.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        if settings is None:
-            return LightStatus.UNKNOWN
-        try:
-            return LightStatus(settings.display_mode)
-        except ValueError:
-            return LightStatus.UNKNOWN
-
-    @property
-    def display_timeout(self) -> int:
-        """Display timeout limit in seconds.
-
-        :returns: Display timeout in seconds (0 for never) or default int value.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        return DEFAULT_METADATA_INT if settings is None else settings.display_timeout
-
-    @property
-    def display_language(self) -> DisplayLanguage:
-        """Language of the display.
-
-        :returns: Display language or UNKNOWN.
-        """
-        settings = self._tag("a4", A4_SETTINGS)
-        if settings is None:
-            return DisplayLanguage.UNKNOWN
-        try:
-            return DisplayLanguage(settings.display_language)
-        except ValueError:
-            return DisplayLanguage.UNKNOWN
 
     @property
     def outage_alert_enabled(self) -> bool | None:

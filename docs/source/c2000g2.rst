@@ -25,10 +25,6 @@ regular telemetry doesn't carry.
    :members:
    :undoc-members:
 
-.. autoclass:: SolixBLE.devices.c2000g2.DisplayLanguage
-   :members:
-   :undoc-members:
-
 .. autoclass:: SolixBLE.devices.c2000g2.OtaBlockReason
    :members:
    :undoc-members:
