@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from functools import partial
+from typing import Any
 
 from bleak import BleakClient, BleakError
 from bleak.backends.client import BaseBleakClient
@@ -973,7 +974,13 @@ class SolixBLEDevice:
         """
         return _parse_guarded(self._record(key), struct)
 
-    async def _send_packet(self, pattern: str, cmd: str, parameters: dict, **kwargs: dict) -> None:
+    async def _send_packet(
+        self,
+        pattern: str,
+        cmd: str,
+        parameters: dict[str, Any],
+        **kwargs: object,
+    ) -> None:
         """
         Build and send packet to device.
 
@@ -1045,7 +1052,9 @@ class SolixBLEDevice:
         """Unix timestamp in byte form (4B)."""
         return int(time.time()).to_bytes(length=4, byteorder="little", signed=False)
 
-    async def _send_command(self, cmd: str, parameters: dict, **kwargs: dict) -> None:
+    async def _send_command(
+        self, cmd: str, parameters: dict[str, Any], **kwargs: object,
+    ) -> None:
         """Send a command to the device.
 
         Parameter values may use lambda functions which will be executed at
