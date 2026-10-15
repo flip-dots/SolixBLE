@@ -13,13 +13,10 @@ from enum import Enum
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
-    Array,
     BitsInteger,
     BitStruct,
-    Bytes,
     Const,
     Container,
-    ExprAdapter,
     Flag,
     FlagsEnum,
     Int8sb,
@@ -30,7 +27,6 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     Padding,
     PascalString,
     Struct,
-    this,
 )
 
 from SolixBLE.const import (
@@ -48,11 +44,17 @@ from SolixBLE.constructs import (
     WeekdayMask,
 )
 from SolixBLE.devices.c1000g2 import (
+    A5_BATTERY,
+    A6_POWER,
+    A7_AC,
     C1000G2,
     CMD_AC_OUTPUT,
     CMD_DC_OUTPUT,
     CMD_SUBSCRIBE,
+    D9_TOU,
     PARAMETERS_SUBSCRIBE,
+    PORT_STATUS_POWER,
+    VERSION_QUAD,
 )
 from SolixBLE.devices.c2000g2_summary import SUMMARY_MAPS
 from SolixBLE.parsing import SummaryField, name_summary, walk_protobuf
@@ -272,39 +274,6 @@ class DeviceEvent:
     received: datetime
 
 
-VERSION_QUAD = ExprAdapter(
-    Bytes(4),
-    decoder=lambda obj, _: f"{obj[3]}.{obj[2]}.{obj[1]}.{obj[0]}",
-    encoder=lambda obj, _: bytes(int(part) for part in reversed(obj.split("."))),
-)
-"""
-A version packed as 4 bytes with the last digit first (``06 01 02 01``
-decodes to ``"1.2.1.6"``).
-"""
-
-PORT_STATUS_POWER = Struct(
-    "status" / Int8ub,
-    "power" / Int16ul,
-)
-"""
-A port's status and power (W): the USB-A/C ports, the DC output and the
-DC input.
-"""
-
-A2_INFO = Struct(
-    "protocol_version" / Int8ub,
-    "serial_number" / PascalString(Int8ub, "ascii"),
-    "device_category" / Int8ub,
-    "part_number" / PascalString(Int8ub, "ascii"),
-    "firmware_version" / VERSION_QUAD,
-    "model_variant" / Int8ub,
-    "max_battery_num" / Int8ub,
-)
-"""
-Basic info (``a2``): protocol version, serial number, a reserved byte, part
-number, controller firmware, model variant and the expansion slot count.
-"""
-
 A3_STATUS = Struct(
     "work_status" / Int8ub,
     "error_code" / Int8ub,
@@ -355,35 +324,6 @@ Settings (``a4``): 26 bytes, plus a 7-byte tail holding the flag byte on
 firmware from v1.2.1.6.
 """
 
-A5_BATTERY = Struct(
-    "temperature" / Int8sb,
-    "charge_discharge_status" / Int8ub,
-    "battery_percentage" / Int8ub,
-)
-"""Main battery (``a5``): temperature (C), port-flow code and state of charge."""
-
-A6_POWER = Struct(
-    "power_out" / Int16ul,
-    "ac_power_in" / Int16ul,
-    "dc_power_in" / Int16ul,
-    "time_remaining" / Int16ul,
-    "battery_percentage" / Int8ub,
-)
-"""
-Power totals (``a6``): output, AC input and DC input (W), time to full or
-empty (0.1 h) and the main battery's state of charge.
-"""
-
-A7_AC = Struct(
-    "output" / PORT_STATUS_POWER,
-    "input_status" / Int8ub,
-    "input_power" / Int16ul,
-)
-"""
-AC ports (``a7``): the output's status and power, whether the mains lead is
-plugged in (2 with Battery-Only Power on), and the input power (W).
-"""
-
 C0_EXPANSION = Struct(
     "serial_number" / PascalString(Int8ub, "ascii"),
     "number" / Int8ub,
@@ -402,37 +342,6 @@ C0_EXPANSION = Struct(
 """
 Expansion battery (``c0``), emitted with or without a pack attached; its
 values hold only while ``connected`` is set.
-"""
-
-D9_TOU = Struct(
-    "active_tariff" / Int8ub,
-    "tou_mode" / Int8ub,
-    "reserve_battery_percentage" / Int8ub,
-    "max_battery_percentage" / Int8ub,
-    "min_battery_percentage" / Int8ub,
-    "period_count" / Int8ub,
-    "periods"
-    / Array(
-        this.period_count,
-        Struct("tariff" / Int8ub, "start_hour" / Int8ub, "end_hour" / Int8ub),
-    ),
-    "backup"
-    / Optional(
-        Struct(
-            "active_type" / Int8ub,
-            "fast_charging_plan_enabled" / Flag,
-            "storm_guard_enabled" / Flag,
-            "fast_charging_plan_start" / Int32ul,
-            "fast_charging_plan_end" / Int32ul,
-            "backup_window_start" / Int32ul,
-            "backup_window_end" / Int32ul,
-        ),
-    ),
-)
-"""
-Time-of-use plan (``d9``), then the backup-plan tail: the running window's
-type, each plan's switch, the Fast Charging Plan's stored window and the
-running window (0 when none runs).
 """
 
 DA_DISPLAY_PLAN = Struct(
@@ -911,27 +820,6 @@ class C2000G2(C1000G2):
     ###############
 
     @property
-    def serial_number(self) -> str:
-        """Device serial number.
-
-        :returns: Device serial number or default str value.
-        """
-        info = self._tag("a2", A2_INFO)
-        return DEFAULT_METADATA_STRING if info is None else info.serial_number
-
-    @property
-    def part_number(self) -> str:
-        """Device part number.
-
-        .. note::
-           Firmware v1.2.1.x reports ``A1783`` on every C-series Gen 2 model.
-
-        :returns: Device part number or default str value.
-        """
-        info = self._tag("a2", A2_INFO)
-        return DEFAULT_METADATA_STRING if info is None else info.part_number
-
-    @property
     def software_version(self) -> str:
         """Main software version.
 
@@ -1009,28 +897,6 @@ class C2000G2(C1000G2):
     ###########
     # Battery #
     ###########
-
-    @property
-    def temperature(self) -> int:
-        """Temperature of the unit (C).
-
-        :returns: Temperature of the unit in degrees C.
-        """
-        battery = self._tag("a5", A5_BATTERY)
-        return DEFAULT_METADATA_INT if battery is None else battery.temperature
-
-    @property
-    def battery_percentage(self) -> int:
-        """Battery Percentage.
-
-        .. note::
-           The main battery's state of charge. The power totals report the
-           same value.
-
-        :returns: Percentage charge of battery or default int value.
-        """
-        battery = self._tag("a5", A5_BATTERY)
-        return DEFAULT_METADATA_INT if battery is None else battery.battery_percentage
 
     @property
     def battery_health(self) -> int:
@@ -1278,45 +1144,6 @@ class C2000G2(C1000G2):
     #########
 
     @property
-    def power_out(self) -> int:
-        """Total Power Out (watts).
-
-        :returns: Total power out or default int value.
-        """
-        power = self._tag("a6", A6_POWER)
-        return DEFAULT_METADATA_INT if power is None else power.power_out
-
-    @property
-    def ac_power_in(self) -> int:
-        """AC Power In (watts).
-
-        :returns: Total AC power in or default int value.
-        """
-        power = self._tag("a6", A6_POWER)
-        return DEFAULT_METADATA_INT if power is None else power.ac_power_in
-
-    @property
-    def ac_output(self) -> PortStatus:
-        """AC Port Status.
-
-        PortStatus.NOT_CONNECTED signifies off.
-        PortStatus.OUTPUT signifies on.
-
-        :returns: Status of the AC port.
-        """
-        ac = self._tag("a7", A7_AC)
-        return PortStatus.UNKNOWN if ac is None else PortStatus(ac.output.status)
-
-    @property
-    def ac_power_out(self) -> int:
-        """AC Power Out (watts).
-
-        :returns: Total AC power out or default int value.
-        """
-        ac = self._tag("a7", A7_AC)
-        return DEFAULT_METADATA_INT if ac is None else ac.output.power
-
-    @property
     def ac_input_port(self) -> PortStatus:
         """AC input (mains) status.
 
@@ -1399,96 +1226,6 @@ class C2000G2(C1000G2):
         :returns: DC input power or default int value.
         """
         return self.dc_input_power
-
-    @property
-    def usb_port_c1(self) -> PortStatus:
-        """USB C1 Port Status.
-
-        :returns: Status of the USB C1 port.
-        """
-        port = self._tag("aa", PORT_STATUS_POWER)
-        return PortStatus.UNKNOWN if port is None else PortStatus(port.status)
-
-    @property
-    def usb_c1_power(self) -> int:
-        """USB C1 Power.
-
-        :returns: USB port C1 power or default int value.
-        """
-        port = self._tag("aa", PORT_STATUS_POWER)
-        return DEFAULT_METADATA_INT if port is None else port.power
-
-    @property
-    def usb_port_c2(self) -> PortStatus:
-        """USB C2 Port Status.
-
-        :returns: Status of the USB C2 port.
-        """
-        port = self._tag("ab", PORT_STATUS_POWER)
-        return PortStatus.UNKNOWN if port is None else PortStatus(port.status)
-
-    @property
-    def usb_c2_power(self) -> int:
-        """USB C2 Power.
-
-        :returns: USB port C2 power or default int value.
-        """
-        port = self._tag("ab", PORT_STATUS_POWER)
-        return DEFAULT_METADATA_INT if port is None else port.power
-
-    @property
-    def usb_port_c3(self) -> PortStatus:
-        """USB C3 Port Status.
-
-        :returns: Status of the USB C3 port.
-        """
-        port = self._tag("ac", PORT_STATUS_POWER)
-        return PortStatus.UNKNOWN if port is None else PortStatus(port.status)
-
-    @property
-    def usb_c3_power(self) -> int:
-        """USB C3 Power (watts).
-
-        :returns: USB port C3 power or default int value.
-        """
-        port = self._tag("ac", PORT_STATUS_POWER)
-        return DEFAULT_METADATA_INT if port is None else port.power
-
-    @property
-    def usb_port_a1(self) -> PortStatus:
-        """USB A1 Port Status.
-
-        :returns: Status of the USB A1 port.
-        """
-        port = self._tag("ae", PORT_STATUS_POWER)
-        return PortStatus.UNKNOWN if port is None else PortStatus(port.status)
-
-    @property
-    def usb_a1_power(self) -> int:
-        """USB A1 Power.
-
-        :returns: USB port A1 power or default int value.
-        """
-        port = self._tag("ae", PORT_STATUS_POWER)
-        return DEFAULT_METADATA_INT if port is None else port.power
-
-    @property
-    def dc_output(self) -> PortStatus:
-        """DC (car socket) Port Status.
-
-        :returns: Status of the DC output port.
-        """
-        port = self._tag("b2", PORT_STATUS_POWER)
-        return PortStatus.UNKNOWN if port is None else PortStatus(port.status)
-
-    @property
-    def dc_power_out(self) -> int:
-        """DC (car socket) Power Out (watts).
-
-        :returns: DC power out or default int value.
-        """
-        port = self._tag("b2", PORT_STATUS_POWER)
-        return DEFAULT_METADATA_INT if port is None else port.power
 
     @property
     def max_input_power(self) -> int:
