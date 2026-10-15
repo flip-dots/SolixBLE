@@ -142,7 +142,7 @@ async def test_set_display_plan_sends_only_changes() -> None:
             dataclasses.replace(current, clock_24h=False, night_brightness=5),
         )
         send.assert_awaited_once_with(
-            message=0x091,
+            cmd="4091",
             parameters={
                 "a1": {"value": "21"},
                 "a7": {"type": 1, "value": 0},
