@@ -5,7 +5,6 @@
 """
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -13,7 +12,6 @@ from enum import Enum
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
-    Const,
     Container,
     Flag,
     Int8sb,
@@ -35,7 +33,6 @@ from SolixBLE.constructs import (
     ParameterDict,
     Parameters,
     SummaryPayload,
-    WeekdayMask,
 )
 from SolixBLE.devices.c1000g2 import (
     A3_STATUS,
@@ -43,22 +40,16 @@ from SolixBLE.devices.c1000g2 import (
     A5_BATTERY,
     C1000G2,
     CMD_AC_OUTPUT,
-    CMD_DC_OUTPUT,
     CMD_SUBSCRIBE,
     CMD_SYSTEM,
-    DISPLAY_PLAN_BRIGHTNESS,
-    NO_END,
     PARAMETERS_SUBSCRIBE,
-    SCREENSAVER_BIT,
     VERSION_QUAD,
-    DisplayLanguage,
-    DisplayPlan,
     epoch_to_local,
 )
 from SolixBLE.devices.c2000g2_summary import SUMMARY_MAPS
 from SolixBLE.parsing import SummaryField, name_summary, walk_protobuf
 from SolixBLE.protocols import EncryptedOuter
-from SolixBLE.states import ChargingStatus, DisplayTimeout, LightStatus
+from SolixBLE.states import ChargingStatus
 from SolixBLE.utilities import _parse_guarded
 
 _LOGGER = logging.getLogger(__name__)
@@ -236,18 +227,6 @@ PARAMETERS_REALTIME_ON = {
     },
 }
 
-#: The AC and DC groups take their auto-off timer at a3 as a u32 of seconds.
-PARAMETERS_TIMER = {
-    "a1": {
-        "value": "21",
-    },
-    "a3": {
-        "type": 3,
-        # _to_bytes passes keyword arguments by the lambda's parameter names
-        "value": lambda seconds: Int32ul.build(seconds),  # noqa: PLW0108
-    },
-}
-
 #: The AC group switches the AC input off with ab = 1 (a u16).
 PARAMETERS_AC_INPUT = {
     "a1": {
@@ -256,47 +235,6 @@ PARAMETERS_AC_INPUT = {
     "ab": {
         "type": 2,
         "value": lambda off: Int16ul.build(1 if off else 0),
-    },
-}
-
-PARAMETERS_DISPLAY = {
-    "a1": {
-        "value": "21",
-    },
-    "a2": {
-        "type": 1,
-        "value": lambda on: 1 if on else 0,
-    },
-}
-
-PARAMETERS_DISPLAY_MODE = {
-    "a1": {
-        "value": "21",
-    },
-    "a3": {
-        "type": 1,
-        "value": lambda mode: mode,
-    },
-}
-
-#: The display timeout is a u16 of seconds.
-PARAMETERS_DISPLAY_TIMEOUT = {
-    "a1": {
-        "value": "21",
-    },
-    "a4": {
-        "type": 2,
-        "value": lambda seconds: Int16ul.build(seconds),  # noqa: PLW0108
-    },
-}
-
-PARAMETERS_DISPLAY_LANGUAGE = {
-    "a1": {
-        "value": "21",
-    },
-    "a9": {
-        "type": 1,
-        "value": lambda language: language,
     },
 }
 
@@ -309,73 +247,6 @@ PARAMETERS_OUTAGE_ALERT = {
         "value": lambda on: 1 if on else 0,
     },
 }
-
-#: Backup-plan group: a3 = 3 selects the backup plans, a4 the plan and a5
-#: switches it.
-CMD_BACKUP = "405e"
-BACKUP_GROUP = 3
-BACKUP_FAST_CHARGING_PLAN = 0
-BACKUP_STORM_GUARD = 1
-
-PARAMETERS_BACKUP_SWITCH = {
-    "a1": {
-        "value": "21",
-    },
-    "a3": {
-        "type": 1,
-        "value": BACKUP_GROUP,
-    },
-    "a4": {
-        "type": 1,
-        "value": lambda plan: plan,
-    },
-    "a5": {
-        "type": 1,
-        "value": lambda on: 1 if on else 0,
-    },
-}
-
-#: One backup plan record as the app writes it: a 100 the device reads, a byte
-#: it ignores, then the window's start and end epochs.
-BACKUP_PLAN_RECORD = Struct(
-    Const(100, Int8ub),
-    Const(0, Int8ub),
-    "start" / Int32ul,
-    "end" / Int32ul,
-)
-
-#: The Fast Charging Plan switched on with one window (a6 = 1 plan, a7 the
-#: plan record).
-PARAMETERS_BACKUP_WINDOW = {
-    "a1": {
-        "value": "21",
-    },
-    "a3": {
-        "type": 1,
-        "value": BACKUP_GROUP,
-    },
-    "a4": {
-        "type": 1,
-        "value": BACKUP_FAST_CHARGING_PLAN,
-    },
-    "a5": {
-        "type": 1,
-        "value": 1,
-    },
-    "a6": {
-        "type": 1,
-        "value": 1,
-    },
-    "a7": {
-        "type": 4,
-        "value": lambda start, end: BACKUP_PLAN_RECORD.build(
-            {"start": start, "end": end},
-        ),
-    },
-}
-
-#: Clock-screen group: the app writes only the tags that change.
-CMD_DISPLAY_PLAN = "4091"
 
 #: Clock-screen read and its reply, which names the clock theme.
 CMD_DISPLAY_THEME_NAME = "4092"
@@ -398,71 +269,9 @@ MSGTYPE_SUMMARY = 0x490
 #: Work status while a firmware update runs; absent from ChargingStatus.
 WORK_STATUS_UPDATING = 5
 
-#: Minutes in a day, the latest a display period may end.
-MINUTES_PER_DAY = 1440
-
-#: Largest clock theme number the a2 low bits can carry.
-MAX_CLOCK_THEME = 0x80
-
 #: Watt-hours per kWh, and the kWh digits the 0.1 Wh energy counters carry.
 WH_PER_KWH = 1000.0
 KWH_DIGITS = 4
-
-
-#: The 4091 tag, type and encoder of each display plan setting: the fields it
-#: carries, its type byte, and the value it sends. a2 holds both the
-#: screensaver (bit 7) and the clock theme (the low bits, 0-based).
-DisplayPlanTag = tuple[tuple[str, ...], int, Callable[[DisplayPlan], int | bytes]]
-
-DISPLAY_PLAN_TAGS: dict[str, DisplayPlanTag] = {
-    "a2": (
-        ("screensaver_enabled", "clock_theme"),
-        1,
-        lambda plan: (
-            (SCREENSAVER_BIT if plan.screensaver_enabled else 0)
-            | (plan.clock_theme - 1)
-        ),
-    ),
-    "a7": (("clock_24h",), 1, lambda plan: 1 if plan.clock_24h else 0),
-    "a8": (("day_start",), 2, lambda plan: Int16ul.build(plan.day_start)),
-    "a9": (("day_end",), 2, lambda plan: Int16ul.build(plan.day_end)),
-    "aa": (("weekdays",), 1, lambda plan: WeekdayMask.build(plan.weekdays)),
-    "ab": (("night_enabled",), 1, lambda plan: 1 if plan.night_enabled else 0),
-    "ac": (
-        ("day_brightness",),
-        1,
-        lambda plan: DISPLAY_PLAN_BRIGHTNESS.index(plan.day_brightness),
-    ),
-    "ad": (
-        ("night_brightness",),
-        1,
-        lambda plan: DISPLAY_PLAN_BRIGHTNESS.index(plan.night_brightness),
-    ),
-    "ae": (("night_start",), 2, lambda plan: Int16ul.build(plan.night_start)),
-    "af": (("night_end",), 2, lambda plan: Int16ul.build(plan.night_end)),
-}
-
-
-def _validate_display_plan(plan: DisplayPlan) -> None:
-    """Range-check a display plan before it is sent.
-
-    :param plan: The display plan.
-    :raises ValueError: If a setting is out of range.
-    """
-    minutes = (plan.day_start, plan.day_end, plan.night_start, plan.night_end)
-    if not all(0 <= value <= MINUTES_PER_DAY for value in minutes):
-        msg = f"Display periods must be 0-{MINUTES_PER_DAY} minutes from midnight"
-        raise ValueError(msg)
-    if not 1 <= plan.clock_theme <= MAX_CLOCK_THEME:
-        msg = f"Clock theme must be 1-{MAX_CLOCK_THEME}"
-        raise ValueError(msg)
-    if not plan.weekdays <= frozenset(range(7)):
-        msg = "Weekdays must be 0 (Monday) to 6 (Sunday)"
-        raise ValueError(msg)
-    brightness = (plan.day_brightness, plan.night_brightness)
-    if not all(value in DISPLAY_PLAN_BRIGHTNESS for value in brightness):
-        msg = f"Display brightness must be one of {DISPLAY_PLAN_BRIGHTNESS} %"
-        raise ValueError(msg)
 
 
 def _charging_status(code: int) -> ChargingStatus:
@@ -895,146 +704,6 @@ class C2000G2(C1000G2):
     # Commands #
     ############
 
-    async def turn_display_on(self) -> None:
-        """Turn the display on.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(cmd=CMD_SYSTEM, parameters=PARAMETERS_DISPLAY, on=True)
-
-    async def turn_display_off(self) -> None:
-        """Turn the display off.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_DISPLAY,
-            on=False,
-        )
-
-    async def set_display_mode(self, mode: LightStatus) -> None:
-        """Set the status/mode of the LCD display.
-
-        .. note::
-           The device keeps the display switch and its brightness as separate
-           settings, so OFF turns the display off and LOW/MEDIUM/HIGH set the
-           brightness without changing the switch.
-
-        :param mode: Mode/status to set display to (off/low/med/high).
-        :raises ValueError: If requested mode is invalid.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        if mode in (LightStatus.UNKNOWN, LightStatus.SOS):
-            msg = f"You cannot set the display brightness status to {mode.name}"
-            raise ValueError(msg)
-        if mode is LightStatus.OFF:
-            await self.turn_display_off()
-            return
-
-        await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_DISPLAY_MODE,
-            mode=mode.value,
-        )
-
-    async def set_display_timeout(self, timeout: DisplayTimeout) -> None:  # noqa: ASYNC109  # shared device API
-        """Set the display timeout.
-
-        :param timeout: Timeout to set the display to; S0 keeps it on.
-        :raises ValueError: If requested timeout is UNKNOWN.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        if timeout is DisplayTimeout.UNKNOWN:
-            msg = "You cannot set the display timeout to unknown"
-            raise ValueError(msg)
-
-        await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_DISPLAY_TIMEOUT,
-            seconds=timeout.value,
-        )
-
-    async def set_display_language(self, language: DisplayLanguage) -> None:
-        """Set the language of the display.
-
-        :param language: Language to set.
-        :raises ValueError: If the language is UNKNOWN.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        if language is DisplayLanguage.UNKNOWN:
-            msg = "You cannot set the display language to unknown"
-            raise ValueError(msg)
-
-        await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_DISPLAY_LANGUAGE,
-            language=language.value,
-        )
-
-    async def set_display_plan(self, plan: DisplayPlan) -> None:
-        """Change the display's clock screen and its day / night schedule.
-
-        Only the settings that differ from :attr:`display_plan` are sent, as
-        the app does, so build the plan from the current one, e.g.
-        ``dataclasses.replace(device.display_plan, clock_24h=False)``.
-
-        .. note::
-           Switching the night period off makes the device move the day
-           period's end to where the night period ended.
-
-        :param plan: The display plan to set.
-        :raises ValueError: If there is no display plan yet or a setting is
-            out of range.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        current = self.display_plan
-        if current is None:
-            msg = "No display plan has been received from the device yet"
-            raise ValueError(msg)
-        _validate_display_plan(plan)
-
-        parameters: dict[str, dict[str, object]] = {"a1": {"value": "21"}}
-        for tag, (fields, data_type, encode) in DISPLAY_PLAN_TAGS.items():
-            if any(getattr(plan, f) != getattr(current, f) for f in fields):
-                parameters[tag] = {"type": data_type, "value": encode(plan)}
-        if len(parameters) == 1:
-            return
-
-        await self._send_command(cmd=CMD_DISPLAY_PLAN, parameters=parameters)
-
-    async def set_ac_timer(self, seconds: int) -> None:
-        """Set the AC auto-off timer.
-
-        :param seconds: Seconds until AC output shuts off. Pass 0 to cancel.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(
-            cmd=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_TIMER,
-            seconds=seconds,
-        )
-
-    async def set_dc_timer(self, seconds: int) -> None:
-        """Set the DC (car socket) auto-off timer.
-
-        :param seconds: Seconds until DC output shuts off. Pass 0 to cancel.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(
-            cmd=CMD_DC_OUTPUT,
-            parameters=PARAMETERS_TIMER,
-            seconds=seconds,
-        )
-
     async def turn_ac_input_on(self) -> None:
         """Take power from the AC input again.
 
@@ -1087,92 +756,6 @@ class C2000G2(C1000G2):
             parameters=PARAMETERS_OUTAGE_ALERT,
             on=False,
         )
-
-    async def turn_fast_charging_plan_on(self) -> None:
-        """Turn the Fast Charging Plan on.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_SWITCH,
-            plan=BACKUP_FAST_CHARGING_PLAN,
-            on=True,
-        )
-
-    async def turn_fast_charging_plan_off(self) -> None:
-        """Turn the Fast Charging Plan off.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_SWITCH,
-            plan=BACKUP_FAST_CHARGING_PLAN,
-            on=False,
-        )
-
-    async def set_fast_charging_plan_window(
-        self,
-        start: datetime,
-        end: datetime | None = None,
-    ) -> None:
-        """Turn the Fast Charging Plan on for a window.
-
-        :attr:`fast_charging_plan_window` shows the stored window, and
-        :attr:`backup_window` the window while it runs.
-
-        :param start: Start of the window.
-        :param end: End of the window, or None for no end.
-        :raises ValueError: If the window ends before it starts.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        start_epoch = int(start.timestamp())
-        end_epoch = NO_END if end is None else int(end.timestamp())
-        if end_epoch <= start_epoch:
-            msg = "The Fast Charging Plan window must end after it starts"
-            raise ValueError(msg)
-
-        await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_WINDOW,
-            start=start_epoch,
-            end=end_epoch,
-        )
-
-    async def turn_storm_guard_on(self) -> None:
-        """Turn Storm Guard on.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_SWITCH,
-            plan=BACKUP_STORM_GUARD,
-            on=True,
-        )
-
-    async def turn_storm_guard_off(self) -> None:
-        """Turn Storm Guard off.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_SWITCH,
-            plan=BACKUP_STORM_GUARD,
-            on=False,
-        )
-
-    # The time-of-use plan (``4090``) is not settable here: the device stores
-    # it over BLE, but a period takes effect only while the unit is bound to
-    # an Anker account and on WiFi, so from a BLE-only client the write is
-    # accepted and never acts.
 
     async def get_status_update(self) -> ParameterDict:
         """Request and retrieve a status update from the device.

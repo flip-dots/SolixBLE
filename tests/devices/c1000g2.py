@@ -3,9 +3,12 @@
 .. moduleauthor:: Harvey Lelliott (flip-dots) <harveylelliott@duck.com>
 
 """
+from datetime import datetime
+
 import pytest
 
-from SolixBLE.devices.c1000g2 import C1000G2
+from SolixBLE.devices.c1000g2 import C1000G2, DisplayLanguage
+from SolixBLE.states import DisplayTimeout, LightStatus
 from tests.const import NEGOTIATION_RESPONSES_SOLIX
 
 ########################
@@ -93,6 +96,104 @@ C1000G2_TEST_COMMANDS = [
         [],
         [("4101", "a10121a7020100")],
         id="c1000g2_fast_charge_off",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_ac_timer",
+        [1200],
+        [("4101", "a10121a30503b0040000")],
+        id="c1000g2_ac_timer",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_dc_timer",
+        [7200],
+        [("4102", "a10121a30503201c0000")],
+        id="c1000g2_dc_timer",
+    ),
+    pytest.param(
+        C1000G2,
+        "turn_display_on",
+        [],
+        [("4103", "a10121a2020101")],
+        id="c1000g2_display_on",
+    ),
+    pytest.param(
+        C1000G2,
+        "turn_display_off",
+        [],
+        [("4103", "a10121a2020100")],
+        id="c1000g2_display_off",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_display_mode",
+        [LightStatus.LOW],
+        [("4103", "a10121a3020101")],
+        id="c1000g2_display_mode_low",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_display_mode",
+        [LightStatus.OFF],
+        [("4103", "a10121a2020100")],
+        id="c1000g2_display_mode_off",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_display_timeout",
+        [DisplayTimeout.S60],
+        [("4103", "a10121a403023c00")],
+        id="c1000g2_display_timeout_60",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_display_language",
+        [DisplayLanguage.JAPANESE],
+        [("4103", "a10121a9020104")],
+        id="c1000g2_display_language",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_display_plan",
+        [None],
+        ValueError,
+        id="c1000g2_display_plan_before_telemetry",
+    ),
+    pytest.param(
+        C1000G2,
+        "turn_fast_charging_plan_on",
+        [],
+        [("405e", "a10121a3020103a4020100a5020101")],
+        id="c1000g2_fast_charging_plan_on",
+    ),
+    pytest.param(
+        C1000G2,
+        "turn_fast_charging_plan_off",
+        [],
+        [("405e", "a10121a3020103a4020100a5020100")],
+        id="c1000g2_fast_charging_plan_off",
+    ),
+    pytest.param(
+        C1000G2,
+        "set_fast_charging_plan_window",
+        [datetime.fromtimestamp(1767225600)],  # noqa: DTZ006
+        [("405e", "a10121a3020103a4020100a5020101a6020101a70b04640000b95569ffffffff")],
+        id="c1000g2_fast_charging_plan_window_no_end",
+    ),
+    pytest.param(
+        C1000G2,
+        "turn_storm_guard_on",
+        [],
+        [("405e", "a10121a3020103a4020101a5020101")],
+        id="c1000g2_storm_guard_on",
+    ),
+    pytest.param(
+        C1000G2,
+        "turn_storm_guard_off",
+        [],
+        [("405e", "a10121a3020103a4020101a5020100")],
+        id="c1000g2_storm_guard_off",
     ),
 ]
 
