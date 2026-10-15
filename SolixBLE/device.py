@@ -73,7 +73,7 @@ _LOGGER = logging.getLogger(__name__)
 #: The UUID sent to the device during negotiation
 UUID_STRING = "b2dc0b17-b75d-4abf-ba6e-ec7c997c23e7"
 
-#: Message type handled as telemetry on every model (``0300`` / ``4300``)
+#: Message type handled as telemetry by default (``0300`` / ``4300``)
 TELEMETRY_MSGTYPE = 0x300
 
 
@@ -84,6 +84,10 @@ class SolixBLEDevice:
     #: override this if their model uses different telemetry command codes
     #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
     _TELEMETRY_COMMANDS: tuple[str, ...] = ("c402", "4300", "c405")
+
+    #: Message types handled as telemetry whatever :attr:`_TELEMETRY_COMMANDS`
+    #: lists. A model where one of them means something else sets this empty.
+    _ALWAYS_TELEMETRY_MSGTYPES: frozenset[int] = frozenset({TELEMETRY_MSGTYPE})
 
     #: Command codes (hex) that carry a settings/status snapshot for this
     #: device, separate from its regular telemetry stream (e.g the Prime
@@ -841,7 +845,7 @@ class SolixBLEDevice:
             # waiter or the stored state
             data_msgtypes = self._telemetry_msgtypes() | self._snapshot_msgtypes()
             if (
-                command.msgtype in data_msgtypes | {TELEMETRY_MSGTYPE}
+                command.msgtype in data_msgtypes | self._ALWAYS_TELEMETRY_MSGTYPES
                 and not Parameters.parse(payload)
             ):
                 _LOGGER.debug(f"Ignoring status-only {cmd.hex()}: {payload.hex()}")
@@ -897,7 +901,10 @@ class SolixBLEDevice:
         # Telemetry messages, matched on the message type whatever the
         # fragment and encryption flags (a clear 8405 is a c405)
         msgtype = PacketCommand.parse(cmd).msgtype
-        if msgtype == TELEMETRY_MSGTYPE or msgtype in self._telemetry_msgtypes():
+        if (
+            msgtype in self._ALWAYS_TELEMETRY_MSGTYPES
+            or msgtype in self._telemetry_msgtypes()
+        ):
             _LOGGER.debug(
                 "Received encrypted telemetry message!"
                 if encrypted

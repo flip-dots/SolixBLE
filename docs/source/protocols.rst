@@ -181,13 +181,18 @@ Receiving, on the telemetry characteristic:
       |                         (decrypts if 0x40 is set; see `Negotiation flow`_)
       |-- not 0x0f / 0x11       logged, dropped
       |-- encrypted?            _decrypt_payload() -> session.decrypt(), once
+      |-- status byte only, on  dropped: a bare status carries no data
+      |   a telemetry/snapshot
+      |   msgtype?
       |-- future for            future.set_result(payload)   (_listen_for_packet())
       |   channel + msgtype?    _future_key(): the composer and flags don't matter
       '-- otherwise             _process_session(cmd, payload, encrypted=...)
-                                  msgtype 0x300 or in _TELEMETRY_COMMANDS:
+                                  msgtype in _ALWAYS_TELEMETRY_MSGTYPES (0x300; none on the Primes) or in _TELEMETRY_COMMANDS:
                                     Parameters.parse()
                                     encrypted -> session.on_session_push()
                                     _process_telemetry() -> state callbacks
+                                  msgtype in _SNAPSHOT_COMMANDS:
+                                    _process_snapshot() -> state callbacks
                                   any other msgtype: logged
 
 - ``_send_command()`` raises ``ConnectionError`` until the device is negotiated; its ``cmd`` carries the flags as given (e.g ``4200``).
