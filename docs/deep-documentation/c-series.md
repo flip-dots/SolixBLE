@@ -294,6 +294,7 @@ The display-board MCU builds every telemetry frame; the comms module forwards th
 | `4900` | BLE, `03000f` | a `4100` the comms module can't decrypt | status `01` only, 17 B with the tag; from the module, not the display board ([framing.md](framing.md#status-byte)) |
 | `0421` / `0900` | MQTT `param_info`, `a1 34` | device cadence / reply to `0100` | the same TLV |
 | `4425` / `0425` | BLE and MQTT | a backup-plan window start or end, or a debounced grid loss | event report ("Event report") |
+| `4403` | BLE; `a1 44` to the cloud while cloud-bound and on WiFi | main SoC at 10 % or 1 %, or an output timer ran out | one event code ("Event push") |
 | `c490` | BLE notify, op `0x490` | every 540 s | protobuf statistics ("c490") |
 
 One field map serves `c421`, `c900` and `0421`. A changed setting appears in the next `c421` / `c900`; there is no separate change-report opcode. On MainMcu v1.2.1.6 a `c421` or `c900` runs to about 380 B, so it arrives in two fragments (253 B + the rest).
@@ -352,7 +353,7 @@ fe 05 03 | 00b95569
 | `a4` | AC timer 0 (off), AC input limit 1200 W, AC frequency 60 Hz, AC power-saving off, car timer 0, DC power-saving off, device timeout 0 (never), display timeout 60 s, brightness 3 (high), `[18]` 0, temperature unit 1 (°F), fast charge off, display off, port memory on, max SoC 95, min SoC 5, language 0 (English), `[26..30]` 0, flags `06` (outage alert on; AC input disabled by the app), `[32]` 0 |
 | `a5` | temperature 21 °C, charge_discharge_status 1 (discharging), battery_percentage 81, battery_health byte `e8` (SoH 1000 ‰, low byte), `00` |
 | `a6` | power_out 1 W, ac_power_in 0 W, DC input 0 W, remaining time 3100 = 310.0 h, main SoC 81 |
-| `a7` | ac_output 0 (off), ac_power_out 0 W, ac_input_status 2 (lead in, input disabled), AC input 0 W |
+| `a7` | ac_output 0 (off), ac_power_out 0 W, ac_input_status 2 (lead in, Battery-Only Power on), AC input 0 W |
 | `a8` | solar_port 0, solar_power_in 0 W |
 | `aa` / `ab` / `ac` | usb_port_c1 off 0 W · usb_port_c2 on 1 W · usb_port_c3 off 0 W |
 | `ae` / `b2` | usb_port_a1 off 0 W · dc_output off 0 W |
@@ -388,11 +389,11 @@ fe 05 03 | 00b95569
 | `a6` | 0:2 | SolixBLE `power_out` | u16 LE W: sum of all port outputs (AC, car socket, USB) |
 | `a6` | 2:4 | SolixBLE `ac_power_in` | u16 LE W |
 | `a6` | 4:6 | DC input power total | u16 LE W |
-| `a6` | 6:8 | remaining time (anker-solix-api `remaining_time_hours`) | u16 LE, 0.1 h: time to full when total port input > total output, else time to empty; `ffff` = no estimate |
+| `a6` | 6:8 | remaining time (anker-solix-api `remaining_time_hours`) | u16 LE, 0.1 h: time to full when total port input > total output, else time to empty; 10923 (1092.3 h) = no estimate on the chosen side, the BMS's `ffff` minutes scaled |
 | `a6` | 8 | main battery SoC | always equal to `a5[2]` |
 | `a7` | 0 | SolixBLE `ac_output` | AC output switch state |
 | `a7` | 1:3 | SolixBLE `ac_power_out` | u16 LE W; 0 unless AC output is on |
-| `a7` | 3 | `ac_input_status` (anker-solix-api) | mains lead present, whether or not power flows: 0 out, 1 in, 2 in with AC input disabled by `4101 ab` |
+| `a7` | 3 | `ac_input_status` (anker-solix-api) | mains lead present, whether or not power flows: 0 out, 1 in, 2 in with Battery-Only Power on (`4101 ab`) |
 | `a7` | 4:6 | AC input power | u16 LE W |
 | `a8` | 0 / 1:3 | SolixBLE `solar_port` / `solar_power_in` | the single XT-60 DC input (solar, car socket or alternator); status, u16 LE W. The app's `pv1ChargeStatus`, `pv1InputPower` and `carChargerInputPower` all name this one port |
 | `aa` / `ab` / `ac` | 0 / 1:3 | SolixBLE `usb_port_c1` … `c3`, `usb_c1_power` … | USB-C status, u16 LE W |
@@ -458,10 +459,13 @@ Each byte and the setter that writes it.
 | `[24]` | `min_soc` | `4103 ab` |
 | `[25]` | `display_language` (app `deviceLanguage`): 0 English, 1 Chinese, 2 French, 3 German, 4 Japanese | `4103 a9` |
 | `[26..30]` | 0 | — |
-| `[31]` | bit 1 `outage_alert_switch` (app `outageAlertSwitch`); bits 2–3 `ac_input_disable_state`: 0 AC input accepted, 1 disabled by `4101 ab`, 2 no mains plugged in (which also clears the disable) | `4103 b0` / `4101 ab` |
+| `[31]` | bit 1 `outage_alert_switch` (app `outageAlertSwitch`); bits 2–3 `ac_input_disable_state`: 0 AC input accepted, 1 disabled by `4101 ab`, 2 auto-off: no mains plugged in, or the main pack at `min_soc` (either one also clears the disable); no other value | `4103 b0` / `4101 ab` |
 | `[32]` | 0 | — |
 
-Bytes 26–32 exist from MainMcu v1.2.1.6. Example sequence on `[31]` (A1783): `08` → `00` mains plugged in → `02` outage alert on → `06` AC input disabled (`a7[3]` 1 → 2) → `02` disable off.
+Bytes 26–32 exist from MainMcu v1.2.1.6. Example sequences on `[31]` (A1783):
+
+- `08` → `00` mains plugged in → `02` outage alert on → `06` AC input disabled (`a7[3]` 1 → 2) → `02` disable off.
+- With mains in and Battery-Only Power on: `06` → `0a` as the main pack reaches `min_soc` (auto-off, `a7[3]` 2 → 1) → `02` once its SoC is back above the floor ("Battery-Only Power at the floor").
 
 ### Flow state
 
@@ -491,7 +495,7 @@ Two bytes report charge / discharge, from different sources:
 
 | field | reports |
 |---|---|
-| `a7[3]` | the mains lead is plugged in, whether or not power flows (1 at 0 W) |
+| `a7[3]` | the mains lead is plugged in, whether or not power flows (1 at 0 W); 2 = plugged in with Battery-Only Power on |
 | `a8[0]` | a DC source attached; `solar_power_in` is 0 when the pack is above its cap |
 | `c0[30]` | an expansion attached |
 
@@ -602,7 +606,7 @@ Handled by the display board. Every request carries `a1 01 21`; examples omit th
 | `a9` | — | — | language (`a4[25]`) |
 | `aa` | — | — | max SoC (`a4[23]`, `d9[3]`); lowers the TOU reserve to it |
 | `ab` | AC input disable, u16, app `acInputDisableSwitch` ("Battery-Only Power") | — | min SoC (`a4[24]`, `d9[4]`); raises the TOU reserve to min + 5 |
-| `b0` | — | — | AC off-grid (outage) alert, `a4[31]` bit 1; applied only when the tag's value is longer than 1 byte |
+| `b0` | — | — | AC off-grid (outage) alert, `a4[31]` bit 1; applied only when a value follows the type byte (the length byte > 1) |
 
 SolixBLE's `turn_ac_on` / `turn_ac_off` send `4101 a2 02 01 01` / `00`, and `turn_dc_on` / `turn_dc_off` send `4102 a2`.
 
@@ -620,7 +624,7 @@ Requests as the app sends them (BLE form):
 
 - `4101 a2` and `4103 a2` act only when the value differs from the current state.
 - The app pairs `4101 a4` with `ab 03 02 0000`: the maximum AC input with AC input enabled.
-- `4101 ab`: 1 = AC input off and fast charge off ("Battery-Only Power": loads draw from the battery only, grid charging and TOU can't run); 0 = AC input on. The disable is held in RAM: the firmware clears it on the BMS low-battery fault (the app says below 5 %), when mains is unplugged, and on a restart.
+- `4101 ab`: 1 = AC input off and fast charge off ("Battery-Only Power": loads draw from the battery only, grid charging and TOU can't run); 0 = AC input on. The disable is held in RAM: the firmware clears it when the main pack reaches `min_soc` ("Battery-Only Power at the floor"), when mains is unplugged, and on a restart.
 - `4102 a2`: switching the car socket on or off, by command or by the button, triggers a USB-PD renegotiation on the USB-C ports, so a `b2[0]` edge explains a USB-C port-power drop and a recharge burst (A1783).
 - The app's AC and car invoke parameters are named `acInputStatus` / `carChargerInputStatus`, but the UI actions are `setACOutputSwitch` / `setDCOutputSwitch`: they are the output toggles. The app's property names for the real output states are `acOutputStatus` / `carCharge1OutputStatus`.
 - App picker values on the A1783 (examples, not the accepted range): `4101 a3` 300 / 7200 s; `4101 a4` 500–1800 W; `4102 a3` 0 / 600 / 3600 / 7200 / 40500 s; `4103 a4` 10 / 20 / 30 / 60 / 300 / 1800 s; `4103 a6` 0 / 360 / 720 min. anker-solix-api offers 0 (never), 10, 20, 30, 60, 300 and 1800 s for `4103 a4` and 0, 30, 60, 120, 240, 360, 720 and 1440 min for `4103 a6`.
@@ -865,6 +869,21 @@ Device-initiated (app `ReportPpsEventInfo`), on BLE as `4425` and on MQTT as `04
 ```
 
 Start vs end compares the newly active window type with the stored one; the epochs are the running window's (the `d9` tail's last pair).
+
+### Event push (`4403`)
+
+Device-initiated (op `0x403`), one frame per event: `a1 01 <routing>`, `a2 02 01 <code>`. Routing is `31` (sent on BLE), or `44` to the cloud while the unit is cloud-bound and on WiFi.
+
+| code | trigger |
+|---|---|
+| `50` | main SoC ≤ 1 % for 3 BMS updates; re-arms once SoC is above 1 % |
+| `52` | main SoC ≤ 10 % for 3 BMS updates; re-arms once SoC is above 10 % |
+| `55` | the AC output timer (`4101 a3`) ran out |
+| `56` | the car-socket timer (`4102 a3`) ran out |
+
+```
+4403  a1 01 31 | a2 02 01 52     main SoC reached 10 % (A1783: in the c421 where a5[2] went 11 → 10)
+```
 
 ### Module-owned session ops (channel 0x0f, opcode < `0x40`)
 
@@ -1161,6 +1180,23 @@ C2000 Gen 2 with a BP2000 attached (A1783). The packs are switched onto one bus,
 
 - The charge-side handover is a live step down in bus voltage (e.g. 54.9 → 51.3 V as charge moves from a 98 % main to a 6 % expansion); a discharge handover keeps the load continuous.
 - With main 100 %, expansion 56 % and the unit idle, `4103 aa 02 01 64 · ab 02 01 3c` (floor 60) makes the expansion ineligible: the next `c490` shows the main on the bus. There is no rejection or warning; the expansion's charge is stranded until the floor is lowered, and even then the main keeps the bus until its own SoC has dropped ≥ 1.0 %.
+
+### Battery-Only Power at the floor
+
+With Battery-Only Power on (`4101 ab`) and mains plugged in, the packs discharge as if off-grid. When the main pack reaches `min_soc`, the firmware drops the mode and charges from mains. It fires when the main pack's SoC falls below `min_soc` + 0.9 % (or, as a separate backstop, a cell below 1.8 V), and releases once SoC is back above `min_soc` + 0.9 %; each change holds for two BMS updates first. A1783, `min_soc` 5, the expansion already at its floor:
+
+| t | event |
+|---|---|
+| 0 | main 6 → 5 % |
+| +54 s | `dc` = 3 (low battery) with its epoch; `a4[31]` `06` → `0a` (auto-off); `a7[3]` 2 → 1; `a5[1]` 1 → 0; output (`a6[0:2]`) → 0 W |
+| +58 – 63 s | AC input 96 → 609 → 1 227 W; `a3[0]` → 2 |
+| +98 s | main 5 → 6 % |
+| +99 s | `dc` cleared; `a4[31]` → `02` |
+| +102 s | output back |
+
+- Output stays off for the whole span `dc` reads 3 (here 45 s), however much mains charge flows; it returns once the main pack's SoC is above `min_soc`.
+- The mode stays off afterwards (`a4[31]` `02`): the unit then charges from mains like a normal grid-connected unit, main first to `max_soc`, then the expansion ("Pack selection").
+- The `4403` code `52` arrives earlier, at 10 % ("Event push").
 
 ### Firmware updates
 
