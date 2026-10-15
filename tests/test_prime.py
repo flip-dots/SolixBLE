@@ -11,7 +11,7 @@ import pytest
 from SolixBLE.const import DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_INT
 from SolixBLE.constructs import PORT_RECORD, Channel, Packet, PacketCommand, Parameters
 from SolixBLE.prime_device import PrimeDevice
-from SolixBLE.states import PortStatus
+from SolixBLE.states import PortSchedule, PortStatus, PortTimer
 from tests.const import MOCK_BLE_DEVICE
 from tests.helpers import install_session_keys
 
@@ -200,3 +200,60 @@ def test_snapshot_absent_defaults() -> None:
 
     assert prime._snapshot_int("b0") == DEFAULT_METADATA_INT  # noqa: SLF001
     assert prime._snapshot_struct("aa", PORT_RECORD) is None  # noqa: SLF001
+    assert prime._port_schedule("aa") is None  # noqa: SLF001
+    assert prime._port_timer("aa") is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("record", "schedule", "timer"),
+    [
+        pytest.param(
+            "01ff0c0000ff0c0000005802000000000000" + "00",
+            PortSchedule(
+                on_time_enabled=None,
+                on_time_hour=12,
+                on_time_minute=0,
+                on_time_weekdays=frozenset(),
+                off_time_enabled=None,
+                off_time_hour=12,
+                off_time_minute=0,
+                off_time_weekdays=frozenset(),
+            ),
+            PortTimer(enabled=False, seconds=600, remaining=0),
+            id="idle_port_never_set",
+        ),
+        pytest.param(
+            "01" + "01071e1f" + "0016007f" + "01" + "100e0000" + "2c010000" + "02",
+            PortSchedule(
+                on_time_enabled=True,
+                on_time_hour=7,
+                on_time_minute=30,
+                on_time_weekdays=frozenset(range(5)),
+                off_time_enabled=False,
+                off_time_hour=22,
+                off_time_minute=0,
+                off_time_weekdays=frozenset(range(7)),
+            ),
+            PortTimer(enabled=True, seconds=3600, remaining=300),
+            id="weekday_on_time_and_armed_timer",
+        ),
+    ],
+)
+async def test_port_schedule_and_timer(
+    record: str,
+    schedule: PortSchedule,
+    timer: PortTimer,
+) -> None:
+    """A port's snapshot record reads as its schedule and countdown timer.
+
+    The idle record is prime-a2345-a91b2.md's: both schedule halves unset
+    (``ff``, stale 12:00) and a disarmed timer keeping its 600 s duration.
+    """
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+    await prime._process_snapshot(  # noqa: SLF001
+        Parameters.parse(bytes.fromhex("aa1404" + record)),
+    )
+
+    assert prime._port_schedule("aa") == schedule  # noqa: SLF001
+    assert prime._port_timer("aa") == timer  # noqa: SLF001

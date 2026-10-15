@@ -37,6 +37,7 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     Int32ul,
     Nibble,
     Optional,
+    Padding,
     RawCopy,
     Rebuild,
     Struct,
@@ -658,6 +659,20 @@ One half (on-time or off-time) of a Prime port's daily schedule.
 ``enabled`` is ``0``/``1``, or ``0xff`` when this half has never been set -
 the hour and minute then hold a stale default (``12:00``), so gate on
 ``enabled`` rather than the time.
+"""
+
+#: :data:`SCHEDULE_TRIGGER`'s ``enabled`` byte for a half never set.
+SCHEDULE_UNSET = 0xFF
+
+DISPLAY = BitStruct(
+    "on" / Flag,
+    Padding(1),
+    "theme" / BitsInteger(6),
+)
+"""
+A Prime device's display byte (A2345 snapshot ``af[0]``, A91B2 ``ac``): the
+clock display's on/off state in bit 7 and its theme index, from 0, in bits
+0-5. The bit between is the A2345's holiday mode.
 """
 
 TIMER_SETTING = Struct(

@@ -13,6 +13,7 @@ from SolixBLE.constructs import (
     PORT_READING,
     PORT_RECORD,
     SCHEDULE_TRIGGER,
+    SCHEDULE_UNSET,
     TIMER_SETTING,
     Channel,
     Composer,
@@ -30,9 +31,6 @@ WIFI_CHANNEL = 0x13
 
 #: Message type of the capability reply.
 CAPABILITY_REPLY = 0x803
-
-#: SCHEDULE_TRIGGER's enable byte when a schedule half has never been set.
-SCHEDULE_UNSET = 0xFF
 
 
 @pytest.mark.parametrize(
