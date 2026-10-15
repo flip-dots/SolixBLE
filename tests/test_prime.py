@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 
 from SolixBLE.const import DEFAULT_METADATA_FLOAT, DEFAULT_METADATA_INT
-from SolixBLE.constructs import PORT_RECORD, Packet, Parameters
+from SolixBLE.constructs import PORT_RECORD, USB_PD_IDENTITIES, Packet, Parameters
 from SolixBLE.prime_device import PrimeDevice
 from SolixBLE.states import PortSchedule, PortStatus, PortTimer
 from tests.const import MOCK_BLE_DEVICE
@@ -22,6 +22,15 @@ OWNER_TOKEN = "owner-token"  # noqa: S105
 A4_VOLTAGE = 19.712
 A4_CURRENT = 0.435
 A4_POWER = 7.88
+
+#: A2345 per-USB-C PD vendor/product IDs: the worked snapshot's ``bd``
+#: (Apple on USB-C 1 and 2), and a stream ``a8`` with no device anywhere.
+SNAPSHOT_PD_IDS = "ac051173" + "ac051771" + "fafffbff" + "00000000"
+STREAM_PD_IDS = "fafffbff" * 4
+
+#: USB-C 1's vendor ID in each of those.
+APPLE_VID = 0x05AC
+NO_DEVICE_VID = 0xFFFA
 
 
 @pytest.mark.parametrize(
@@ -194,6 +203,29 @@ async def test_snapshot_struct_too_short_for_required_prefix() -> None:
     assert record is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reset_data", "kept"),
+    [
+        pytest.param(True, False, id="reset_data_clears_snapshot"),
+        pytest.param(False, True, id="session_only_keeps_snapshot"),
+    ],
+)
+async def test_reset_session_snapshot(
+    reset_data: bool,  # noqa: FBT001
+    kept: bool,  # noqa: FBT001
+) -> None:
+    """A data reset drops the last snapshot with the stream data."""
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+    await prime._process_snapshot(  # noqa: SLF001
+        Parameters.parse(bytes.fromhex("b0020101")),
+    )
+
+    prime._reset_session(reset_data=reset_data)  # noqa: SLF001
+
+    assert (prime._snapshot_int("b0") == 1) is kept  # noqa: SLF001
+
+
 def test_snapshot_absent_defaults() -> None:
     """A snapshot tag never received reads as the default/None."""
     prime = PrimeDevice(MOCK_BLE_DEVICE)
@@ -257,3 +289,41 @@ async def test_port_schedule_and_timer(
 
     assert prime._port_schedule("aa") == schedule  # noqa: SLF001
     assert prime._port_timer("aa") == timer  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "snapshot", "usb_c1_vid"),
+    [
+        pytest.param(
+            "a81104" + STREAM_PD_IDS,
+            "bd1104" + SNAPSHOT_PD_IDS,
+            NO_DEVICE_VID,
+            id="stream_wins",
+        ),
+        pytest.param(None, "bd1104" + SNAPSHOT_PD_IDS, APPLE_VID, id="snapshot_only"),
+        pytest.param(
+            "a80504" + STREAM_PD_IDS[:8],
+            "bd1104" + SNAPSHOT_PD_IDS,
+            APPLE_VID,
+            id="short_stream_falls_back",
+        ),
+        pytest.param("a81104" + STREAM_PD_IDS, None, NO_DEVICE_VID, id="stream_only"),
+        pytest.param(None, None, None, id="neither"),
+    ],
+)
+async def test_stream_or_snapshot(
+    stream: str | None,
+    snapshot: str | None,
+    usb_c1_vid: int | None,
+) -> None:
+    """A field reads from the stream's tag, else from the snapshot's own tag."""
+    prime = PrimeDevice(MOCK_BLE_DEVICE)
+    if stream is not None:
+        await prime._process_telemetry(Parameters.parse(bytes.fromhex(stream)))  # noqa: SLF001
+    if snapshot is not None:
+        await prime._process_snapshot(Parameters.parse(bytes.fromhex(snapshot)))  # noqa: SLF001
+
+    ids = prime._stream_or_snapshot("a8", "bd", USB_PD_IDENTITIES)  # noqa: SLF001
+
+    assert (None if ids is None else ids.usb_c1.vid) == usb_c1_vid

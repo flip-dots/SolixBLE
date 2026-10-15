@@ -427,6 +427,30 @@ class PrimeDevice(SolixBLEDevice):
             return DEFAULT_METADATA_FLOAT
         return float(getattr(reading, field)) / scale
 
+    def _stream_or_snapshot(
+        self, stream_key: str, snapshot_key: str, struct: Construct,
+    ) -> Container | None:
+        """Read a field from the latest stream frame, else from the snapshot.
+
+        .. note::
+           :collapsible: closed
+
+           The ``4303`` stream arrives about every second while a ``420b``
+           burst runs, the ``4a00`` snapshot only when requested. A field
+           both carry reads from the stream while it has one, and from the
+           snapshot otherwise. The two may use different tags for the same
+           field (the A2345 stream's ``a8`` is the snapshot's ``bd``).
+
+        :param stream_key: The field's tag in the stream.
+        :param snapshot_key: The same field's tag in the snapshot.
+        :param struct: The construct to parse the field with.
+        :returns: The parsed value, or None if neither carries it in full.
+        """
+        value = self._tag(stream_key, struct)
+        if value is not None:
+            return value
+        return self._snapshot_struct(snapshot_key, struct)
+
     def _snapshot_int(self, key: str, field: Construct = Int8ub) -> int:
         """Parse a snapshot tag as a plain integer.
 
