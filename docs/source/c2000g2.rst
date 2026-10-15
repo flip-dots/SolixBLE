@@ -29,12 +29,4 @@ regular telemetry doesn't carry.
    :members:
    :undoc-members:
 
-.. autoclass:: SolixBLE.devices.c2000g2.TariffType
-   :members:
-   :undoc-members:
-
 .. autoclass:: SolixBLE.devices.c2000g2.DeviceEvent
-
-.. autoclass:: SolixBLE.devices.c2000g2.DisplayPlan
-
-.. autoclass:: SolixBLE.devices.c2000g2.TouPeriod

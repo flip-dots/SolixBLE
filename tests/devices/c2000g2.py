@@ -11,16 +11,18 @@ from datetime import datetime
 import pytest
 
 from SolixBLE.constructs import Parameters
-from SolixBLE.devices.c1000g2 import DisplayLanguage
+from SolixBLE.devices.c1000g2 import (
+    DisplayLanguage,
+    DisplayPlan,
+    TariffType,
+    TouPeriod,
+)
 from SolixBLE.devices.c2000g2 import (
     C2000G2,
     AcInputState,
     BmsFault,
     DeviceEventType,
-    DisplayPlan,
     OtaBlockReason,
-    TariffType,
-    TouPeriod,
 )
 from SolixBLE.states import ChargingStatus, DisplayTimeout, LightStatus, PortStatus
 
