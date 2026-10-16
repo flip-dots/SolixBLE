@@ -190,6 +190,9 @@ class PrimeChargingStation240w(PrimeDevice):
     #: The plain outer when no advertisement says otherwise; see the class note.
     _OUTER_HINT: type[Outer] = PlainOuter
 
+    #: Write without response, as the app writes every packet to this station.
+    _COMMAND_WRITE_RESPONSE = False
+
     #: The plain outer's client id, whose first 16 bytes also key the legacy
     #: confer; the station has been run with this one.
     _UUID_STRING: str = UUID_STRING
