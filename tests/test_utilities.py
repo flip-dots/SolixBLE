@@ -5,11 +5,13 @@ Tests for the module utilities.
 """
 
 import time
+from collections.abc import Callable
 from unittest import mock
 
 import pytest
 
 from SolixBLE.const import NEGOTIATION_AAD, NEGOTIATION_KEY, NEGOTIATION_NONCE
+from SolixBLE.protocols import ecdh
 from SolixBLE.utilities import (
     _offset_seconds_west,
     cbc_decrypt,
@@ -116,6 +118,22 @@ def test_util_ecdh_agreement() -> None:
     secret = ecdh_shared_secret(key_a, public_b)
     assert secret == ecdh_shared_secret(key_b, public_a)
     assert len(secret) == ECDH_SECRET_LENGTH
+
+
+def test_util_pinned_shared_secret(
+    pin_shared_secret: Callable[[bytes, bytes], None],
+) -> None:
+    """A pinned device point derives its recorded secret; any other derives as usual."""
+    key = generate_ecdh_key()
+    pinned_point = ecdh_public_bytes(generate_ecdh_key())
+    other_point = ecdh_public_bytes(generate_ecdh_key())
+    recorded = bytes(range(ECDH_SECRET_LENGTH))
+    pin_shared_secret(pinned_point, recorded)
+    assert ecdh.ecdh_shared_secret(key, pinned_point) == recorded
+    assert ecdh.ecdh_shared_secret(key, other_point) == ecdh_shared_secret(
+        key,
+        other_point,
+    )
 
 
 @pytest.mark.parametrize(
