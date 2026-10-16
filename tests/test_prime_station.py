@@ -3,6 +3,8 @@
 .. moduleauthor:: kb1ibt
 """
 
+from collections.abc import Callable
+
 import pytest
 
 from SolixBLE import (
@@ -95,6 +97,45 @@ SCHEDULE = PortSchedule(
     off_time_minute=0,
     off_time_weekdays=frozenset({2}),
 )
+
+#: The station's own negotiation, recorded with the app on firmware 1.1.2.4 with
+#: its serial and MAC replaced: the reply to each request from 0001 to the 4022
+#: clock, then the key exchange's device point and the ECDH secret logged with it.
+NEGOTIATION_RESPONSES_A91B2 = [
+    "ff090e00030001080100a1010152",
+    "ff091b00030001080300a10102a202fd00a30144a40101a50100fd",
+    (
+        "ff093800030001082900a10103a2054553503332a307302e302e302e33a4104146594a54423030"
+        "3030303030303031a506aa12deadbeefa9"
+    ),
+    "ff090b00030001080500f2",
+    (
+        "ff094d00030001082100a140fccf38a6746bf54b24ff6e2d92749453130166f164a254d87e28ec"
+        "e241103d27713508b60631bda7bc49821707f4ecc1b8004bad252df2e83a358c1a0fb1b7f65b"
+    ),
+    "ff091a00030001482290f4031b73ab373949134d75606d342055",
+]
+DEVICE_POINT_A91B2 = bytes.fromhex(
+    "fccf38a6746bf54b24ff6e2d92749453130166f164a254d87e28ece241103d27713508b60631bd"
+    "a7bc49821707f4ecc1b8004bad252df2e83a358c1a0fb1b7f6",
+)
+SHARED_SECRET_A91B2 = bytes.fromhex(
+    "cb147b95828b20d1f7e11acbc40c877c314410561bbf296e8f280abb8156c1ef",
+)
+
+#: The same session's 4a00 snapshot, the reply to the post-authorize 4200.
+SNAPSHOT_A91B2 = (
+    "ff09fa0003010f4a0090ec521a93557b89a828133ab7f456deb87b14688cc3b01f1bc91ca4d6a43aa4"
+    "bb62f26a5b47091cb06c21152e5cf7506ec067d53039ff00e8ba9dfa4bfbebed4ea05a010bc1fac386"
+    "60d9fcd848bfebae803a5558242edbb64bdc69a7efe52a0382b6d0148226e833d93d5ec00bd4462881"
+    "89b84c6331a85d4d9aab78ae8a2aea69834bfb5f899391a52fbf1e919daeb4abbdfabd3f29976b9c0b"
+    "79f6331afbe08f6a5d1052165915bbdb719bc67d5cc2b097edd58063f94c21b61bcce02b0c403eb111"
+    "ef6846f30f65c0eb9694338f6763a03cadcbf123cfb03cbee3400b70d1df2177f7920fd0432354f1de"
+    "3d0f85e1"
+)
+
+#: The serial the recording carries in place of the station's own.
+RECORDED_SERIAL = "AFYJTB0000000001"
 
 
 def test_defaults_before_any_frame() -> None:
@@ -337,22 +378,23 @@ async def test_negotiates_plainly_then_requests_only_the_snapshot(
     fake_time: None,  # noqa: ARG001
     fast_sleep: None,  # noqa: ARG001
     fast_timeouts: None,  # noqa: ARG001
+    pin_shared_secret: Callable[[bytes, bytes], None],
 ) -> None:
-    """With no advertisement it opens on the plain outer, then sends just 4200."""
+    """Its recorded negotiation runs on the plain outer, then just 4200 is sent."""
+    pin_shared_secret(DEVICE_POINT_A91B2, SHARED_SECRET_A91B2)
     device = PrimeChargingStation240w(MOCK_BLE_DEVICE)
     device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
     assert device._outer_class is PlainOuter  # noqa: SLF001
 
     async with MockDevice() as mock_bluetooth:
-        for responses in NEGOTIATION_RESPONSES_SOLIX.values():
-            mock_bluetooth.expect_ordered(
-                None,
-                [bytes.fromhex(response) for response in responses],
-            )
-        mock_bluetooth.expect_ordered(None)
+        for response in NEGOTIATION_RESPONSES_A91B2:
+            mock_bluetooth.expect_ordered(None, [bytes.fromhex(response)])
+        mock_bluetooth.expect_ordered(None, [bytes.fromhex(SNAPSHOT_A91B2)])
         assert await device.connect()
         mock_bluetooth.check_assertions()
 
+    assert device.serial_number == RECORDED_SERIAL
+    assert device.software_version == "1.1.2.4"
     assert set(mock_bluetooth.write_responses) == {False}
     opening = Packet.parse(mock_bluetooth.writes[0])
     assert PacketCommand.build(opening).hex() == "0001"
