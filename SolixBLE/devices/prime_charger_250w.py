@@ -231,6 +231,9 @@ class PrimeCharger250w(PrimeDevice):
     This model is also known as the A2345.
     """
 
+    #: Write without response, as the app writes every packet to this charger.
+    _COMMAND_WRITE_RESPONSE = False
+
     #: The stream carries the six ports at a2-a7.
     _TELEMETRY_COMMANDS = ("4303",)
 
