@@ -308,6 +308,9 @@ class C2000G2(C1000G2):
 
     _OUTER_HINT = EncryptedOuter
 
+    #: Write without response, as the app writes every packet to this station.
+    _COMMAND_WRITE_RESPONSE = False
+
     def __init__(
         self,
         ble_device: BLEDevice,
