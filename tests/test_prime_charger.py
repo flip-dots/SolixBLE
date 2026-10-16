@@ -3,6 +3,7 @@
 .. moduleauthor:: kb1ibt
 """
 
+from collections.abc import Callable
 from unittest import mock
 
 import pytest
@@ -17,7 +18,7 @@ from SolixBLE.devices.prime_charger_250w import (
     KnobDirection,
     ScreensaverWindow,
 )
-from SolixBLE.protocols import NegotiatedSession
+from SolixBLE.protocols import EncryptedOuter, NegotiatedSession
 from SolixBLE.states import (
     ClockFormat,
     ClockTheme,
@@ -132,6 +133,60 @@ STREAM_IDENTITY_LIST = [
     (DEFAULT_METADATA_INT, DEFAULT_METADATA_INT, None),
 ]
 
+#: The charger's own negotiation, recorded on the encrypted outer with its serial
+#: and MAC replaced: the reply to each request from 4001 to the 4027
+#: registration, then the key exchange's device point and the ECDH secret logged
+#: with it.
+NEGOTIATION_RESPONSES_A2345 = [
+    "ff091e000300014801ab273ed3e27270c3f4d676ac7d69a00572793732a6",
+    (
+        "ff092b000300014803ab273ed04438d4b25db54c6d4a6ec3d481f5ad58ff7cc2be8bc8369fd98c"
+        "0b914e03"
+    ),
+    (
+        "ff0948000300014829ab273ed1443f6ce1ae873a6a4c5f48e5ad49ade39ef481d3babeaa140461"
+        "cb0ee0aafc774ea71639137ec8a415329a4c14fe733d70d8967c44c27aedf2bc49"
+    ),
+    "ff091b000300014805abab709a595a803dd04246b78a927453cf65",
+    (
+        "ff095d000300014821ab277febf6ce9532e6d27425a23af4fa577ba109982703a0ad73a3669c6b"
+        "f8b13efb30a6a125bb85e8db4ae33e5441cdf40defd4adc7168c03a732476accbb5870685351e6"
+        "4ea6516ec13857b1680eb7b49ab1c0"
+    ),
+    "ff091b0003000148221b909c47e3c3ab58249d97800bd59b132ed0",
+    "ff091b0003000148271b909c47e3c3ab58249d97800bd59b132ed5",
+]
+DEVICE_POINT_A2345 = bytes.fromhex(
+    "3910f4bc8018667cece955922fd40222d9a2c3c3225b9c4330a83a038fee61fce1dfb308ba51b7"
+    "5cea95898a91a75cc185a5535912a8f5a51b87a137117c1b3d",
+)
+SHARED_SECRET_A2345 = bytes.fromhex(
+    "69b28b02183f1c538565ddf215038801cb35c582c78e06f4b14393dd8ba12b97",
+)
+
+#: The same session's replies to the post-authorize requests: the ca00 snapshot
+#: in two fragments for 4200, and 4a0a for 420a.
+SNAPSHOT_A2345 = [
+    (
+        "ff09fd0003010fca00121b1d9a51688a7946b711df542f03516ac419448d297b9989d46290221b"
+        "ea7e5867abe0f935cd6b4e760079acdbfd104f899512e130aef06b832d32733a929e1098796688"
+        "bb100f65a70885c88ca730aefcbf9b939f3389f4c0dc7cf9d309ec2104c2a231b2130fdefc15a3"
+        "73095e7b9017ee90902b42937d477f2c6fae4ef9eadc94caf0a1cb2bc8f384db619e6573b2bf00"
+        "d2eb2edceb6c34aaa5b712e6d0875e93e163d958b60aa0a83a4aaa3f05a7c25eb4e55ff37a0306"
+        "1826c4c23a766d92888b580a9d1bec8ff271418a916598490da974be9f075acb98f71e23ded198"
+        "3df6109599a1729b989e629ca31788d79182c7"
+    ),
+    (
+        "ff09650003010fca002243f98947e7cb9c9f467f4ee58a7ecf90572867f22ec71b9b25a19135ff"
+        "eaf41994c2c1bf33904b4f1db4a4faa5d0f30671c39f61b8edace9361c1453abd379d010ed3e9a"
+        "f5ae44556f1bb82359dc4bf9be39bdb5ea36ae43caa941"
+    ),
+]
+REGION_REPLY_A2345 = "ff091e0003010f4a0a1b1d9a512416d6797545e461b5fdb94e0049fbde93"
+
+#: The serial the recording carries in place of the charger's own.
+RECORDED_SERIAL = "AQLQJB0000000001"
+
 
 @pytest.mark.asyncio
 async def test_snapshot_fills_snapshot_not_telemetry() -> None:
@@ -219,6 +274,37 @@ def test_serial_number_from_announcement() -> None:
     device._session = NegotiatedSession(device._outer_class(), device)  # noqa: SLF001
     device._session.announcement.serial = TEST_SERIAL.encode()  # noqa: SLF001
     assert device.serial_number == TEST_SERIAL
+
+
+@pytest.mark.asyncio
+async def test_connects_with_its_recorded_negotiation(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+    pin_shared_secret: Callable[[bytes, bytes], None],
+) -> None:
+    """Its recorded negotiation runs on the encrypted outer, then 4200 and 420a."""
+    pin_shared_secret(DEVICE_POINT_A2345, SHARED_SECRET_A2345)
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+    assert device._outer_class is EncryptedOuter  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        for response in NEGOTIATION_RESPONSES_A2345:
+            mock_bluetooth.expect_ordered(None, [bytes.fromhex(response)])
+        mock_bluetooth.expect_ordered(
+            None,
+            [bytes.fromhex(fragment) for fragment in SNAPSHOT_A2345],
+        )
+        mock_bluetooth.expect_ordered(None, [bytes.fromhex(REGION_REPLY_A2345)])
+        assert await device.connect()
+        mock_bluetooth.check_assertions()
+
+    sent = [Packet.parse(write).cmd.hex() for write in mock_bluetooth.writes]
+    assert sent[-2:] == ["4200", "420a"]
+    assert device.serial_number == RECORDED_SERIAL
+    assert device.software_version == "2.1.1.6"
+    assert set(mock_bluetooth.write_responses) == {False}
 
 
 def test_settings_default_before_any_snapshot() -> None:
