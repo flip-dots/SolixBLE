@@ -353,6 +353,7 @@ async def test_negotiates_plainly_then_requests_only_the_snapshot(
         assert await device.connect()
         mock_bluetooth.check_assertions()
 
+    assert set(mock_bluetooth.write_responses) == {False}
     opening = Packet.parse(mock_bluetooth.writes[0])
     assert PacketCommand.build(opening).hex() == "0001"
     assert UUID_STRING.encode() in opening.payload_bytes
