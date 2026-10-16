@@ -446,7 +446,7 @@ The counters live on the device. No charging-mode change sends `4305`.
 | `a4`–`a7` | 7 | USB-C 1–4 port block |
 | `a8`–`a9` | 7 | USB-A 1–2 port block |
 | `aa`–`ab` | 18 | AC 1–2: switch · on-time `{en (ff unset), hh, mm, mask}` · off-time (same) · countdown enable · set u32 LE · remaining u32 LE |
-| `ac` | 1 | bit 7 clock display; bits 6:0 theme index |
+| `ac` | 1 | bit 7 the app's Clock Display switch (show the clock after the screen timeout); bits 6:0 theme index, 0–2 = Theme 1–3, the only themes the station offers |
 | `ad` | 1 | high nibble brightness, low nibble screen timeout (same enum as the A2345's `b0`) |
 | `ae` | 2 | charging mode `<byte0><byte1>` |
 | `af` | 2 | `[0]` OTA busy (holds back `4303`), `[1]` OTA progress % |
@@ -483,7 +483,7 @@ aa 13 04 01 | ff 0c 00 00 | ff 0c 00 00 | 00 | 30 2a 00 00 | 30 2a 00 00
                                      AC 1: on, no schedule, countdown off, set 10 800 s, remaining 10 800 s
 ab 13 04 01 | ff 0c 00 00 | ff 0c 00 00 | 00 | 58 02 00 00 | 58 02 00 00
                                      AC 2: on, no schedule, countdown off, 600 s
-ac 02 01 81                          clock display on, theme 1
+ac 02 01 81                          Clock Display on, theme index 1 (Theme 2)
 ad 02 01 00                          brightness 0, timeout always on
 ae 03 04 00 00                       charging mode Smart Dynamic
 af 03 04 00 00                       no OTA
@@ -522,8 +522,8 @@ a7 08 04 00 e1 13 00 00 00 00        USB-A 2
 | `4202` | — | `a2` = flag << 7 \| level, `fe` |
 | `4203` | `a2` 0 always / 1 30 s / 2 1 min / 3 5 min / 4 30 min | `ad` low nibble |
 | `4204` | `a2` (u8) | `ad` high nibble, brightness; the app offers 0–2 and the device doesn't clamp |
-| `4205` | `a2` = bit 7 clock display on \| low nibble theme 0 / 1 / 2 | `ac` |
-| `4206` | `a2 03 02 <byte0><byte1>`: byte0 0 Smart Dynamic / 1 High-Power; byte1 sub-mode 0 / 1 / 2 when byte0 = 1 | `ae`; the type byte isn't checked, so `a2 03 03 …` applies the same mode |
+| `4205` | `a2` = bit 7 Clock Display on \| low nibble theme 0 / 1 / 2 | `ac`; the switch and the theme are stored independently, so bit 7 clear still sets the theme. The app sends `0x80` \| index, turning the Clock Display on with every theme it sets |
+| `4206` | `a2 03 02 <byte0><byte1>`: byte0 0 Smart Dynamic / 1 High-Power; byte1 sub-mode 0 / 1 / 2 (the app's Mode 1 / 2 / 3) when byte0 = 1 | `ae`; the type byte isn't checked, so `a2 03 03 …` applies the same mode |
 | `4207` | `a2` port (0 AC 1, 1 AC 2, 2–5 USB-C 1–4), `a3` 0 / 1 | output on / off; reply `a1 a2 fe`; push `4302`. USB-A has no relay |
 | `4208` | `a2` port, `a3` 1 on-time / 0 off-time, `a4 05 03 <en><hour><min><days>` (bit 0 Mon … bit 6 Sun; `7f` daily, `00` once) | schedule; a colliding other slot is disabled and pushed as `4308` |
 | `4209` | `a2` port, `a3 06 04 <en><u32 LE s>` | countdown; `en = 0` disarms and keeps the seconds; push `4307` |

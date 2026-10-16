@@ -13,6 +13,7 @@ from SolixBLE import (
     F3800,
     Generic,
     PrimeCharger250w,
+    PrimeChargingStation240w,
     Solarbank2,
     SolixBLEDevice,
 )
@@ -26,6 +27,12 @@ from tests.helpers import make_advertisement
     ("record", "local_name", "expected"),
     [
         pytest.param("01aa12deadb34500b402514a4204", None, PrimeCharger250w, id="b402"),
+        pytest.param(
+            "01aa12deadb1b200b4014a544200",
+            None,
+            PrimeChargingStation240w,
+            id="b401",
+        ),
         pytest.param("02007f1d23a37000b118444b393604", None, C1000G2, id="b118"),
         # The A1763 record with the A1765's product type (firmware model table)
         pytest.param("02007f1d23a37000b119444b393604", None, C1000G2, id="b119"),
@@ -34,7 +41,7 @@ from tests.helpers import make_advertisement
         pytest.param("01f49d8a8a022602b103445a4204", None, C800, id="b103"),
         pytest.param("01f49d8aa1b3aa02b00647513800", None, Solarbank2, id="b006"),
         pytest.param(
-            "01aa12deadb1b200b4014a544200",
+            "01aa12deadb1b200beef4a544200",
             "A2345_B345",
             PrimeCharger250w,
             id="unknown_type_prime_name",

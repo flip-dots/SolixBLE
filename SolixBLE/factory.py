@@ -23,6 +23,7 @@ from .devices import (
     F3800,
     Generic,
     PrimeCharger250w,
+    PrimeChargingStation240w,
     Solarbank2,
 )
 
@@ -37,6 +38,7 @@ SERVICES_WITHOUT_CLASS = (LEGACY_SERVICE, SERVICE_2215)
 #: Device class by the advertised ``product_type`` (hex).
 MODELS_BY_PRODUCT_TYPE: dict[str, type[SolixBLEDevice]] = {
     "b402": PrimeCharger250w,
+    "b401": PrimeChargingStation240w,  # A91B2
     "b118": C1000G2,  # A1763
     "b119": C1000G2,  # A1765, the same display-board build as the A1763
     "b106": F3800,  # A1790
@@ -60,6 +62,7 @@ MODELS_BY_NAME: dict[str, type[SolixBLEDevice]] = {
 #: Device class by the part number in a Prime-style local name.
 MODELS_BY_PART_NUMBER: dict[str, type[SolixBLEDevice]] = {
     "A2345": PrimeCharger250w,
+    "A91B2": PrimeChargingStation240w,
 }
 
 #: Prime-style local name: part number, then the last four MAC digits.
