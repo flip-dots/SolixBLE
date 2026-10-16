@@ -125,6 +125,9 @@ class MockDevice:
         self.notify_uuids: list[str | bytes] = []
         self.write_uuids: list[str | bytes] = []
 
+        # The response argument of every write, None where it was left out
+        self.write_responses: list[bool | None] = []
+
         # Every packet the module under test wrote, in order
         self.writes: list[bytes] = []
 
@@ -296,7 +299,7 @@ class MockDevice:
                 await asyncio.sleep(0.1)
 
     async def write_gatt_char(
-        self, char_specifier: str, data: bytes, response: bool = False
+        self, char_specifier: str, data: bytes, response: bool | None = None
     ):
         """
         Patched version of the bleak clients write_gatt_char function
@@ -306,10 +309,11 @@ class MockDevice:
 
         :param char_specifier: Not used, would be the UUID the module wants to write to.
         :param data: The data the module wants to write.
-        :param response: Not used. Bool of if the module wants a response to its write.
+        :param response: Recorded in write_responses. The ATT write type, None if left out.
         """
         _LOGGER.debug(f"Mock device has received data: '{data.hex()}'")
         self.write_uuids.append(char_specifier)
+        self.write_responses.append(response)
 
         # Find the request/response for this write
         request_response = None

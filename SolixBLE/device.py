@@ -131,6 +131,11 @@ class SolixBLEDevice:
     #: known (no advertisement, no earlier connection on this instance).
     _OUTER_HINT: type[Outer] = PlainOuter
 
+    #: The ATT write type for every packet sent: None leaves the choice to
+    #: bleak, which picks a write request on a characteristic offering both;
+    #: False writes without response, as the Anker app does.
+    _COMMAND_WRITE_RESPONSE: bool | None = None
+
     #: The client identifier sent to the device during negotiation.
     _UUID_STRING: str = UUID_STRING
 
@@ -1044,7 +1049,12 @@ class SolixBLEDevice:
         })
         _LOGGER.debug(f"Built packet: {packet.hex()}")
         _LOGGER.debug("Sending packet...")
-        await self._client.write_gatt_char(self.UUID_COMMAND, packet)
+        if self._COMMAND_WRITE_RESPONSE is None:
+            await self._client.write_gatt_char(self.UUID_COMMAND, packet)
+        else:
+            await self._client.write_gatt_char(
+                self.UUID_COMMAND, packet, response=self._COMMAND_WRITE_RESPONSE,
+            )
         _LOGGER.debug("Packet sent!")
 
     async def _process_negotiation(self, packet: Container, payload: bytes) -> None:
