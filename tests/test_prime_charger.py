@@ -394,6 +394,7 @@ async def test_display_byte_commands(  # noqa: PLR0913, PLR0917
         mock_bluetooth.expect_ordered(None)
         await getattr(device, method)(*arguments)
 
+    assert set(mock_bluetooth.write_responses) == {False}
     packet = Packet.parse(mock_bluetooth.writes[-1])
     assert (packet.encrypted, packet.msgtype) == (True, 0x205)
     payload = device._decrypt_payload(packet.payload_bytes).hex()  # noqa: SLF001
