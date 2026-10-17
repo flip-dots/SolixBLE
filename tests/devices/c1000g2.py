@@ -3,6 +3,7 @@
 .. moduleauthor:: Harvey Lelliott (flip-dots) <harveylelliott@duck.com>
 
 """
+
 from datetime import datetime
 
 import pytest
@@ -10,6 +11,22 @@ import pytest
 from SolixBLE.devices.c1000g2 import C1000G2, DisplayLanguage
 from SolixBLE.states import DisplayTimeout, LightStatus
 from tests.const import NEGOTIATION_RESPONSES_SOLIX
+
+#: An idle C1000 Gen 2 (A1763, MainMcu v1.1.2.6) with the mains lead in,
+#: the frame of test_devices.py's "c1000g2" case.
+C900_A1763_IDLE = (
+    "a10134a221062011415043444b39363146333734303032393000054131373633060201010100"
+    "a30b0400000000b0040058dc00a41b0400000000b0043201000000000000001e000100000000"
+    "00640103a506041700646400a60a04000000000000ab2a64a70704000000010000a804040000"
+    "00aa0404000000ab0404000000ac0404000000ae0404000000b20404000000d91a0400001964"
+    "010000000100000000000000000000000000000000da18040000000000000000000001e00164"
+    "057f00000000000000dc06040000000000f91d04060201010500050000000000050005000503"
+    "00010000000000020200fa150401010101001f0300000000000000000000000000fd0e003137"
+    "3634363538323735393838fe0503638c2e69f0"
+)
+
+#: Its DC output (b2) on with a 6 W load, as test_devices.py's "c1000g2_dc_on".
+B2_A1763_DC_ON = "010600"
 
 ########################
 # Test device commands #
