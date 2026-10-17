@@ -39,7 +39,7 @@ from tests.const import (
     NEGOTIATION_RESPONSES_PRIME,
     NEGOTIATION_RESPONSES_SOLIX,
 )
-from tests.helpers import MockDevice
+from tests.helpers import MockDevice, install_session_keys
 
 
 @pytest.mark.asyncio
@@ -1185,8 +1185,12 @@ async def test_negotiation(  # noqa: PLR0913
         assert await device.connect(), "Expected connect to return True"
 
         # Assert that the correct shared secret is calculated
+        assert device._session is not None
+        assert device._session.path is not None
+        keys = device._session.path.keys
+        assert keys is not None, "Expected the session to hold keys"
         assert (
-            bytes.fromhex(secret) == device._shared_secret
+            bytes.fromhex(secret) == keys.key + keys.iv
         ), "Shared secret does not match expected"
 
         mock_bluetooth.check_assertions()
@@ -1261,7 +1265,7 @@ def test_payload_decryption(
     """
 
     device = device_class(MOCK_BLE_DEVICE)
-    device._shared_secret = bytes.fromhex(secret)
+    install_session_keys(device, bytes.fromhex(secret))
 
     decrypted_bytes = device._decrypt_payload(bytes.fromhex(payload))
     assert decrypted_bytes.hex() == decrypted, "Payloads do not match!"
@@ -1377,6 +1381,21 @@ def test_payload_decryption(
             """{'a1': '31', 'a2': '0300000000', 'a3': '0300000000', 'a4': '02d80e', 'a5': '020000', 'a6': '020000', 'a7': '020000', 'a8': '020000', 'a9': '020000', 'aa': '020000', 'ab': '020000', 'ac': '020000', 'ad': '020000', 'ae': '020000', 'af': '020000', 'b0': '020100', 'b1': '020000', 'b2': '020100', 'b3': '02a600', 'b4': '020000', 'b5': '02ff01', 'b6': '02ff01', 'b7': '020000', 'b8': '029a00', 'b9': '020000', 'ba': '02a600', 'bb': '020100', 'bc': '0100', 'bd': '0122', 'be': '0100', 'bf': '0101', 'c0': '0100', 'c1': '0164', 'c2': '0100', 'c3': '0164', 'c4': '0100', 'c5': '0100', 'c6': '0100', 'c7': '0100', 'c8': '0100', 'c9': '0100', 'ca': '0100', 'cb': '0100', 'cc': '0100', 'cd': '0100', 'ce': '0100', 'cf': '0100', 'd0': '0041504339464530453237333030323735', 'e5': '0100', 'f7': '0301000000', 'f8': '040202010100010000000000000000000000000000', 'f9': '0102', 'fd': '0041313736315f33304168'}""",
             id="solix_both_packets_with_update",
         ),
+        # Test that a bare status reply on a telemetry command (the 4900 01 the
+        # module sends for a frame it can't decrypt) leaves the telemetry from
+        # the c900 around it in place. The c900 carries the "c1000g2" telemetry
+        # from test_values above, opened with the 00 status every c900 reply has.
+        pytest.param(
+            C1000G2,
+            [
+                "ff091a0003000f4900a451c312c33d39d6d8aa4c1e080c2331aa",
+                "ff092b0103010fc90011224e04412b2fafda5bef3c3e2b9f8b6e54f1a26604abd9767926af3e3916b42c4c1123e96abb2e8b8de6c51194a732957b2a20914d578c15b5474dca0af68aa31ecf1407b6d598a1e0f392388b09c3f33beff099ab21db546fb84888da68b07ba1feb33d613ac06f323d2a078c76683d09a57e18276cba0ef0cc7b04327353a05ca10a0a0acf40257c3531ffbe00444cb5887fc6629c541bbf071c50e70b78d5e7a7d4018faee05c941ee95c73afc832b038df61d02aa25b1cff15bd031289a8ffcc701a779c15d42d97a4c66f0a85ae90fd16e0fa806fa2470e9a67189c63ca93cd948a6da6578d91d61acc94399fd4b4af041007302ade58ea6112444e6a4952306a267e7a79706ca3c1c00700537f81f4044d11c36b1be33b721d8d09735c29",
+                "ff091a0003000f4900a451c312c33d39d6d8aa4c1e080c2331aa",
+            ],
+            "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
+            """{'a1': '34', 'a2': '062011415043444b39363146333734303032393000054131373633060201010100', 'a3': '0400000000b0040058dc00', 'a4': '0400000000b0043201000000000000001e00010000000000640103', 'a5': '041700646400', 'a6': '04000000000000ab2a64', 'a7': '04000000010000', 'a8': '04000000', 'aa': '04000000', 'ab': '04000000', 'ac': '04000000', 'ae': '04000000', 'b2': '04000000', 'd9': '0400001964010000000100000000000000000000000000000000', 'da': '040000000000000000000001e00164057f00000000000000', 'dc': '040000000000', 'f9': '0406020101050005000000000005000500050300010000000000020200', 'fa': '0401010101001f0300000000000000000000000000', 'fd': '0031373634363538323735393838', 'fe': '03638c2e69'}""",
+            id="c1000g2_status_only_reply_ignored",
+        ),
         # Test an Anker Prime device (single payload device) with a single telemetry packet.
         pytest.param(
             PrimeCharger160w,
@@ -1479,7 +1498,7 @@ async def test_telemetry_packet_processing(  # noqa: PLR0913, PLR0917
         assert device.negotiated, "Expected connected to be True"
         mock_bluetooth.check_assertions()
 
-        device._shared_secret = bytes.fromhex(secret)
+        install_session_keys(device, bytes.fromhex(secret))
 
         for packet in packets:
             await mock_bluetooth.send_data([bytes.fromhex(packet)])
@@ -1559,7 +1578,7 @@ async def test_generic_packet_processing(  # noqa: PLR0913, PLR0917
             assert device.negotiated, "Expected connected to be True"
             mock_bluetooth.check_assertions()
 
-            device._shared_secret = bytes.fromhex(secret)
+            install_session_keys(device, bytes.fromhex(secret))
 
             for packet in packets:
                 await mock_bluetooth.send_data([bytes.fromhex(packet)])
