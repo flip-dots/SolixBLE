@@ -1,6 +1,6 @@
 [project]
 name = "SolixBLE"
-version = "3.9.9"
+version = "3.9.9.dev1"
 dependencies = [
   "bleak>=0.19.0",
   "cryptography",

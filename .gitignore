@@ -8,3 +8,5 @@ docs/_build
 scripts/logs/
 scripts/data/
 scripts/tools/
+
+private/
