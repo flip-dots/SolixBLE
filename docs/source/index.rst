@@ -22,7 +22,9 @@ and other devices
 This Python module enables you to monitor and control (some) Anker Solix devices
 directly from your computer, without the need for any cloud services or Anker app.
 It leverages the Bleak library to interact with Bluetooth Anker devices.
-No pairing is required in order to receive telemetry data or control the device.
+No pairing is required in order to receive telemetry data or control most devices;
+firmware that pairs clients asks for a button press the first time it sees a new
+client token (see :ref:`pairing-with-a-button-press`).
 
 
 .. note::
@@ -33,46 +35,46 @@ No pairing is required in order to receive telemetry data or control the device.
 Power station support
 ---------------------
 
-======================= ======== ========== ========= ========= ========= ============ ====== ======
-Parameter               C300(X)  C300(X) DC C800(X)   C1000(X)  C1000 G2  F2000 (767)  F2600  F3800
-======================= ======== ========== ========= ========= ========= ============ ====== ======
-Charging status         ✅        ✅          ❌        ❌        ❌         ❌           ✅      ✅
-Time remaining          ✅        ✅          ✅        ✅        ❌         ✅           ✅      ✅
-Battery percentage      ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-Battery health          ❌        ✅          ✅        ✅        ✅         ✅           ✅      ❌
-Temperature             ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-Total Power In          ✅        ✅          ✅        ✅        ❌         ❌           ✅      ✅
-Total Power Out         ✅        ✅          ✅        ✅        ✅         ❌           ✅      ✅
-AC on/off control       ✅        N/A         ✅        ✅        ✅         ❌           ✅      ✅
-AC Power in             ✅        N/A         ✅        ✅        ✅         ✅           ✅      ✅
-AC Power out            ✅        N/A         ✅        ✅        ✅         ✅           ✅      ✅
-AC on/off state         ✅        N/A         ✅        ✅        ✅         ❌           ✅      ✅
-AC Timer                ✅        N/A         ✅        ✅        ❌         ❌           ✅      ❌
-DC on/off control       ✅        ✅          ✅        ✅        ✅         ❌           ✅      ✅
-DC Power in             ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-DC Power out            ✅        ✅          ❌        ✅        ✅         ✅           ✅      ✅
-DC Power in status      ✅        ✅          ❌        ❌        ✅         ❌           ✅      ❌
-DC Power out status     ✅        ❌          ❌        ✅        ✅         ❌           ✅      ✅
-DC Timer                ✅        ✅          ❌        ❌        ❌         ❌           ✅      ❌
-USB Power out           ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-USB Port status         ✅        ✅          ❌        ❌        ✅         ❌           ✅      ✅
-Light control           ✅        ✅          ✅        ✅        ❌         ❌           ✅      ❌
-Light status            ✅        ✅          ❌        ❌        N/A        ❌           ✅      ❌
-Display on/off control  ✅        ✅          ✅        ✅        ❌         ❌           ✅      ❌
-Display on/off status   ❌        ✅          ❌        ❌        ❌         ❌           ✅      ❌
-Display brightness ctrl ✅        ✅          ✅        ✅        ❌         ❌           ✅      ❌
-Display brightness stat ❌        ✅          ❌        ❌        ❌         ❌           ✅      ❌
-Display timeout ctrl    ✅        ✅          ✅        ✅        ❌         ❌           ✅      ❌
-Display timeout stat    ❌        ✅          ❌        ❌        ❌         ❌           ✅      ❌
-Firmware version        ✅        ✅          ✅        ✅        ❌         ✅           ✅      ✅
-Serial number           ✅        ✅          ✅        ✅        ✅         ✅           ✅      ✅
-Expansion temperature   N/A       N/A         N/A      ✅        N/A       ✅           ✅      ❌
-Expansion percentage    N/A       N/A         N/A      ✅        N/A       ✅           ✅      ✅
-Expansion health        N/A       N/A         N/A      ✅        N/A       ✅           ✅      ❌
-Expansion firmware      N/A       N/A         N/A      ✅        N/A       ✅           ✅      ✅
-Expansion num           N/A       N/A         N/A      ✅        N/A       ✅           ✅      ❌
-Polled status updates   ✅        ❌          ✅        ✅        ❌         ❌           ✅      ❌
-======================= ======== ========== ========= ========= ========= ============ ====== ======
+======================= ======== ========== ========= ========= ========= ========= ============ ====== ======
+Parameter               C300(X)  C300(X) DC C800(X)   C1000(X)  C1000 G2  C2000 G2  F2000 (767)  F2600  F3800
+======================= ======== ========== ========= ========= ========= ========= ============ ====== ======
+Charging status         ✅       ✅         ❌        ❌        ❌        ✅        ❌           ✅     ✅
+Time remaining          ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
+Battery percentage      ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
+Battery health          ❌       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ❌
+Temperature             ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
+Total Power In          ✅       ✅         ✅        ✅        ❌        ❌        ❌           ✅     ✅
+Total Power Out         ✅       ✅         ✅        ✅        ✅        ✅        ❌           ✅     ✅
+AC on/off control       ✅       N/A        ✅        ✅        ✅        ✅        ❌           ✅     ✅
+AC Power in             ✅       N/A        ✅        ✅        ✅        ✅        ✅           ✅     ✅
+AC Power out            ✅       N/A        ✅        ✅        ✅        ✅        ✅           ✅     ✅
+AC on/off state         ✅       N/A        ✅        ✅        ✅        ✅        ❌           ✅     ✅
+AC Timer                ✅       N/A        ✅        ✅        ✅        ✅        ❌           ✅     ❌
+DC on/off control       ✅       ✅         ✅        ✅        ✅        ✅        ❌           ✅     ✅
+DC Power in             ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
+DC Power out            ✅       ✅         ❌        ✅        ✅        ✅        ✅           ✅     ✅
+DC Power in status      ✅       ✅         ❌        ❌        ✅        ✅        ❌           ✅     ❌
+DC Power out status     ✅       ❌         ❌        ✅        ✅        ✅        ❌           ✅     ✅
+DC Timer                ✅       ✅         ❌        ❌        ✅        ✅        ❌           ✅     ❌
+USB Power out           ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
+USB Port status         ✅       ✅         ❌        ❌        ✅        ✅        ❌           ✅     ✅
+Light control           ✅       ✅         ✅        ✅        ❌        ❌        ❌           ✅     ❌
+Light status            ✅       ✅         ❌        ❌        N/A       N/A       ❌           ✅     ❌
+Display on/off control  ✅       ✅         ✅        ✅        ✅        ✅        ❌           ✅     ❌
+Display on/off status   ❌       ✅         ❌        ❌        ✅        ✅        ❌           ✅     ❌
+Display brightness ctrl ✅       ✅         ✅        ✅        ✅        ✅        ❌           ✅     ❌
+Display brightness stat ❌       ✅         ❌        ❌        ✅        ✅        ❌           ✅     ❌
+Display timeout ctrl    ✅       ✅         ✅        ✅        ✅        ✅        ❌           ✅     ❌
+Display timeout stat    ❌       ✅         ❌        ❌        ✅        ✅        ❌           ✅     ❌
+Firmware version        ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
+Serial number           ✅       ✅         ✅        ✅        ✅        ✅        ✅           ✅     ✅
+Expansion temperature   N/A      N/A        N/A       ✅        N/A       ✅        ✅           ✅     ❌
+Expansion percentage    N/A      N/A        N/A       ✅        N/A       ✅        ✅           ✅     ✅
+Expansion health        N/A      N/A        N/A       ✅        N/A       ✅        ✅           ✅     ❌
+Expansion firmware      N/A      N/A        N/A       ✅        N/A       ✅        ✅           ✅     ✅
+Expansion num           N/A      N/A        N/A       ✅        N/A       ✅        ✅           ✅     ❌
+Polled status updates   ✅       ❌         ✅        ✅        ❌        ✅        ❌           ✅     ❌
+======================= ======== ========== ========= ========= ========= ========= ============ ====== ======
 
 
 Solar system support

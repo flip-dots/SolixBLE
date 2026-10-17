@@ -10,8 +10,17 @@ import pytest
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
-from SolixBLE import C300, PrimeCharger160w, Solarbank2
-from SolixBLE.constructs import Packet
+from SolixBLE import (
+    C300,
+    C1000,
+    C1000G2,
+    PrimeCharger160w,
+    PrimeCharger250w,
+    PrimeDevice,
+    Solarbank2,
+    SolixBLEDevice,
+)
+from SolixBLE.constructs import Packet, Parameters
 from tests.const import (
     MOCK_BLE_DEVICE,
     NEGOTIATION_RESPONSES_PRIME,
@@ -19,9 +28,46 @@ from tests.const import (
     SOLARBANK2_CLEAR_TELEMETRY,
     SOLARBANK2_SERIAL,
 )
-from tests.helpers import MockDevice
+from tests.helpers import MockDevice, install_session_keys
 
 SECRET = bytes(range(32))
+STATUS_CONFIRM = 0x09
+CONFIRMATION_WINDOW = 30
+
+# A 4900 01 on 03000f and a c900 on 03010f carrying the "c1000g2" telemetry
+# from tests/test_devices.py, both under the C1000 telemetry secret
+C1000G2_SECRET = bytes.fromhex(
+    "645ca871528991eb38ebb327a781e932b1d9d7a613b04c966b317db056c83428",
+)
+C1000G2_SERIAL = b"APCDK961F37400290"
+C1000G2_STATUS_ONLY = "ff091a0003000f4900a451c312c33d39d6d8aa4c1e080c2331aa"
+C1000G2_C900 = (
+    "ff092b0103010fc90011224e04412b2fafda5bef3c3e2b9f8b6e54f1a26604abd9767926af3e"
+    "3916b42c4c1123e96abb2e8b8de6c51194a732957b2a20914d578c15b5474dca0af68aa31ecf"
+    "1407b6d598a1e0f392388b09c3f33beff099ab21db546fb84888da68b07ba1feb33d613ac06f"
+    "323d2a078c76683d09a57e18276cba0ef0cc7b04327353a05ca10a0a0acf40257c3531ffbe00"
+    "444cb5887fc6629c541bbf071c50e70b78d5e7a7d4018faee05c941ee95c73afc832b038df61"
+    "d02aa25b1cff15bd031289a8ffcc701a779c15d42d97a4c66f0a85ae90fd16e0fa806fa2470e"
+    "9a67189c63ca93cd948a6da6578d91d61acc94399fd4b4af041007302ade58ea6112444e6a49"
+    "52306a267e7a79706ca3c1c00700537f81f4044d11c36b1be33b721d8d09735c29"
+)
+
+# A real Prime 160W 4300 telemetry frame on 030111, encrypted under its
+# secret (tests/test_devices.py "prime_telemetry_packet")
+PRIME_160W_SECRET = bytes.fromhex(
+    "09486817d949a232b58b47a43cc72d045a617a26f3999d30e1d27e38eae52265",
+)
+PRIME_160W_4300 = bytes.fromhex(
+    "ff09da00030111430057e9a883d95e4bc95b5be2baa1c366331abb929258ab5077108dc19725"
+    "4092ef1372bd5a26ef6b51d61dc87082ca8e7985aacad07f64181902c70c0502de2418e366f5"
+    "f700b13049d9b857e95c85c66a32d64fcf31c8eead9e025ed69c1440170cca149e038501a954"
+    "4b1baa044a6a65392e154357e137d917fc834e019012a01b9bd18d5ca7dc22bdb0204b0629b3"
+    "f738f34bafdc26f6bb0781cec80fe547674a6a7a341a018ce3ac81e6eb6b5110d3311db692d1"
+    "74fe363acec5ba606a24b92dcc95a6cdd8fee1843a26694ddd23ac74",
+)
+
+# A minimal 4300 telemetry payload for the non-Prime models
+TELEMETRY_4300 = bytes.fromhex("a10131a2020101")
 
 
 @pytest.mark.asyncio
@@ -30,25 +76,11 @@ async def test_grant_pattern_reaches_negotiation(
     fast_sleep: None,  # noqa: ARG001
     fast_timeouts: None,  # noqa: ARG001
 ) -> None:
-    """A ``4827`` pushed on ``030101`` is handled as the negotiation's ``4827``."""
+    """A ``4827`` pushed on ``030101`` reaches the negotiation's path."""
     device = PrimeCharger160w(MOCK_BLE_DEVICE)
-    requests = list(NEGOTIATION_RESPONSES_PRIME.items())
-    registration = next(
-        response
-        for _, responses in requests
-        for response in responses
-        if Packet.parse(bytes.fromhex(response)).cmd.hex() == "4827"
-    )
-    grant = Packet.build(
-        {
-            "pattern": bytes.fromhex("030101"),
-            "cmd": bytes.fromhex("4827"),
-            "payload_bytes": Packet.parse(bytes.fromhex(registration)).payload_bytes,
-        },
-    )
 
     async with MockDevice() as mock_bluetooth:
-        for expected, responses in requests:
+        for expected, responses in NEGOTIATION_RESPONSES_PRIME.items():
             mock_bluetooth.expect_ordered(
                 bytes.fromhex(expected),
                 [bytes.fromhex(response) for response in responses],
@@ -56,12 +88,20 @@ async def test_grant_pattern_reaches_negotiation(
         assert await device.connect()
         mock_bluetooth.check_assertions()
 
-        # The post-registration requests are sent again for the grant
-        for expected, _ in requests[-2:]:
-            mock_bluetooth.expect_ordered(bytes.fromhex(expected), [])
+        # A device-initiated 4827 under the session key, here asking for the
+        # button (status 09, a 30 s window)
+        grant = Packet.build(
+            {
+                "pattern": bytes.fromhex("030101"),
+                "cmd": bytes.fromhex("4827"),
+                "payload_bytes": device._encrypt_payload(bytes.fromhex("09a1021e00")),  # noqa: SLF001
+            },
+        )
         await mock_bluetooth.send_data([grant])
-        await asyncio.sleep(1)
-        mock_bluetooth.check_assertions()
+
+    assert device.announcement is not None
+    assert device.announcement.registration_status == STATUS_CONFIRM
+    assert device.announcement.confirmation_window == CONFIRMATION_WINDOW
 
 
 @pytest.mark.asyncio
@@ -142,7 +182,7 @@ async def test_flag_decides_decryption_and_reassembly(  # noqa: PLR0913, PLR0917
                 [bytes.fromhex(response) for response in responses],
             )
         assert await device.connect()
-        device._shared_secret = SECRET  # noqa: SLF001
+        install_session_keys(device, SECRET)
         await mock_bluetooth.send_data([frame])
 
     assert device._data is not None  # noqa: SLF001
@@ -177,7 +217,7 @@ async def test_two_futures_one_decrypt(
                 [bytes.fromhex(response) for response in responses],
             )
         assert await device.connect()
-        device._shared_secret = SECRET  # noqa: SLF001
+        install_session_keys(device, SECRET)
         loop = asyncio.get_running_loop()
         futures = [loop.create_future(), loop.create_future()]
         for future in futures:
@@ -189,6 +229,68 @@ async def test_two_futures_one_decrypt(
         await mock_bluetooth.send_data([frame])
 
     assert [future.result() for future in futures] == [plaintext, plaintext]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "cmd", "resolves"),
+    [
+        pytest.param("03010f", "c840", True, id="fragmented_encrypted"),
+        pytest.param("03010f", "4840", True, id="unfragmented_encrypted"),
+        pytest.param("03010f", "0840", True, id="clear"),
+        pytest.param("03000f", "4840", True, id="other_composer"),
+        pytest.param("03010f", "4841", False, id="other_msgtype"),
+        pytest.param("030111", "4840", False, id="other_channel"),
+    ],
+)
+async def test_future_matches_channel_and_msgtype(  # noqa: PLR0913, PLR0917
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+    pattern: str,
+    cmd: str,
+    resolves: bool,  # noqa: FBT001
+) -> None:
+    """A reply future waits for a channel and msgtype, whatever the flags."""
+    device = C300(MOCK_BLE_DEVICE)
+    plaintext = bytes.fromhex("00a10101")
+    flags = bytes.fromhex(cmd)[0]
+    payload = (
+        AES.new(SECRET[:16], AES.MODE_CBC, iv=SECRET[16:]).encrypt(pad(plaintext, 16))
+        if flags & 0x40
+        else plaintext
+    )
+    # A 0x80 frame opens its payload with index << 4 | total; one fragment is 11
+    fragment = b"\x11" if flags & 0x80 else b""
+    frame = Packet.build(
+        {
+            "pattern": bytes.fromhex(pattern),
+            "cmd": bytes.fromhex(cmd),
+            "payload_bytes": fragment + payload,
+        },
+    )
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        install_session_keys(device, SECRET)
+
+        # Registered the way get_status_update() listens for its reply
+        future = asyncio.get_running_loop().create_future()
+        device._register_future(  # noqa: SLF001
+            future,
+            bytes.fromhex("03010f"),
+            bytes.fromhex("c840"),
+        )
+        await mock_bluetooth.send_data([frame])
+
+    assert future.done() is resolves
+    if resolves:
+        assert future.result() == plaintext
 
 
 @pytest.mark.asyncio
@@ -213,3 +315,157 @@ async def test_clear_fragmented_telemetry_is_telemetry(
 
     assert device._data is not None  # noqa: SLF001
     assert device._data["a2"].value_legacy[1:].decode() == SOLARBANK2_SERIAL  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_snapshot_messages_are_stored_separately_from_telemetry() -> None:
+    """A snapshot command is dispatched and stored apart from the telemetry stream."""
+    device = PrimeCharger160w(MOCK_BLE_DEVICE)
+    device._SNAPSHOT_COMMANDS = ("4a00",)  # noqa: SLF001
+
+    await device._process_session(  # noqa: SLF001
+        bytes.fromhex("4a00"),
+        bytes.fromhex("b0020101"),
+        encrypted=False,
+    )
+
+    assert device._snapshot is not None  # noqa: SLF001
+    assert device._data is None  # noqa: SLF001
+    assert device._snapshot["b0"].value_legacy[1:].hex() == "01"  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_status_only_reply_keeps_snapshot(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A bare status reply on a snapshot command leaves the stored snapshot."""
+    device = C300(MOCK_BLE_DEVICE)
+    device._SNAPSHOT_COMMANDS = ("4a00",)  # noqa: SLF001
+    frames = [
+        Packet.build(
+            {
+                "pattern": bytes.fromhex("03010f"),
+                "cmd": bytes.fromhex("0a00"),
+                "payload_bytes": bytes.fromhex(payload),
+            },
+        )
+        for payload in ("b0020101", "01")
+    ]
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        await mock_bluetooth.send_data(frames)
+
+    assert device._snapshot is not None  # noqa: SLF001
+    assert device._snapshot["b0"].value_legacy[1:].hex() == "01"  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_status_only_reply_never_resolves_a_waiter(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+) -> None:
+    """A status update in flight gets the c900 after a 4900 01, not the 01."""
+    device = C1000G2(MOCK_BLE_DEVICE)
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        install_session_keys(device, C1000G2_SECRET)
+
+        # Listening the way get_status_update() does for its reply
+        reply = asyncio.create_task(
+            device._listen_for_packet(  # noqa: SLF001
+                bytes.fromhex("03010f"),
+                bytes.fromhex("c900"),
+            ),
+        )
+        await asyncio.sleep(0)
+        await mock_bluetooth.send_data(
+            [bytes.fromhex(C1000G2_STATUS_ONLY), bytes.fromhex(C1000G2_C900)],
+        )
+        payload = await reply
+
+    assert payload is not None
+    parameters = Parameters.parse(payload)
+    assert parameters.status == 0
+    assert C1000G2_SERIAL in parameters["a2"].value_legacy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("device_class", "is_telemetry"),
+    [
+        pytest.param(PrimeCharger250w, False, id="a2345_ignores_0300"),
+        pytest.param(PrimeCharger160w, True, id="prime_listing_4300_keeps_it"),
+    ],
+)
+async def test_prime_4300_is_telemetry_only_where_listed(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+    device_class: type[PrimeDevice],
+    is_telemetry: bool,  # noqa: FBT001
+) -> None:
+    """An encrypted ``4300`` is telemetry on a Prime only if its model lists it.
+
+    The frame is the 160W's real telemetry; the A2345's ``0300`` is a stats
+    push that never reaches a BLE client, so its class leaves ``4300`` out.
+    """
+    device = device_class(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_PRIME.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        install_session_keys(device, PRIME_160W_SECRET)
+        await mock_bluetooth.send_data([PRIME_160W_4300])
+
+    assert (device._data is not None) is is_telemetry  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("device_class", [C1000, C1000G2])
+async def test_base_devices_keep_4300_as_telemetry(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+    device_class: type[SolixBLEDevice],
+) -> None:
+    """A non-Prime model reads an encrypted ``4300`` as telemetry, listed or not."""
+    device = device_class(MOCK_BLE_DEVICE)
+
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        install_session_keys(device, SECRET)
+        frame = Packet.build(
+            {
+                "pattern": bytes.fromhex("03010f"),
+                "cmd": bytes.fromhex("4300"),
+                "payload_bytes": device._encrypt_payload(TELEMETRY_4300),  # noqa: SLF001
+            },
+        )
+        await mock_bluetooth.send_data([frame])
+
+    assert device._data == Parameters.parse(TELEMETRY_4300)  # noqa: SLF001
