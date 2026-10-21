@@ -724,7 +724,8 @@ class C2000G2(C1000G2):
         .. note::
            The device turns the AC input back on by itself when the main
            battery reaches its discharge floor and when mains is unplugged;
-           :attr:`ac_input_state` shows it.
+           :attr:`ac_input_state` shows it. While it is off, no time-of-use
+           period takes effect (:attr:`active_tariff`).
 
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.

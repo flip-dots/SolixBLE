@@ -496,7 +496,7 @@ Two bytes report charge / discharge, from different sources:
 | field | reports |
 |---|---|
 | `a7[3]` | the mains lead is plugged in, whether or not power flows (1 at 0 W); 2 = plugged in with Battery-Only Power on |
-| `a8[0]` | a DC source attached; `solar_power_in` is 0 when the pack is above its cap |
+| `a8[0]` | a DC source attached; `solar_power_in` is 0 when the pack is above its cap. A 12 V car-socket adapter reads 1 at 0 W; solar follows panel voltage, so attached panels read 0 / 0 W at night and 1 by day |
 | `c0[30]` | an expansion attached |
 
 The LCD shows the same split: `--` for a disabled path, `0 W` for an enabled one drawing nothing (A1783).
@@ -707,7 +707,7 @@ A period is active (`d9[0]` ≠ 0) only while all of these hold, in this order:
 | # | condition |
 |---|---|
 | 1 | mode = 1 |
-| 2 | cloud-bound **and** on WiFi; a BLE-only unit never activates TOU |
+| 2 | the unit itself cloud-bound **and** on WiFi; a BLE-only unit never activates TOU, while a plan written over BLE to a bound unit does |
 | 3 | AC input present as the power stage reports it (input power available, no fault) |
 | 4 | no car-alternator charger attached |
 | 5 | AC input disable (`4101 ab`) off (v1.2.1.6) |
@@ -717,6 +717,8 @@ What an active period does:
 
 | effect | where it shows |
 |---|---|
+| Peak (1) and Mid-Peak (2) hold off AC (grid) charging while SoC ≥ max(reserve, min + 5 %), 0.3 % higher while already charging; Off-Peak (3) charges as usual. Bench: a Peak period at 95 % SoC, reserve 50 %, held AC input at 0 W and charging resumed at ~1 290 W within 13 s of the period ending; an Off-Peak period kept charging at ~1 280 W | `a7` AC input power |
+| the AC output has no tariff gate | `a7` |
 | the main pack's charge current is capped at 40.0 A (normally 58.0 A) | charge power |
 | `4101 a7` fast charge = 1 is ignored | `a4[20]` |
 | status bit `0x80` = period active and no backup plan running | `c490 .14.30` |
@@ -733,12 +735,12 @@ It never switches AC input off. On an A1763 a `4090` plan was stored and reflect
 
 | tag | width | `da` | field (app name) |
 |---|---|---|---|
-| `a2` | 1 | `[0]` | bit 7 screensaver (`screenSaverSwitch`); low bits clock theme (`lcdTheme`), "Theme N" stored as N − 1: 0 digital, 1 flip clock, 2 stacked hours over minutes |
-| — | — | `[1]` | theme download state |
-| `a3` | 4 | `[2:6]` | clock theme id; a change while bound and on WiFi starts a theme download |
-| `a4` | u32 | `[6:10]` | second theme word (size); same download rule |
+| `a2` | 1 | `[0]` | bit 7 screensaver (`screenSaverSwitch`); bits 0–3 clock theme (`lcdTheme`), "Theme N" stored as N − 1: 0 digital, 1 flip clock, 2 stacked hours over minutes, 3 the downloaded network theme (the digital clock over its background); 4–15 show Theme 1. Bits 4–6 are stored and echoed, never read |
+| — | — | `[1]` | theme download state: 1 downloading, 0 idle or done, 2 failed |
+| `a3` | 4 | `[2:6]` | network theme id; a change while bound and on WiFi starts a theme download |
+| `a4` | u32 | `[6:10]` | network theme CRC; compared only for a change; same download rule |
 | `a5` | string | — | theme name (returned by `4092 a3`) |
-| `a6` | data | — | theme data |
+| `a6` | string | — | theme download URL (`http`/`https`, ≤ 255 B, sent NUL-terminated) |
 | `a7` | 1 | `[10]` | clock format: 1 = 24 h, 0 = 12 h (`lcdTimeFormat`) |
 | `a8` | u16 LE | `[11:13]` | period 1 start, minutes from midnight (`lcdStartTime`) |
 | `a9` | u16 LE | `[13:15]` | period 1 end (`lcdEndTime`) |

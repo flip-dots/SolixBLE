@@ -15,6 +15,7 @@ from typing import Any, Self
 
 from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
     Adapter,
+    Array,
     BitsInteger,
     BitStruct,
     Bytes,
@@ -663,6 +664,44 @@ the hour and minute then hold a stale default (``12:00``), so gate on
 
 #: :data:`SCHEDULE_TRIGGER`'s ``enabled`` byte for a half never set.
 SCHEDULE_UNSET = 0xFF
+
+TOU_PERIOD = Struct(
+    "tariff" / Int8ub,
+    "start_hour" / Int8ub,
+    "end_hour" / Int8ub,
+)
+"""
+One time-of-use period: its tariff (1 peak, 2 mid-peak, 3 off-peak), the
+hour it starts and the hour it ends, which is after the start.
+"""
+
+PPS_M6_TOU = Struct(
+    "active_tariff" / Int8ub,
+    "tou_mode" / Int8ub,
+    "reserve_battery_percentage" / Int8ub,
+    "max_battery_percentage" / Int8ub,
+    "min_battery_percentage" / Int8ub,
+    "period_count" / Int8ub,
+    "periods" / Array(this.period_count, TOU_PERIOD),
+    "backup"
+    / Optional(
+        Struct(
+            "active_type" / Int8ub,
+            "fast_charging_plan_enabled" / Flag,
+            "storm_guard_enabled" / Flag,
+            "fast_charging_plan_start" / Int32ul,
+            "fast_charging_plan_end" / Int32ul,
+            "backup_window_start" / Int32ul,
+            "backup_window_end" / Int32ul,
+        ),
+    ),
+)
+"""
+A portable power station's time-of-use plan (``d9`` on the C-series Gen 2),
+then the backup-plan tail: the running window's type, each plan's switch,
+the Fast Charging Plan's stored window and the running window (0 when none
+runs).
+"""
 
 DISPLAY = BitStruct(
     "on" / Flag,

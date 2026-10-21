@@ -32,9 +32,16 @@ from SolixBLE import (
     TemperatureUnit,
 )
 from SolixBLE.constructs import Parameters
-from SolixBLE.devices.c1000g2 import DisplayLanguage, DisplayPlan, TariffType
+from SolixBLE.devices.c1000g2 import DisplayLanguage, DisplayPlan
 from SolixBLE.devices.solarbank2 import MaxLoadSB2
-from SolixBLE.states import GridStatus, LightMode, SBPowerCutoff, SBUsageMode
+from SolixBLE.states import (
+    ClockTheme,
+    GridStatus,
+    LightMode,
+    SBPowerCutoff,
+    SBUsageMode,
+    TariffType,
+)
 from tests.const import (
     MOCK_BLE_DEVICE,
     NEGOTIATION_RESPONSES_PRIME,
@@ -321,7 +328,7 @@ from tests.helpers import MockDevice, install_session_keys
                 "backup_window": None,
                 "display_plan": DisplayPlan(
                     screensaver_enabled=False,
-                    clock_theme=1,
+                    clock_theme=ClockTheme.THEME_1,
                     clock_24h=True,
                     day_start=480,
                     day_end=1380,

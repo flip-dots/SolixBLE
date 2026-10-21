@@ -15,6 +15,7 @@ import pytest
 from SolixBLE import C2000G2
 from SolixBLE.constructs import Packet, PacketCommand, Parameters
 from SolixBLE.protocols import EncryptedOuter
+from SolixBLE.states import ClockTheme
 from tests.const import MOCK_BLE_DEVICE
 from tests.devices.c2000g2 import (
     C421_0009,
@@ -22,6 +23,8 @@ from tests.devices.c2000g2 import (
     C490_UNKNOWN_SCHEMA,
     C2000G2_TEST_PUSHES,
     C2000G2_TEST_SUMMARIES,
+    C2000G2_TOU_READBACKS,
+    D9_0009,
 )
 from tests.helpers import MockDevice
 
@@ -185,6 +188,22 @@ async def test_unknown_summary_schema(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("d9", "expected"), C2000G2_TOU_READBACKS)
+async def test_tou_readback(d9: str, expected: dict[str, Any]) -> None:
+    """The time-of-use block the device stored after a write reads back.
+
+    :param d9: The time-of-use block, as the device sent it.
+    :param expected: Expected values of device properties.
+    """
+    device = C2000G2(MOCK_BLE_DEVICE)
+    frame = C421_0009.replace(D9_0009, d9)
+    await device._process_telemetry(Parameters.parse(bytes.fromhex(frame)))  # noqa: SLF001
+
+    for name, value in expected.items():
+        assert getattr(device, name) == value, f"Mismatch for property '{name}'!"
+
+
+@pytest.mark.asyncio
 async def test_set_display_plan_sends_only_changes() -> None:
     """Only the clock-screen settings that differ from the device's are sent."""
     device = C2000G2(MOCK_BLE_DEVICE)
@@ -215,7 +234,7 @@ async def test_set_display_plan_sends_only_changes() -> None:
     "change",
     [
         {"day_start": 1441},
-        {"clock_theme": 0},
+        {"clock_theme": ClockTheme.CUSTOM},
         {"weekdays": frozenset({7})},
         {"day_brightness": 50},
     ],

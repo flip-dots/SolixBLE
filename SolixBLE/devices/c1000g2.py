@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 from enum import Enum
 
 from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
-    Array,
     BitsInteger,
     BitStruct,
     Bytes,
@@ -27,7 +26,6 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     Padding,
     PascalString,
     Struct,
-    this,
 )
 
 from SolixBLE.const import (
@@ -36,9 +34,16 @@ from SolixBLE.const import (
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
 )
-from SolixBLE.constructs import WeekdayMask
+from SolixBLE.constructs import PPS_M6_TOU, TOU_PERIOD, WeekdayMask
 from SolixBLE.device import SolixBLEDevice
-from SolixBLE.states import DisplayTimeout, LightStatus, PortStatus
+from SolixBLE.states import (
+    ClockTheme,
+    DisplayTimeout,
+    LightStatus,
+    PortStatus,
+    TariffType,
+    TouPeriod,
+)
 
 
 class DisplayLanguage(Enum):
@@ -63,45 +68,13 @@ class DisplayLanguage(Enum):
     JAPANESE = 4
 
 
-class TariffType(Enum):
-    """A time-of-use tariff period."""
-
-    #: The tariff is unknown.
-    UNKNOWN = -1
-
-    #: No tariff period is active.
-    NONE = 0
-
-    #: Peak.
-    PEAK = 1
-
-    #: Mid-peak.
-    MID_PEAK = 2
-
-    #: Off-peak.
-    OFF_PEAK = 3
-
-
-@dataclass(frozen=True)
-class TouPeriod:
-    """One period of a time-of-use plan, in whole hours.
-
-    :param tariff: Tariff of the period.
-    :param start_hour: First hour of the period, 0-23.
-    :param end_hour: Hour the period ends, 1-24.
-    """
-
-    tariff: TariffType
-    start_hour: int
-    end_hour: int
-
-
 @dataclass(frozen=True)
 class DisplayPlan:
     """The display's clock screen and its day / night schedule.
 
     :param screensaver_enabled: Whether the clock screensaver shows.
-    :param clock_theme: Clock theme, 1-based as the app numbers them.
+    :param clock_theme: Clock theme: THEME_1-3, or CATALOG while a downloaded
+        theme shows, which can't be selected here.
     :param clock_24h: Whether the clock shows 24-hour time.
     :param day_start: Start of the day period, minutes from midnight.
     :param day_end: End of the day period, minutes from midnight.
@@ -114,7 +87,7 @@ class DisplayPlan:
     """
 
     screensaver_enabled: bool
-    clock_theme: int
+    clock_theme: ClockTheme
     clock_24h: bool
     day_start: int
     day_end: int
@@ -190,37 +163,6 @@ A7_AC = Struct(
 """
 AC ports (``a7``): the output's status and power, whether the mains lead is
 plugged in, and the input power (W).
-"""
-
-D9_TOU = Struct(
-    "active_tariff" / Int8ub,
-    "tou_mode" / Int8ub,
-    "reserve_battery_percentage" / Int8ub,
-    "max_battery_percentage" / Int8ub,
-    "min_battery_percentage" / Int8ub,
-    "period_count" / Int8ub,
-    "periods"
-    / Array(
-        this.period_count,
-        Struct("tariff" / Int8ub, "start_hour" / Int8ub, "end_hour" / Int8ub),
-    ),
-    "backup"
-    / Optional(
-        Struct(
-            "active_type" / Int8ub,
-            "fast_charging_plan_enabled" / Flag,
-            "storm_guard_enabled" / Flag,
-            "fast_charging_plan_start" / Int32ul,
-            "fast_charging_plan_end" / Int32ul,
-            "backup_window_start" / Int32ul,
-            "backup_window_end" / Int32ul,
-        ),
-    ),
-)
-"""
-Time-of-use plan (``d9``), then the backup-plan tail: the running window's
-type, each plan's switch, the Fast Charging Plan's stored window and the
-running window (0 when none runs).
 """
 
 A3_STATUS = Struct(
@@ -333,7 +275,7 @@ DA_DISPLAY_PLAN = Struct(
     "screensaver_and_theme" / Int8ub,
     "theme_download_state" / Int8ub,
     "theme_id" / Int32ul,
-    "theme_size" / Int32ul,
+    "theme_crc" / Int32ul,
     "clock_24h" / Flag,
     "day_start" / Int16ul,
     "day_end" / Int16ul,
@@ -346,7 +288,7 @@ DA_DISPLAY_PLAN = Struct(
 )
 """
 Clock screen (``da``): bit 7 of ``screensaver_and_theme`` is the
-screensaver switch and the low bits the theme; times are minutes from
+screensaver switch and the low 4 bits the theme; times are minutes from
 midnight.
 """
 
@@ -584,18 +526,82 @@ PARAMETERS_BACKUP_WINDOW = {
     },
 }
 
+#: Time-of-use plan: a2 the mode, a5 the reserve (left out to keep the
+#: current one), a6 the period count and a7 the periods. The device ignores
+#: a3 and a4.
+CMD_TOU_PLAN = 0x090
+
+PARAMETERS_TOU_PLAN = {
+    "a1": {
+        "value": "21",
+    },
+    "a2": {
+        "type": 1,
+        "value": lambda enabled: 1 if enabled else 0,
+    },
+    "a5": {
+        "type": 1,
+        "value": lambda percentage: percentage,
+    },
+    "a6": {
+        "type": 1,
+        # _to_bytes passes keyword arguments by the lambda's parameter names
+        "value": lambda records: len(records),  # noqa: PLW0108
+    },
+    "a7": {
+        "type": 4,
+        "value": lambda records: TOU_PERIOD[len(records)].build(records),
+    },
+}
+
+#: Most periods a time-of-use plan holds; the device copies them into an
+#: 18-byte buffer without checking.
+MAX_TOU_PERIODS = 6
+
+#: Hours in a day, the latest a time-of-use period may end.
+HOURS_PER_DAY = 24
+
+#: Tariffs a time-of-use period can take.
+TOU_TARIFFS = (TariffType.PEAK, TariffType.MID_PEAK, TariffType.OFF_PEAK)
+
+
+def _validate_tou_periods(periods: list[TouPeriod]) -> None:
+    """Range-check time-of-use periods before they are sent.
+
+    :param periods: The periods.
+    :raises ValueError: If there are too many or one is out of range.
+    """
+    if len(periods) > MAX_TOU_PERIODS:
+        msg = f"A time-of-use plan holds at most {MAX_TOU_PERIODS} periods"
+        raise ValueError(msg)
+    for period in periods:
+        if period.tariff not in TOU_TARIFFS:
+            msg = "A time-of-use period must be PEAK, MID_PEAK or OFF_PEAK"
+            raise ValueError(msg)
+        if not 0 <= period.start_hour < period.end_hour <= HOURS_PER_DAY:
+            msg = (
+                f"A time-of-use period must end after it starts, within "
+                f"0-{HOURS_PER_DAY} hours"
+            )
+            raise ValueError(msg)
+
+
 #: Clock-screen group: the app writes only the tags that change.
 CMD_DISPLAY_PLAN = 0x091
 
 #: Minutes in a day, the latest a display period may end.
 MINUTES_PER_DAY = 1440
 
-#: Largest clock theme number the a2 low bits can carry.
-MAX_CLOCK_THEME = 0x80
+#: Clock themes the display plan can select.
+BUILT_IN_THEMES = (ClockTheme.THEME_1, ClockTheme.THEME_2, ClockTheme.THEME_3)
+
+#: Bits of the clock screen's theme byte the device reads as the theme; it
+#: shows Theme 1 for any index past the catalog theme.
+CLOCK_THEME_MASK = 0x0F
 
 #: The 4091 tag, type and encoder of each display plan setting: the fields it
 #: carries, its type byte, and the value it sends. a2 holds both the
-#: screensaver (bit 7) and the clock theme (the low bits, 0-based).
+#: screensaver (bit 7) and the clock theme's index (the low bits).
 DisplayPlanTag = tuple[tuple[str, ...], int, Callable[[DisplayPlan], int | bytes]]
 
 DISPLAY_PLAN_TAGS: dict[str, DisplayPlanTag] = {
@@ -604,7 +610,7 @@ DISPLAY_PLAN_TAGS: dict[str, DisplayPlanTag] = {
         1,
         lambda plan: (
             (SCREENSAVER_BIT if plan.screensaver_enabled else 0)
-            | (plan.clock_theme - 1)
+            | plan.clock_theme.value
         ),
     ),
     "a7": (("clock_24h",), 1, lambda plan: 1 if plan.clock_24h else 0),
@@ -627,18 +633,22 @@ DISPLAY_PLAN_TAGS: dict[str, DisplayPlanTag] = {
 }
 
 
-def _validate_display_plan(plan: DisplayPlan) -> None:
+def _validate_display_plan(plan: DisplayPlan, current: DisplayPlan) -> None:
     """Range-check a display plan before it is sent.
 
     :param plan: The display plan.
+    :param current: The device's display plan, whose clock theme may stay as
+        it is even when it can't be selected.
     :raises ValueError: If a setting is out of range.
     """
     minutes = (plan.day_start, plan.day_end, plan.night_start, plan.night_end)
     if not all(0 <= value <= MINUTES_PER_DAY for value in minutes):
         msg = f"Display periods must be 0-{MINUTES_PER_DAY} minutes from midnight"
         raise ValueError(msg)
-    if not 1 <= plan.clock_theme <= MAX_CLOCK_THEME:
-        msg = f"Clock theme must be 1-{MAX_CLOCK_THEME}"
+    if plan.clock_theme != current.clock_theme and (
+        plan.clock_theme not in BUILT_IN_THEMES
+    ):
+        msg = "Clock theme must be THEME_1, THEME_2 or THEME_3"
         raise ValueError(msg)
     if not plan.weekdays <= frozenset(range(7)):
         msg = "Weekdays must be 0 (Monday) to 6 (Sunday)"
@@ -936,7 +946,7 @@ class C1000G2(SolixBLEDevice):
         if current is None:
             msg = "No display plan has been received from the device yet"
             raise ValueError(msg)
-        _validate_display_plan(plan)
+        _validate_display_plan(plan, current)
 
         parameters: dict[str, dict[str, object]] = {"a1": {"value": "21"}}
         for tag, (fields, data_type, encode) in DISPLAY_PLAN_TAGS.items():
@@ -1028,10 +1038,50 @@ class C1000G2(SolixBLEDevice):
             on=False,
         )
 
-    # The time-of-use plan (``4090``) is not settable here: the device stores
-    # it over BLE, but a period takes effect only while the unit is bound to
-    # an Anker account and on WiFi, so from a BLE-only client the write is
-    # accepted and never acts.
+    async def set_tou_plan(
+        self,
+        periods: list[TouPeriod],
+        *,
+        enabled: bool,
+        reserve_battery_percentage: int | None = None,
+    ) -> None:
+        """Set the time-of-use plan.
+
+        Periods are whole hours on the device clock and may leave gaps; one
+        that crosses midnight is sent as two. :attr:`active_tariff` lists when
+        a period takes effect.
+
+        :param periods: Up to 6 periods, each ending after it starts.
+        :param enabled: True for time-of-use, False for the standard mode.
+        :param reserve_battery_percentage: Battery percentage the plan keeps in
+            reserve, 0-100, or None to keep the current one.
+        :raises ValueError: If a period or the reserve is out of range.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        _validate_tou_periods(periods)
+        parameters = PARAMETERS_TOU_PLAN
+        if reserve_battery_percentage is None:
+            parameters = {
+                tag: spec for tag, spec in PARAMETERS_TOU_PLAN.items() if tag != "a5"
+            }
+        else:
+            _validate_percentage(reserve_battery_percentage)
+
+        await self._send_command(
+            CMD_TOU_PLAN,
+            parameters,
+            enabled=enabled,
+            percentage=reserve_battery_percentage,
+            records=[
+                {
+                    "tariff": period.tariff.value,
+                    "start_hour": period.start_hour,
+                    "end_hour": period.end_hour,
+                }
+                for period in periods
+            ],
+        )
 
     @property
     def serial_number(self) -> str:
@@ -1144,6 +1194,11 @@ class C1000G2(SolixBLEDevice):
 
         PortStatus.INPUT signifies a source is present, NOT_CONNECTED that the
         port is empty. Presence only; it does not imply current is flowing.
+
+        .. note::
+           A solar array counts as present only while its panels give a
+           voltage, so it reads NOT_CONNECTED at night with the panels still
+           attached. The 12 V car-socket adapter reads INPUT at 0 W.
 
         :returns: Status of the DC input port.
         """
@@ -1285,7 +1340,7 @@ class C1000G2(SolixBLEDevice):
 
         :returns: Battery charge percentage upper limit or default int value.
         """
-        tou = self._tag("d9", D9_TOU)
+        tou = self._tag("d9", PPS_M6_TOU)
         return DEFAULT_METADATA_INT if tou is None else tou.max_battery_percentage
 
     @property
@@ -1294,7 +1349,7 @@ class C1000G2(SolixBLEDevice):
 
         :returns: Battery charge percentage lower limit or default int value.
         """
-        tou = self._tag("d9", D9_TOU)
+        tou = self._tag("d9", PPS_M6_TOU)
         return DEFAULT_METADATA_INT if tou is None else tou.min_battery_percentage
 
     @property
@@ -1613,9 +1668,14 @@ class C1000G2(SolixBLEDevice):
         if plan is None:
             return None
 
+        theme = plan.screensaver_and_theme & CLOCK_THEME_MASK
         return DisplayPlan(
             screensaver_enabled=bool(plan.screensaver_and_theme & SCREENSAVER_BIT),
-            clock_theme=(plan.screensaver_and_theme & ~SCREENSAVER_BIT) + 1,
+            clock_theme=(
+                ClockTheme(theme)
+                if theme <= ClockTheme.CATALOG.value
+                else ClockTheme.THEME_1
+            ),
             clock_24h=plan.clock_24h,
             day_start=plan.day_start,
             day_end=plan.day_end,
@@ -1633,7 +1693,7 @@ class C1000G2(SolixBLEDevice):
 
         :returns: True if on, False if off, or default bool value.
         """
-        tou = self._tag("d9", D9_TOU)
+        tou = self._tag("d9", PPS_M6_TOU)
         return DEFAULT_METADATA_BOOL if tou is None else bool(tou.tou_mode)
 
     @property
@@ -1641,13 +1701,23 @@ class C1000G2(SolixBLEDevice):
         """Tariff of the time-of-use period in force.
 
         .. note::
-           A period is in force only while the device is bound to an Anker
-           account and on WiFi, has AC input and the clock is inside one of
-           :attr:`tou_periods`; otherwise this reads NONE.
+           A period is in force only while time-of-use is on, the device is
+           bound to an Anker account and on WiFi, it has AC input, no
+           Alternator Charger is attached, Battery-Only Power is off and the
+           clock is inside one of :attr:`tou_periods`; otherwise this reads
+           NONE. The plan may be written from any client.
+
+        .. warning::
+           During a PEAK or MID_PEAK period the device stops charging from AC
+           while the battery is at or above the greater of
+           :attr:`reserve_battery_percentage` and
+           :attr:`min_battery_percentage` + 5 % (0.3 % higher while it is
+           already charging). OFF_PEAK and NONE charge as usual, and the AC
+           output is not affected.
 
         :returns: Active tariff, NONE, or UNKNOWN.
         """
-        tou = self._tag("d9", D9_TOU)
+        tou = self._tag("d9", PPS_M6_TOU)
         if tou is None:
             return TariffType.UNKNOWN
         try:
@@ -1661,7 +1731,7 @@ class C1000G2(SolixBLEDevice):
 
         :returns: Reserve percentage or default int value.
         """
-        tou = self._tag("d9", D9_TOU)
+        tou = self._tag("d9", PPS_M6_TOU)
         return DEFAULT_METADATA_INT if tou is None else tou.reserve_battery_percentage
 
     @property
@@ -1670,7 +1740,7 @@ class C1000G2(SolixBLEDevice):
 
         :returns: The periods in the order stored, empty without data.
         """
-        tou = self._tag("d9", D9_TOU)
+        tou = self._tag("d9", PPS_M6_TOU)
         if tou is None:
             return []
 
@@ -1743,5 +1813,5 @@ class C1000G2(SolixBLEDevice):
         :returns: The parsed tail, or None without data or on firmware that
             doesn't send it.
         """
-        tou = self._tag("d9", D9_TOU)
+        tou = self._tag("d9", PPS_M6_TOU)
         return None if tou is None else tou.backup

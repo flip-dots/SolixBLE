@@ -9,7 +9,7 @@ from datetime import datetime
 import pytest
 
 from SolixBLE.devices.c1000g2 import C1000G2, DisplayLanguage
-from SolixBLE.states import DisplayTimeout, LightStatus
+from SolixBLE.states import DisplayTimeout, LightStatus, TariffType, TouPeriod
 from tests.const import NEGOTIATION_RESPONSES_SOLIX
 
 #: An idle C1000 Gen 2 (A1763, MainMcu v1.1.2.6) with the mains lead in,
@@ -214,6 +214,55 @@ C1000G2_TEST_COMMANDS = [
     ),
 ]
 
+
+#: Time-of-use plans and the 4090 payload each sends (before the timestamp).
+#: All but the last are payloads a C2000 Gen 2 acked and stored.
+C1000G2_TOU_PLANS = [
+    pytest.param(
+        [TouPeriod(TariffType.OFF_PEAK, 0, 17), TouPeriod(TariffType.PEAK, 17, 24)],
+        {"enabled": False},
+        "a10121a2020100a6020102a70704030011011118",
+        id="standard_with_two_periods",
+    ),
+    pytest.param(
+        [TouPeriod(TariffType.PEAK, 21, 22)],
+        {"enabled": True},
+        "a10121a2020101a6020101a70404011516",
+        id="peak_evening",
+    ),
+    pytest.param(
+        [TouPeriod(TariffType.PEAK, 15, 16)],
+        {"enabled": True},
+        "a10121a2020101a6020101a70404010f10",
+        id="peak_afternoon",
+    ),
+    pytest.param(
+        [TouPeriod(TariffType.OFF_PEAK, 0, 24)],
+        {"enabled": True},
+        "a10121a2020101a6020101a70404030018",
+        id="off_peak_all_day",
+    ),
+    pytest.param(
+        [TouPeriod(TariffType.MID_PEAK, 7, 11), TouPeriod(TariffType.PEAK, 17, 21)],
+        {"enabled": True, "reserve_battery_percentage": 50},
+        "a10121a2020101a5020132a6020102a7070402070b011115",
+        id="with_reserve_and_a_gap",
+    ),
+]
+
+#: Time-of-use plans the device can't take.
+C1000G2_TOU_PLANS_OUT_OF_RANGE = [
+    pytest.param(
+        [TouPeriod(TariffType.PEAK, h, h + 1) for h in range(7)],
+        {},
+        id="seven",
+    ),
+    pytest.param([TouPeriod(TariffType.OFF_PEAK, 15, 2)], {}, id="wraps_midnight"),
+    pytest.param([TouPeriod(TariffType.PEAK, 5, 5)], {}, id="empty"),
+    pytest.param([TouPeriod(TariffType.PEAK, 20, 25)], {}, id="past_midnight"),
+    pytest.param([TouPeriod(TariffType.NONE, 0, 24)], {}, id="no_tariff"),
+    pytest.param([], {"reserve_battery_percentage": 101}, id="reserve"),
+]
 
 ############################
 # Test device commands E2E #

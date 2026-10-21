@@ -38,7 +38,9 @@ from .states import (
     PortSchedule,
     PortStatus,
     PortTimer,
+    TariffType,
     TemperatureUnit,
+    TouPeriod,
 )
 from .utilities import discover_devices, set_region
 
@@ -71,7 +73,9 @@ __all__ = [
     "Solarbank2",
     "Solarbank3",
     "SolixBLEDevice",
+    "TariffType",
     "TemperatureUnit",
+    "TouPeriod",
     "capability_from_advertisement",
     "device_class_from_advertisement",
     "discover_devices",

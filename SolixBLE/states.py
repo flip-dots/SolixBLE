@@ -256,7 +256,7 @@ class ClockFormat(Enum):
 
 
 class ClockTheme(Enum):
-    """The clock display theme of a Prime device, valued by its wire index."""
+    """The clock display theme, valued by its wire index."""
 
     #: The theme is unknown.
     UNKNOWN = -1
@@ -275,6 +275,39 @@ class ClockTheme(Enum):
 
     #: An image uploaded in the app.
     CUSTOM = 5
+
+
+class TariffType(Enum):
+    """A time-of-use tariff period."""
+
+    #: The tariff is unknown.
+    UNKNOWN = -1
+
+    #: No tariff period is active.
+    NONE = 0
+
+    #: Peak.
+    PEAK = 1
+
+    #: Mid-peak.
+    MID_PEAK = 2
+
+    #: Off-peak.
+    OFF_PEAK = 3
+
+
+@dataclass(frozen=True)
+class TouPeriod:
+    """One period of a time-of-use plan, in whole hours.
+
+    :param tariff: Tariff of the period.
+    :param start_hour: First hour of the period, 0-23.
+    :param end_hour: Hour the period ends, 1-24.
+    """
+
+    tariff: TariffType
+    start_hour: int
+    end_hour: int
 
 
 @dataclass(frozen=True)

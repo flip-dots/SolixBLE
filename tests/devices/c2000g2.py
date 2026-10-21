@@ -11,12 +11,7 @@ from datetime import datetime
 import pytest
 
 from SolixBLE.constructs import Parameters
-from SolixBLE.devices.c1000g2 import (
-    DisplayLanguage,
-    DisplayPlan,
-    TariffType,
-    TouPeriod,
-)
+from SolixBLE.devices.c1000g2 import DisplayLanguage, DisplayPlan
 from SolixBLE.devices.c2000g2 import (
     C2000G2,
     AcInputState,
@@ -24,7 +19,15 @@ from SolixBLE.devices.c2000g2 import (
     DeviceEventType,
     OtaBlockReason,
 )
-from SolixBLE.states import ChargingStatus, DisplayTimeout, LightStatus, PortStatus
+from SolixBLE.states import (
+    ChargingStatus,
+    ClockTheme,
+    DisplayTimeout,
+    LightStatus,
+    PortStatus,
+    TariffType,
+    TouPeriod,
+)
 
 #: A c421 from MainMcu v1.2.1.6 (``_0009`` era), a BP2000 attached at 42 %,
 #: idle, mains unplugged (AC input auto-off), outage alert on.
@@ -57,6 +60,91 @@ OTA_REPLY_BLOCKED = "00a10131a2020100a3020102a4020128a502010fa602010ffd100031373
 
 #: Clock-screen read reply to 4092, for a theme with no name.
 THEME_NAME_REPLY = "00a10131a211048100000000000000000001e00138047fa30104"
+
+#: C421_0009's time-of-use block, which the read-backs below replace.
+D9_0009 = "d9230400000a5f0503030012011215031518000000a810af6affffffff0000000000000000"
+
+#: The time-of-use block a C2000 Gen 2 sent after each time-of-use write
+#: (BLE 4090 or MQTT 0090, each acked), with what it reads as. Reserve 50 %,
+#: max 95 %, min 5 % throughout.
+C2000G2_TOU_READBACKS = [
+    pytest.param(
+        "d920040000325f05020300110111180000009099c56aa0a7c56a0000000000000000",
+        {
+            "tou_enabled": False,
+            "active_tariff": TariffType.NONE,
+            "tou_periods": [
+                TouPeriod(TariffType.OFF_PEAK, 0, 17),
+                TouPeriod(TariffType.PEAK, 17, 24),
+            ],
+        },
+        id="two_periods_stored",
+    ),
+    pytest.param(
+        "d920040000325f05020203001101110000009099c56aa0a7c56a0000000000000000",
+        {
+            "tou_periods": [
+                TouPeriod(TariffType.MID_PEAK, 3, 0),
+                TouPeriod(TariffType.UNKNOWN, 1, 17),
+            ],
+        },
+        id="count_written_into_a7_shifts_the_records",
+    ),
+    pytest.param(
+        "d923040000325f05030300070207110111180000009099c56aa0a7c56a0000000000000000",
+        {
+            "reserve_battery_percentage": 50,
+            "tou_periods": [
+                TouPeriod(TariffType.OFF_PEAK, 0, 7),
+                TouPeriod(TariffType.MID_PEAK, 7, 17),
+                TouPeriod(TariffType.PEAK, 17, 24),
+            ],
+        },
+        id="a3_and_a4_ignored",
+    ),
+    pytest.param(
+        "d91d040001325f05010115160000009099c56aa0a7c56a0000000000000000",
+        {
+            "tou_enabled": True,
+            "active_tariff": TariffType.NONE,
+            "tou_periods": [TouPeriod(TariffType.PEAK, 21, 22)],
+        },
+        id="on_outside_its_period",
+    ),
+    pytest.param(
+        "d91d040000325f05010115160000009099c56aa0a7c56a0000000000000000",
+        {
+            "tou_enabled": False,
+            "tou_periods": [TouPeriod(TariffType.PEAK, 21, 22)],
+        },
+        id="mode_alone_off_keeps_the_periods",
+    ),
+    pytest.param(
+        "d91d040101325f0501010f100000009099c56aa0a7c56a0000000000000000",
+        {
+            "tou_enabled": True,
+            "active_tariff": TariffType.PEAK,
+            "tou_periods": [TouPeriod(TariffType.PEAK, 15, 16)],
+        },
+        id="peak_active",
+    ),
+    pytest.param(
+        "d91d040301325f05010300180000009099c56aa0a7c56a0000000000000000",
+        {
+            "active_tariff": TariffType.OFF_PEAK,
+            "tou_periods": [TouPeriod(TariffType.OFF_PEAK, 0, 24)],
+        },
+        id="off_peak_active",
+    ),
+    pytest.param(
+        "d91d040001325f0501030f020000009099c56aa0a7c56a0000000000000000",
+        {
+            "active_tariff": TariffType.NONE,
+            "tou_periods": [TouPeriod(TariffType.OFF_PEAK, 15, 2)],
+        },
+        id="period_across_midnight_never_active",
+    ),
+]
 
 ########################
 # Test device commands #
@@ -426,7 +514,7 @@ C2000G2_TEST_VALUES = [
             "outage_alert_enabled": True,
             "display_plan": DisplayPlan(
                 screensaver_enabled=True,
-                clock_theme=2,
+                clock_theme=ClockTheme.THEME_2,
                 clock_24h=True,
                 day_start=480,
                 day_end=1080,
