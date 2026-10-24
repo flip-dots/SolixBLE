@@ -279,13 +279,13 @@ helper classes.
       Path <|.. LegacyAesPath
       NegotiatedSession --> Path : path, the first of PATHS whose matches() accepts x803
 
-- `_TRANSPORT` is a class attribute: the GATT characteristics, and whether to negotiate.
-- `_OUTER_HINT` is `PlainOuter` unless the class overrides it.
-- `_outer_class` starts as `_initial_outer(advertisement)`, becomes `EncryptedOuter` after a plain refusal, then the outer that last authorized.
-- `announcement` holds what the device declared.
-- `NegotiatedSession.encrypt()` uses `path.encrypt_override()`, else `outer.encrypt()` under `path.keys`. `NegotiatedSession.decrypt()` uses `outer.decrypt()` under `path.keys`.
-- The outer is how the negotiation travels and which cipher the session uses (see [Outer protocols](#outer-protocols)).
-- The path is the key exchange and authorization after the shared opening (see [Paths](#paths)).
+- ``_TRANSPORT`` is a class attribute: the GATT characteristics, and whether to negotiate.
+- ``_OUTER_HINT`` is ``PlainOuter`` unless the class overrides it.
+- ``_outer_class`` starts as ``_initial_outer(advertisement)``, becomes ``EncryptedOuter`` after a plain refusal, then the outer that last authorized.
+- ``announcement`` holds what the device declared.
+- ``NegotiatedSession.encrypt()`` uses ``path.encrypt_override()``, else ``outer.encrypt()`` under ``path.keys``. ``NegotiatedSession.decrypt()`` uses ``outer.decrypt()`` under ``path.keys``.
+- The outer is how the negotiation travels and which cipher the session uses (see `Outer protocols`_).
+- The path is the key exchange and authorization after the shared opening (see Paths).
 - The session ties one outer and one path to one connection; the device is its link, which builds and writes the frames.
 
 
@@ -580,7 +580,7 @@ What :py:meth:`connect() <SolixBLE.SolixBLEDevice.connect>` runs:
 
 The shared opening, then each path's replies and what each sends next.
 
-Shared opening (`NegotiatedSession`):
+Shared opening (``NegotiatedSession``):
 
 .. mermaid::
 
@@ -596,7 +596,7 @@ Shared opening (`NegotiatedSession`):
     Note over C: _record_capability(): MTU, capability, auth<br/>path = _choose_path(): the first of PATHS<br/>whose matches() accepts x803, else UnsupportedNegotiation
     C->>D: x029
 
-`EcdhPath.on_stage()`:
+``EcdhPath.on_stage()``:
 
 .. mermaid::
 
@@ -622,7 +622,7 @@ Shared opening (`NegotiatedSession`):
         end
     end
 
-`LegacyAesPath.on_stage()`:
+``LegacyAesPath.on_stage()``:
 
 .. mermaid::
 
@@ -648,7 +648,8 @@ Shared opening (`NegotiatedSession`):
 
 
 .. note::
+    :collapsible: closed
 
-    The Prime Charging Station 240W (A91B2) advertises capability `00`, and the library follows it: the device opens on the plain outer, where ECDH runs in clear and authorizes at `0821`. Its capability reply is `a1 02 · a2 fd00 · a3 44 · a4 01 · a5 00`: it offers both ECDH and AES, and its auth method `a5` is `00`.
+    The Prime Charging Station 240W (A91B2) advertises capability ``00``, and the library follows it: the device opens on the plain outer, where ECDH runs in clear and authorizes at ``0821``. Its capability reply is ``a1 02 · a2 fd00 · a3 44 · a4 01 · a5 00``: it offers both ECDH and AES, and its auth method ``a5`` is ``00``.
 
-    The device also answers the encrypted outer, although its capability byte lacks `0x04`, and there only legacy AES authorizes it: stating AES in `4005` (`a5 02`), the `4022` key request CBC-sealed under the static key returns the session key in `4822`, and the session then runs GCM under that key with the static nonce, with no `4027`. ECDH on the encrypted outer completes the key exchange, but auth method `00` answers `4027` with `4827 00` and then drops the link. Neither encrypted-outer combination is how the library connects this device.
+    The device also answers the encrypted outer, although its capability byte lacks ``0x04``, and there only legacy AES authorizes it: stating AES in ``4005`` (``a5 02``), the ``4022`` key request CBC-sealed under the static key returns the session key in ``4822``, and the session then runs GCM under that key with the static nonce, with no ``4027``. ECDH on the encrypted outer completes the key exchange, but auth method ``00`` answers ``4027`` with ``4827 00`` and then drops the link. Neither encrypted-outer combination is how the library connects this device.
