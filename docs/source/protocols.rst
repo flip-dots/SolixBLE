@@ -8,40 +8,101 @@ Classes
 
 How a device object and its negotiation fit together:
 
-.. code-block:: text
+.. mermaid::
 
-    bleak scan result (AdvertisementData)
-       |-- device_class_from_advertisement() --> the model class
-       '-- capability_from_advertisement()  --> the outer to open with (0x04 = encrypted)
+  flowchart LR
+    adv["bleak scan result<br/>(AdvertisementData)"]
+    adv -- "device_class_from_advertisement()" --> cls["the model class"]
+    adv -- "capability_from_advertisement()" --> cap["the outer to open with<br/>(0x04 = encrypted)"]
+    cls --> inst["DeviceClass(ble_device, advertisement=advertisement_data)"]
+    cap --> inst
 
-    DeviceClass(ble_device, advertisement=advertisement_data)
+.. mermaid::
 
-    SolixBLEDevice                 connect(), _send_command(), _process_notification()
-      |-- C1000G2, C800, F3800, Solarbank2, ..., Generic
-      '-- PrimeDevice              _OUTER_HINT = EncryptedOuter, _post_authorize()
-            '-- PrimeCharger250w, PrimeCharger160w, PrimePowerBank20k, MagGo3in1
+  classDiagram
+      direction TB
+      class SolixBLEDevice {
+          _TRANSPORT
+          _OUTER_HINT = PlainOuter
+          _outer_class
+          _session
+          connect()
+          _send_command()
+          _process_notification()
+          _initial_outer(advertisement)
+      }
+      class PrimeDevice {
+          _OUTER_HINT = EncryptedOuter
+          _post_authorize()
+      }
+      SolixBLEDevice <|-- C1000G2
+      SolixBLEDevice <|-- C800
+      SolixBLEDevice <|-- F3800
+      SolixBLEDevice <|-- Solarbank2
+      SolixBLEDevice <|-- Generic
+      SolixBLEDevice <|-- PrimeDevice
+      PrimeDevice <|-- PrimeCharger250w
+      PrimeDevice <|-- PrimeCharger160w
+      PrimeDevice <|-- PrimePowerBank20k
+      PrimeDevice <|-- MagGo3in1
+      note for SolixBLEDevice "and the other device classes"
 
-      class attributes
-        _TRANSPORT     NegotiatingTransport | Transport2215 | LegacyTransport
-                       (GATT characteristics, and whether to negotiate)
-        _OUTER_HINT    PlainOuter unless the class overrides it
+      SolixBLEDevice --> NegotiatingTransport : _TRANSPORT
+      SolixBLEDevice --> Transport2215 : _TRANSPORT
+      SolixBLEDevice --> LegacyTransport : _TRANSPORT
 
-      per instance
-        _outer_class   _initial_outer(advertisement); EncryptedOuter after a plain
-                       refusal; then the outer that last authorized
-        _session  ---> NegotiatedSession(outer, link), a new one for each opening
-                         |-- outer          PlainOuter | EncryptedOuter
-                         |                  open flag, x005_tags(), encrypt(), decrypt()
-                         |-- path           EcdhPath, chosen after x803
-                         |                  on_stage(), keys, authorized
-                         |-- announcement   what the device declared
-                         '-- link           the device: _send_packet(), _timestamp(),
-                                            _generate_private_key(), ...
+      class Link {
+          <<protocol>>
+          _send_packet()
+          _timestamp()
+          _generate_private_key()
+      }
+      SolixBLEDevice ..|> Link
 
-    NegotiatedSession.encrypt() / decrypt() = outer.encrypt() / decrypt() under path.keys
+      class NegotiatedSession {
+          outer
+          path
+          announcement
+          link
+          open()
+          on_reply()
+          encrypt(payload)
+          decrypt(payload)
+      }
+      SolixBLEDevice --> NegotiatedSession : _session, a new one for each opening
+      NegotiatedSession --> Link : link
 
-- The outer is how the negotiation travels and which cipher the session uses (see `Outer protocols`_).
-- The path is the key exchange and authorization after the shared opening.
+      class Outer {
+          <<protocol>>
+          open_flag
+          sends_client_id
+          x005_tags(announcement)
+          encrypt(payload, keys)
+          decrypt(payload, keys)
+      }
+      Outer <|.. PlainOuter
+      Outer <|.. EncryptedOuter
+      NegotiatedSession --> Outer : outer
+
+      class Path {
+          <<protocol>>
+          keys
+          authorized
+          matches(announcement, outer)$
+          on_stage(session, msgtype, status, parameters)
+          encrypt_override(payload)
+      }
+      Path <|.. EcdhPath
+      Path <|.. LegacyAesPath
+      NegotiatedSession --> Path : path, the first of PATHS whose matches() accepts x803
+
+- `_TRANSPORT` is a class attribute: the GATT characteristics, and whether to negotiate.
+- `_OUTER_HINT` is `PlainOuter` unless the class overrides it.
+- `_outer_class` starts as `_initial_outer(advertisement)`, becomes `EncryptedOuter` after a plain refusal, then the outer that last authorized.
+- `announcement` holds what the device declared.
+- `NegotiatedSession.encrypt()` uses `path.encrypt_override()`, else `outer.encrypt()` under `path.keys`. `NegotiatedSession.decrypt()` uses `outer.decrypt()` under `path.keys`.
+- The outer is how the negotiation travels and which cipher the session uses (see [Outer protocols](#outer-protocols)).
+- The path is the key exchange and authorization after the shared opening (see [Paths](#paths)).
 - The session ties one outer and one path to one connection; the device is its link, which builds and writes the frames.
 
 
@@ -151,41 +212,42 @@ Building and parsing a packet
 
 Sending:
 
-.. code-block:: text
+.. mermaid::
 
-    _send_command(cmd, parameters)            session commands: pattern 03000f, adds fe
-    NegotiatedSession.send(msgtype, ...)      negotiation: pattern 030001, cmd from
-         |                                    PacketCommand.build(flags, msgtype)
-         v
-    _send_packet(pattern, cmd, parameters)
-      Parameters.build()        tag-length-value parameters (lambdas called with the device)
-      _encrypt_payload()        -> session.encrypt() -> outer.encrypt(payload, path.keys)
-      Packet.build()            ff09, length, pattern, cmd, payload, XOR checksum
-      write_gatt_char(UUID_COMMAND, packet)
+  flowchart TD
+      cmd["_send_command(cmd, parameters)<br/>session commands: pattern 03000f, adds fe"]
+      neg["NegotiatedSession.send(msgtype, ...)<br/>negotiation: pattern 030001,<br/>cmd from PacketCommand.build(flags, msgtype)"]
+      sp["_send_packet(pattern, cmd, parameters)"]
+      cmd --> sp
+      neg --> sp
+      sp --> build["Parameters.build()<br/>tag-length-value parameters<br/>(lambdas called with the device)"]
+      build --> enc["_encrypt_payload() -> session.encrypt()<br/>path.encrypt_override(), else<br/>outer.encrypt(payload, path.keys)"]
+      enc --> pkt["Packet.build()<br/>ff09, length, pattern, cmd, payload, XOR checksum"]
+      pkt --> write["write_gatt_char(UUID_COMMAND, packet)"]
 
 Receiving, on the telemetry characteristic:
 
-.. code-block:: text
+.. mermaid::
 
-    _process_notification(client, handle, data)
-      Packet.parse()            checks the ff09 header and the checksum
-      PacketPattern.parse()     family, composer, channel
-      PacketCommand.parse()     fragmented (0x80), encrypted (0x40), msgtype
-      |
-      |-- fragmented?           _reassemble(): FragmentedPayload, buffered by pattern + cmd,
-      |                         the joined payload once every fragment is in
-      |-- channel 0x01          _process_negotiation() -> session.on_reply()
-      |                         (decrypts if 0x40 is set; see `Negotiation flow`_)
-      |-- not 0x0f / 0x11       logged, dropped
-      |-- encrypted?            _decrypt_payload() -> session.decrypt(), once
-      |-- future for            future.set_result(payload)   (_listen_for_packet())
-      |   pattern + cmd?
-      '-- otherwise             _process_session(cmd, payload, encrypted=...)
-                                  msgtype 0x300 or in _TELEMETRY_COMMANDS:
-                                    Parameters.parse()
-                                    encrypted -> session.on_session_push()
-                                    _process_telemetry() -> state callbacks
-                                  any other msgtype: logged
+  flowchart TD
+      notif["_process_notification(client, handle, data)"]
+      parse["Packet.parse(): checks the ff09 header and the checksum<br/>PacketPattern.parse(): family, composer, channel<br/>PacketCommand.parse(): fragmented (0x80), encrypted (0x40), msgtype"]
+      notif --> parse
+      parse --> frag{"fragmented?"}
+      frag -- yes --> reasm["_reassemble(): FragmentedPayload,<br/>buffered by pattern + cmd"]
+      reasm -- "the joined payload,<br/>once every fragment is in" --> chan
+      frag -- no --> chan{"channel?"}
+      chan -- "0x01" --> nego["_process_negotiation() -> session.on_reply()<br/>(decrypts if 0x40 is set; see Negotiation flow)"]
+      chan -- "not 0x0f / 0x11" --> drop["logged, dropped"]
+      chan -- "0x0f / 0x11" --> encq{"encrypted?"}
+      encq -- yes --> dec["_decrypt_payload() -> session.decrypt(), once"]
+      encq -- no --> fut
+      dec --> fut{"future for channel + msgtype?<br/>(_future_key(): the composer<br/>and flags don't matter)"}
+      fut -- yes --> setres["future.set_result(payload)<br/>(_listen_for_packet())"]
+      fut -- no --> sess["_process_session(cmd, payload, encrypted=...)"]
+      sess --> tel{"msgtype 0x300 or in<br/>_TELEMETRY_COMMANDS?"}
+      tel -- yes --> telem["Parameters.parse()<br/>encrypted -> session.on_session_push()<br/>_process_telemetry() -> state callbacks"]
+      tel -- no --> logged["logged"]
 
 - ``_send_command()`` raises ``ConnectionError`` until the device is negotiated; its ``cmd`` carries the flags as given (e.g ``4200``).
 - The library sends every packet whole; only received packets are reassembled.
@@ -314,50 +376,96 @@ Negotiation flow
 
 What :py:meth:`connect() <SolixBLE.SolixBLEDevice.connect>` runs:
 
-.. code-block:: text
+.. mermaid::
 
-    connect()
-      |-- establish_connection(); start_notify(UUID_TELEMETRY, _process_notification)
-      |-- _negotiate()        until negotiated, the link drops, an UnsupportedNegotiation,
-      |     |                 or NEGOTIATION_TIMEOUT
-      |     '-- _initiate_negotiations()      again if the device sends nothing for
-      |           |                           NEGOTIATION_RESPONSE_TIMEOUT seconds
-      |           |-- _session = NegotiatedSession(_outer_class(), self)
-      |           '-- _session.open()         sends x001
-      |
-      |   each reply: _process_notification() -> _process_negotiation()
-      |                 -> NegotiatedSession.on_reply() -> on_plaintext()
-      |                      x801, x803    handled by the session
-      |                      later         path.on_stage() (EcdhPath)
-      |
-      |-- negotiated:     _on_authorized()    _outer_class = type(outer); _post_authorize()
-      |                   _post_connect(); the reconnect and keep-alive tasks start
-      '-- not negotiated: _reopen_if_refused()
-                            link dropped, no reply, outer was PlainOuter
-                              -> _outer_class = EncryptedOuter; connect() once more
-                            otherwise -> False
+  flowchart TD
+      connect["connect()"]
+      est["establish_connection()<br/>start_notify(UUID_TELEMETRY, _process_notification)"]
+      nego["_negotiate()<br/>until negotiated, the link drops,<br/>an UnsupportedNegotiation, or NEGOTIATION_TIMEOUT"]
+      init["_initiate_negotiations()<br/>again if the device sends nothing for<br/>NEGOTIATION_RESPONSE_TIMEOUT seconds"]
+      open["_session = NegotiatedSession(_outer_class(), self)<br/>_session.open(): sends x001"]
+      reply["each reply: _process_notification() -> _process_negotiation()<br/>-> NegotiatedSession.on_reply() -> on_plaintext()<br/>x801, x803: handled by the session<br/>later: path.on_stage() (EcdhPath or LegacyAesPath)"]
+      connect --> est --> nego --> init --> open
+      open -.-> reply
+      reply -.-> nego
+      nego --> done{"negotiated?"}
+      done -- yes --> auth["_on_authorized(): _outer_class = type(outer), _post_authorize()<br/>_post_connect(); the reconnect and keep-alive tasks start"]
+      done -- no --> refused{"_reopen_if_refused():<br/>link dropped, no reply,<br/>outer was PlainOuter?"}
+      refused -- yes --> reopen["_outer_class = EncryptedOuter"]
+      reopen -- "connect() once more" --> connect
+      refused -- no --> fail["False"]
 
-Each reply and what it sends next:
+The shared opening, then each path's replies and what each sends next.
 
-.. code-block:: text
+Shared opening (`NegotiatedSession`):
 
-    reply   handled in                                     sends
-    -----   --------------------------------------------   ---------------------------
-    -       NegotiatedSession.open()                       x001  time (+ client id)
-    x801    NegotiatedSession.on_plaintext()               x003  client MTU
-    x803    _record_capability(): MTU, capability, auth    x029
-            path = _choose_path() -> EcdhPath
-    x829    EcdhPath.on_stage(): _record_identity()        x005  method (ECDH), MTU
-            serial, MAC                                          (outer.x005_tags())
-    x805    link._generate_private_key()                   x021  client public key
-    x821    keys = Keys.parse(ecdh_shared_secret(...))     x022  time, time zone
-            plain outer: authorized
-    x822    encrypted outer, not yet authorized            x027  client token
-    x827    _register(): status 00 authorized; 09 sets
-            confirmation_window, and the device pushes x827
-            on pattern 030101 once its button is pressed
+.. mermaid::
+
+  sequenceDiagram
+    participant C as Client (NegotiatedSession)
+    participant D as Device
+    Note over C: open()
+    C->>D: x001 time (+ client id)
+    D->>C: x801
+    Note over C: on_plaintext()
+    C->>D: x003 client MTU
+    D->>C: x803
+    Note over C: _record_capability(): MTU, capability, auth<br/>path = _choose_path(): the first of PATHS<br/>whose matches() accepts x803, else UnsupportedNegotiation
+    C->>D: x029
+
+`EcdhPath.on_stage()`:
+
+.. mermaid::
+
+  sequenceDiagram
+    participant C as Client (EcdhPath)
+    participant D as Device
+    D->>C: x829
+    Note over C: record_identity(): serial, MAC
+    C->>D: x005 method ECDH, MTU (outer.x005_tags())
+    D->>C: x805
+    Note over C: status 00, else UnsupportedNegotiation<br/>link._generate_private_key()
+    C->>D: x021 client public key
+    D->>C: x821
+    Note over C: _exchange_keys(): keys = Keys.parse(ecdh_shared_secret(...))<br/>plain outer: authorized
+    C->>D: x022 time, time zone (send_clock())
+    D->>C: x822
+    opt encrypted outer, not yet authorized
+        C->>D: x027 client token
+        D->>C: x827
+        Note over C: _register(): status 00 authorized<br/>09 sets confirmation_window
+        opt status 09, once the device's button is pressed
+            D->>C: x827 pushed on pattern 030101
+        end
+    end
+
+`LegacyAesPath.on_stage()`:
+
+.. mermaid::
+
+  sequenceDiagram
+    participant C as Client (LegacyAesPath)
+    participant D as Device
+    D->>C: x829
+    Note over C: record_identity(): serial, MAC
+    C->>D: x005 method AES (a5 02), MTU
+    D->>C: x805
+    Note over C: status 00, else UnsupportedNegotiation<br/>keys = _bootstrap_keys()
+    C->>D: x022 time, time zone (send_clock()), CBC-sealed by encrypt_override()
+    D->>C: x822
+    Note over C: status 00 with a1, else UnsupportedNegotiation<br/>keys = a1[:16] + _ongoing_iv(), authorized
+    C->>D: x023 serial
+    D->>C: x823
+    Note over C: bind status logged
 
 - ``x`` is the flag nibble: ``0`` on the plain outer until keys are installed and ``4`` after (``0021``, then ``4022``), always ``4`` on the encrypted outer. Replies set ``0x800`` (``0801`` / ``4801``).
 - Before keys, the plain outer sends in clear and the encrypted outer under the static GCM key. Once ``x821`` installs the keys, the session cipher is CBC (plain) or GCM (encrypted).
 - The plain outer authorizes at ``0821``. The encrypted outer authorizes at ``4827`` status ``00``, the ``030101`` grant, or the first session push the client can decrypt (``on_session_push()``).
 - ``(+ client id)``: the plain outer inserts the client id as ``a2`` in ``0001``, ``0003``, ``0029``, ``0005`` and ``4022``; the encrypted outer sends none.
+
+
+.. note::
+
+    The Prime Charging Station 240W (A91B2) advertises capability `00`, and the library follows it: the device opens on the plain outer, where ECDH runs in clear and authorizes at `0821`. Its capability reply is `a1 02 · a2 fd00 · a3 44 · a4 01 · a5 00`: it offers both ECDH and AES, and its auth method `a5` is `00`.
+
+    The device also answers the encrypted outer, although its capability byte lacks `0x04`, and there only legacy AES authorizes it: stating AES in `4005` (`a5 02`), the `4022` key request CBC-sealed under the static key returns the session key in `4822`, and the session then runs GCM under that key with the static nonce, with no `4027`. ECDH on the encrypted outer completes the key exchange, but auth method `00` answers `4027` with `4827 00` and then drops the link. Neither encrypted-outer combination is how the library connects this device.
