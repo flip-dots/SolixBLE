@@ -3,10 +3,181 @@ Protocols
 =========
 
 
-Classes
--------
+Overview
+========
 
-How a device object and its negotiation fit together:
+Anker has implemented many protocols over the years for communicating with their devices,
+with each generally getting more complicated than the last. Some devices support older 
+protocols, some accept both older and newer ones, and some only accept the latest, with 
+this often changing with firmware updates and dependant on hardware revision. This page
+details the underlying protocol and the structure that SolixBLE uses to handle this. 
+
+
+The legacy protocol (Not supported)
+-----------------------------------
+
+This is the first protocol used only by early hardware revisions of the F2000, is 
+is completely distinct from the later protocols and shares nothing with them. These 
+devices are currently not supported.
+
+
+The early `Solix` protocol (Removed in firmware update)
+-------------------------------------------------------
+
+This is the first protocol that was used by multiple devices. It used no encryption and 
+transmitted data in plain text and was used by the C300(X), C800(X), C1000(X) and potentially
+more. This was the first version that SolixBLE supported and this protocol was removed in 
+a firmware update forcing all devices to use the encryption of the next protocol.
+
+
+The `Solix` protocol (Used by old devices)
+------------------------------------------
+
+This is the protocol used by G1 Solix devices today, such as the C300(X) and C1000(X), it 
+implements encryption by performing ECDH key negotiation during connection and then uses
+AES CBC for encrypting all communication using the shared secret.
+
+
+The `Prime` protocol
+--------------------
+
+This is the protocol used by older `Prime` devices today such as the 160w and 250w desktop 
+chargers. It differs from the `Solix` protocol in that it uses AES GCM for encryption and 
+the initial negotiation and ECDH exchange is encrypted using a static key. It is worth 
+noting that there is a newer variant of this protocol which requires you to press a button 
+when pairing.
+
+
+Packet structure
+================
+
+
+With the exception of the earliest devices, all Anker devices use the same packet structure 
+for sending data. Later versions of the protocol implement support for payloads to be spread
+across multiple packets (fragmentation), see the later diagram.
+
+.. mermaid::
+
+  packet-beta
+  title General Packet Layout Example
+  0-15: "Header (2B)"
+  16-31: "Size (2B)"
+  32-55: "Pattern (3B)"
+  56-71: "CMD (2B)"
+  72-327: "Payload (variable)"
+  328-335: "Checksum (1B)"
+
+
+Example of a decoded packet:
+
+.. mermaid::
+
+  packet-beta
+  title Packet Structure for ff090e00030001080100a1010152
+  0-15: "Header: 0xFF09 (2B)"
+  16-31: "Size: 0x0E00 (2B)"
+  32-55: "Pattern: 0x030001 (3B)"
+  56-71: "CMD: 0x0801 (2B)"
+  72-103: "Payload: 0x00A10101 (4B)"
+  104-111: "Checksum: 0x52 (1B)"
+
+
+.. note::
+
+  In this example the payload is not encrypted (encryption is determined by the pattern field) as the example
+  is from a negotiation packet of an older Solix device, normal payloads may require defragmentation and will
+  require decryption.
+
+
+Decrypted payload structure
+===========================
+
+Once the payload has been defragmented and decrypted (protocol specific) the plain text payload may be decoded. 
+This structure is the same across all protocols (except for early revisions of the F2000) and uses TLV encoding, where the
+payload is made up of a list of parameters and each parameter contains a key, length field, optional type field,
+and value. 
+
+.. mermaid::
+
+  packet-beta
+  title General Parameters Layout
+  0-7: "Key (1B)"
+  8-15: "Size (1B)"
+  16-23: "Type (optional) (1B)"
+  24-31: "Value (Size bytes)"
+ 
+Example of a decoded payload:
+
+.. mermaid::
+
+    packet-beta
+    title Anker Payload TLV Structure (00a10102a202fd00a30144a40101a50102)
+    0-7: "Prefix / Status: 0x00 (1B)"
+    8-15: "P1 Key: 0xA1 (1B)"
+    16-23: "P1 Length: 0x01 (1B)"
+    24-31: "P1 Value: 0x02 (1B)"
+    32-39: "P2 Key: 0xA2 (1B)"
+    40-47: "P2 Length: 0x02 (1B)"
+    48-55: "P2 Type: 0xFD (1B)"
+    56-63: "P2 Value: 0x00 (1B)"
+    64-71: "P3 Key: 0xA3 (1B)"
+    72-79: "P3 Length: 0x01 (1B)"
+    80-87: "P3 Value: 0x44 (1B)"
+    88-95: "P4 Key: 0xA4 (1B)"
+    96-103: "P4 Length: 0x01 (1B)"
+    104-111: "P4 Value: 0x01 (1B)"
+    112-119: "P5 Key: 0xA5 (1B)"
+    120-127: "P5 Length: 0x01 (1B)"
+    128-135: "P5 Value: 0x02 (1B)"
+
+The exact steps in decoding a payload:
+
+.. mermaid::
+
+  flowchart TD
+      Start([Start Payload Parsing]) --> ReadPrefix{Status Prefix < 0xA1?}
+      ReadPrefix -- Yes --> HasPrefix[Read Status Byte / Prefix: 1B]
+      ReadPrefix -- No / None --> ReadKey
+      HasPrefix --> ReadKey[Read Parameter Key: 1B]
+      
+      ReadKey --> ReadLen[Read Parameter Length: 1B]
+      ReadLen --> CheckLen{Length > 1?}
+      
+      CheckLen -- Yes --> HasType[Read Optional Type Field: 1B]
+      CheckLen -- No --> SkipType[No Type Field]
+      
+      HasType --> ReadVal[Read Remaining Bytes as Value]
+      SkipType --> ReadVal
+      
+      ReadVal --> MoreBytes{More bytes left in payload?}
+      MoreBytes -- Yes --> ReadKey
+      MoreBytes -- No --> End([End Parsing / Build Dict])
+
+      style Start fill:#f9f,stroke:#333,stroke-width:2px
+      style End fill:#bbf,stroke:#333,stroke-width:2px
+    
+
+Implementation
+==============
+
+This section covers how the protocols are implemented in the classes and the control flow 
+when communicating with a device.
+
+
+Initialization flow
+-------------------
+
+The Bluetooth advertisement from an Anker device is useful for two purposes, first to 
+return the correct device class for the device (e.g c1000x.py for C1000(X)) and for 
+finding out what protocols the device supports, since a model might support multiple protocols.
+
+The former is achieved using `device_class_from_advertisement` which given a BLE advertisement returns
+the correct class to use to connect to the device, with the advertisement passed to the device class 
+during initialization providing being used to determine which protocol to use to connect to the device.
+
+It is possible to connect using no advertisement and the default protocol will be used for the model, but 
+this may result in failure if the device does not support the default protocol, (i.e because its running 
+firmware too old or too new).
 
 .. mermaid::
 
@@ -16,6 +187,18 @@ How a device object and its negotiation fit together:
     adv -- "capability_from_advertisement()" --> cap["the outer to open with<br/>(0x04 = encrypted)"]
     cls --> inst["DeviceClass(ble_device, advertisement=advertisement_data)"]
     cap --> inst
+
+
+SolixBLE structure
+------------------
+
+SolixBLE is structured into a hierarchy of classes, with devices able to override or implement additional 
+functionality to handle device (e.g C1000) or device class specific (Prime style) quirks.
+
+The `SolixBLEDevice` class is the main class of the program which implements the main control flow of the
+program with device class specific details (such as the transport implementation) being split out into 
+helper classes.
+
 
 .. mermaid::
 
