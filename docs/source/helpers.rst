@@ -9,3 +9,6 @@ Helpers
 
 .. autofunction:: SolixBLE.device_class_from_advertisement
     :no-index:
+
+.. autofunction:: SolixBLE.set_region
+    :no-index:

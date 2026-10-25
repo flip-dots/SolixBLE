@@ -6,7 +6,47 @@ Constants used inside tests.
 
 from bleak import BLEDevice
 
-from SolixBLE import const, prime_device
+SOLIX_TEST_PRIVATE_KEY = "7dfbea61cd95cee49c458ad7419e817f1ade9a66136de3c7d5787af1458e39f4"
+"""
+P-256 private value pinned as the ECDH key of Solix devices in tests.
+"""
+
+PRIME_TEST_PRIVATE_KEY = "754744d72984c378bc4fa77d7fcdf6bbb6d9df119fa9be4948eb8a3b4cd6071f"
+"""
+P-256 private value pinned as the ECDH key of Prime devices in tests.
+"""
+
+NEGOTIATION_COMMAND_0 = "ff0936000300010001a10442ad8c69a22462326463306231372d623735642d346162662d626136652d656337633939376332336537b9"
+"""
+Negotiation opening (0001) sent by a Solix device in tests.
+"""
+
+NEGOTIATION_COMMAND_1 = "ff093d000300010003a10442ad8c69a22462326463306231372d623735642d346162662d626136652d656337633939376332336537a30120a40200f064"
+"""
+Response to 0801 sent by a Solix device in tests.
+"""
+
+NEGOTIATION_COMMAND_2 = "ff0936000300010029a10442ad8c69a22462326463306231372d623735642d346162662d626136652d65633763393937633233653791"
+"""
+Response to 0803 sent by a Solix device in tests.
+"""
+
+NEGOTIATION_COMMAND_3 = "ff0940000300010005a10442ad8c69a22462326463306231372d623735642d346162662d626136652d656337633939376332336537a30120a40200f0a50140fb"
+"""
+Response to 0829 sent by a Solix device in tests.
+"""
+
+NEGOTIATION_COMMAND_4 = "ff094c000300010021a140060ea168f232aedb37fb2d120c49180329ac72ab5ec3eb8fd30a2f252dc5e151dabccd9b1dc1e288704ca760a0d8c918e5c94823a1f609a4bf07fb4c33ee219085"
+"""
+Response to 0805 (the client's public key) sent by a Solix device in tests.
+"""
+
+SOLIX_NEGOTIATION_4022 = "ff095a00030001402222c97d5c5bf02e0b43c62c864817cd38b9fd152113728513cc88bc4a1b4de3060868d9deacb562ca59a369397627effb179b08be8ba760943b24407712c55e6bb59f3ae7c142a726d0f46a149eeaded44b"
+"""
+Response to 0821 sent by a Solix device in tests: ``a1`` time, ``a2`` client
+id, ``a3`` UTC offset (int32 seconds west), ``a5`` POSIX time zone. Derived
+from the recorded 0821 and the pinned key, not recorded.
+"""
 
 MOCK_DEVICE_NAME = "Mock Device"
 """
@@ -53,8 +93,10 @@ NEGOTIATION_RESPONSES_PRIME: dict[str, list[str]] = {
     "ff094600030001402757ec76586f3501e8cf6185d8c4035707377af9af3a2e40b02b86e7531974f1c22440de6e43705566b77cf940280d70e86b1fa915ab5a360040237091b9": [
         "ff091b000300014827f60b45600839b2c171b33dc5790ed64ae328"
     ],
-    "ff09230003000f420057e9b8dfdeb3da799151684e584bb99eaaccfac9baf7cbcfa6e4": [],
-    "ff09530003000f420a57e9b883d958e48e5b7de48d980206577e2dafbb3d604dea3686f3011969f0db2311906d142b5730ee2bfb11e3fbbe7485aac887798a31066997edf60c074ea9e1d5351970e9fa5a2960": [],
+    # 4200 and 420a with the typed timestamp trailer the app sends, the
+    # region typed 02 and no a5; derived from the recorded session, not recorded
+    "ff09240003000f420057e9b8dfdf5f4cb54d31ac87bed31d41ecb37d5d18230d9b61c029": [],
+    "ff09500003000f420a57e9b883d95ee48e5b7de48d980206577e2dafbb3d604dea3686f3011969f0db2311906d142b5730ee2bfb11e3fbbe2f82a82600c80c7e7ffe9781ec3fecc686c7b90a05edf0a9": [],
 }
 """
 This maps the expected commands sent by the library to what my Anker Prime 160w
@@ -63,20 +105,20 @@ charger sends in response. Its used to emulate it for testing negotiations.
 
 
 NEGOTIATION_RESPONSES_SOLIX: dict[str, list[str]] = {
-    const.NEGOTIATION_COMMAND_0: ["ff090e00030001080100a1010152"],
-    const.NEGOTIATION_COMMAND_1: [
+    NEGOTIATION_COMMAND_0: ["ff090e00030001080100a1010152"],
+    NEGOTIATION_COMMAND_1: [
         "ff091b00030001080300a10102a202fd00a30144a40101a50102ff"
     ],
-    const.NEGOTIATION_COMMAND_2: [
+    NEGOTIATION_COMMAND_2: [
         "ff093800030001082900a10103a2054553503332a307302e302e302e33a41041504339464530453237333030323735a506f49d8a104e0c9a"
     ],
-    const.NEGOTIATION_COMMAND_3: ["ff090b00030001080500f2"],
-    const.NEGOTIATION_COMMAND_4: [
+    NEGOTIATION_COMMAND_3: ["ff090b00030001080500f2"],
+    NEGOTIATION_COMMAND_4: [
         "ff094d00030001082100a140b2ade5cac4f4a0c1307e44a0e9c5363cb21e4c8485ee324c23be949fa5d5929a75e57da3207c948a0c366ca9ea1ab2cb8e57d2d046a6ebefe5d96adb5d4cb35039"
     ],
     # The command sent to the device in response to entering stage 5
     # is encrypted using the shared secret
-    "ff095a00030001402222c97d5c5bf02e0b43c62c864817cd38b9fd152113728513cc88bc4a1b4de3062473fcd5819618c4b926694d2732c337095a18974243127aa5e266f76f9ac7de06ba357763abe88aaef98f8c7a5e48a324": [],
+    SOLIX_NEGOTIATION_4022: [],
 }
 """
 This maps the expected commands sent by the library to what my Anker Solix C1000(X)
