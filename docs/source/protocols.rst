@@ -52,6 +52,9 @@ Packet structure
 ================
 
 
+The overall structure
+---------------------
+
 With the exception of the earliest devices, all Anker devices use the same packet structure 
 for sending data. Later versions of the protocol implement support for payloads to be spread
 across multiple packets (fragmentation), see the later diagram.
@@ -61,7 +64,7 @@ across multiple packets (fragmentation), see the later diagram.
   packet-beta
   title General Packet Layout Example
   0-15: "Header (2B)"
-  16-31: "Size (2B)"
+  16-31: "Length (2B)"
   32-55: "Pattern (3B)"
   56-71: "CMD (2B)"
   72-327: "Payload (variable)"
@@ -75,7 +78,7 @@ Example of a decoded packet:
   packet-beta
   title Packet Structure for ff090e00030001080100a1010152
   0-15: "Header: 0xFF09 (2B)"
-  16-31: "Size: 0x0E00 (2B)"
+  16-31: "Length: 0x0E00 (2B)"
   32-55: "Pattern: 0x030001 (3B)"
   56-71: "CMD: 0x0801 (2B)"
   72-103: "Payload: 0x00A10101 (4B)"
@@ -89,8 +92,109 @@ Example of a decoded packet:
   require decryption.
 
 
+Advanced packet structure
+-------------------------
+
+The basic packet structure shown above can be further broken down to extract more details, 
+though these details are not always needed.
+
+Frames on the negotiating transport have this layout (0-based byte offsets):
+
+.. mermaid::
+
+  packet-beta
+  0-15: "magic (ff09)"
+  16-31: "length (u16 LE)"
+  32-39: "pattern family (03)"
+  40-47: "composer"
+  48-55: "channel"
+  56-59: "flags"
+  60-71: "message type"
+  72-79: "fragment index / total (only when fragmented)"
+  80-95: "payload (...)"
+  96-103: "XOR checksum"
+
+* Magic is the packet header used by all packets sent/received to/from the device.
+* Length is the total length of the packet.
+* The pattern is made up of 3 bytes and is used for packet routing with each byte specifying something.
+
+  * The first byte is always 0x03.
+  * The second byte is the channel and is 0x01 if the packet was sent by the device on its own and is 0x00 if its an echo of a command.
+  * The third byte is the dispatch key and specifies what type of command the packet contains.
+* The flags specify if the message is fragmented (0x08), encrypted (0x04), or neither (0x00).
+* The message type is effectively the command of the packet (e.g switch USB on/off, send negotiation stage 1 payload, etc).
+* The fragment index is an optional field only present if the fragmented field is set and contains the index of this fragment and the total number of fragments.
+* The payload is the TLV encoded parameters of the message type / command (e.g specifying which USB port to turn on/off).
+* The last byte of the packet is an XOR checksum of the entire content of the packet.
+
+
+.. code-block:: text
+
+    b0-1  ff09          magic
+    b2-3  length        u16 LE, whole packet
+    b4    03            pattern family
+    b5    composer      01 = sent by the device on its own (pushes, relayed replies); 00 = echoed from the request (local replies)
+    b6    channel       the device's dispatch key
+    b7    flags | msgtype hi   high nibble: 0x80 fragmented, 0x40 encrypted; low nibble: message type bits 8-11
+    b8    msgtype lo
+    b9    fragment index << 4 | total   (only when 0x80 is set)
+    ...   payload
+    last  XOR checksum
+
+Bytes ``b4-6`` are the pattern
+(:py:data:`PacketPattern <SolixBLE.constructs.PacketPattern>`) and bytes
+``b7-8`` the command
+(:py:data:`PacketCommand <SolixBLE.constructs.PacketCommand>`).
+
+- Message type = ``(b7 & 0x0f) << 8 | b8``. A response is the request's message
+  type with ``0x800`` set.
+- The flag nibble is the frame's own state. On the session channels the library
+  decrypts a received frame only when ``0x40`` is set.
+- The library reassembles fragments only when ``0x80`` is set. The first payload
+  byte is then ``index << 4 | total``, counting from 1; a single fragment reads
+  ``11``. Fragments are reassembled before decryption.
+
+
+Channels
+--------
+
+The channel is the second byte of the pattern and specifies the routing of the 
+packet. These are the channel values that have been observed.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Channel
+     - Carries
+     - Handled as
+   * - ``0x01``
+     - negotiation requests and replies, and the grant the device pushes on
+       pattern ``030101`` after its button is pressed
+     - negotiation
+   * - ``0x0f``, ``0x11``
+     - session commands, replies (composer ``00``) and pushes (composer ``01``)
+     - futures, then telemetry
+   * - ``0x02``, ``0x13``
+     - WiFi provisioning
+     - logged, not handled
+   * - ``0x0c``
+     - factory
+     - logged, not handled
+   * - ``0x10``
+     - MCU link
+     - logged, not handled
+   * - any other
+     -
+     - logged
+
+.. note::
+
+    Negotiation frames are decrypted by the negotiation itself, whatever their
+    ``0x40`` flag.
+
+
 Decrypted payload structure
-===========================
+---------------------------
 
 Once the payload has been defragmented and decrypted (protocol specific) the plain text payload may be decoded. 
 This structure is the same across all protocols (except for early revisions of the F2000) and uses TLV encoding, where the
@@ -102,9 +206,9 @@ and value.
   packet-beta
   title General Parameters Layout
   0-7: "Key (1B)"
-  8-15: "Size (1B)"
+  8-15: "Length (1B)"
   16-23: "Type (optional) (1B)"
-  24-31: "Value (Size bytes)"
+  24-31: "Value (Length bytes)"
  
 Example of a decoded payload:
 
@@ -155,38 +259,36 @@ The exact steps in decoding a payload:
 
       style Start fill:#f9f,stroke:#333,stroke-width:2px
       style End fill:#bbf,stroke:#333,stroke-width:2px
-    
+
+
+Advertisement
+-------------
+
+Anker devices publish a record under the BLE company identifier ``0xffff``, readable
+before connecting in the BLE advertisements and these contain useful information 
+about the hardware and its capabilities.
+
+.. mermaid::
+
+  packet-beta
+  0-7: "version (1B)"
+  8-55: "mac (6B)"
+  56-63: "bind_type (1B)"
+  64-79: "product_type (2B)"
+  80-103: "sku (3B or 4B by version)"
+  104-111: "capability (1B)"
+
+.. code-block:: text
+
+    version(1) | mac(6) | bind_type(1) | product_type(2) | sku(3 or 4 by version) | capability(0-1)
+
+
 
 Implementation
 ==============
 
 This section covers how the protocols are implemented in the classes and the control flow 
 when communicating with a device.
-
-
-Initialization flow
--------------------
-
-The Bluetooth advertisement from an Anker device is useful for two purposes, first to 
-return the correct device class for the device (e.g c1000x.py for C1000(X)) and for 
-finding out what protocols the device supports, since a model might support multiple protocols.
-
-The former is achieved using `device_class_from_advertisement` which given a BLE advertisement returns
-the correct class to use to connect to the device, with the advertisement passed to the device class 
-during initialization providing being used to determine which protocol to use to connect to the device.
-
-It is possible to connect using no advertisement and the default protocol will be used for the model, but 
-this may result in failure if the device does not support the default protocol, (i.e because its running 
-firmware too old or too new).
-
-.. mermaid::
-
-  flowchart LR
-    adv["bleak scan result<br/>(AdvertisementData)"]
-    adv -- "device_class_from_advertisement()" --> cls["the model class"]
-    adv -- "capability_from_advertisement()" --> cap["the outer to open with<br/>(0x04 = encrypted)"]
-    cls --> inst["DeviceClass(ble_device, advertisement=advertisement_data)"]
-    cap --> inst
 
 
 SolixBLE structure
@@ -279,14 +381,14 @@ helper classes.
       Path <|.. LegacyAesPath
       NegotiatedSession --> Path : path, the first of PATHS whose matches() accepts x803
 
-- ``_TRANSPORT`` is a class attribute: the GATT characteristics, and whether to negotiate.
-- ``_OUTER_HINT`` is ``PlainOuter`` unless the class overrides it.
-- ``_outer_class`` starts as ``_initial_outer(advertisement)``, becomes ``EncryptedOuter`` after a plain refusal, then the outer that last authorized.
-- ``announcement`` holds what the device declared.
-- ``NegotiatedSession.encrypt()`` uses ``path.encrypt_override()``, else ``outer.encrypt()`` under ``path.keys``. ``NegotiatedSession.decrypt()`` uses ``outer.decrypt()`` under ``path.keys``.
-- The outer is how the negotiation travels and which cipher the session uses (see `Outer protocols`_).
+- The outer is how the negotiation travels and which cipher (e.g AES CBC, GCM, etc) the session uses (see `Outer protocols`_).
 - The path is the key exchange and authorization after the shared opening (see Paths).
 - The session ties one outer and one path to one connection; the device is its link, which builds and writes the frames.
+- ``_TRANSPORT`` specifies what GATT characteristics to use to communicate with the device and whether negotiation is required..
+- ``_OUTER_HINT`` is the default outer to use if this cannot be determined from the BLE advertisement and is ``PlainOuter`` unless the device class (e.g Prime 160w) overrides it.
+- ``_outer_class`` is the outer to use and starts as ``_initial_outer(advertisement)`` and will be upgraded to ``EncryptedOuter`` if the connection is refused using ``PlainOuter`` and will remain as the last outer that authorized successfully.
+- ``announcement`` holds what the device declared.
+- ``NegotiatedSession.encrypt()`` uses ``path.encrypt_override()``, else ``outer.encrypt()`` under ``path.keys``. ``NegotiatedSession.decrypt()`` uses ``outer.decrypt()`` under ``path.keys``.
 
 
 Transports
@@ -300,7 +402,7 @@ characteristics the library subscribes to and writes to.
    :header-rows: 1
 
    * - Transport
-     - Recognised by
+     - Recognized by
      - Characteristics
    * - Negotiating (:py:class:`SolixBLE.transport.NegotiatingTransport`)
      - advertised service ``ff09``
@@ -323,77 +425,22 @@ characteristics the library subscribes to and writes to.
     connected.
 
 
-Packet layout
-^^^^^^^^^^^^^
+Sending packets
+---------------
 
-Frames on the negotiating transport have this layout (0-based byte offsets):
+Sending a command can be achieved by calling either `_send_command()` on the device class
+or `send()` on a negotiated session object. `_send_command()` can be used to send a command 
+to the device and it uses the command pattern and adds and it automatically adds additional 
+information such as the current timestamp to the command which is required by some Anker devices to 
+provide protection against replay attacks.
 
-.. code-block:: text
+`send()` is a lower level implementation which is used during negotiation and allows for the pattern 
+to be set and does not automatically include the timestamp.
 
-    b0-1  ff09          magic
-    b2-3  length        u16 LE, whole packet
-    b4    03            pattern family
-    b5    composer      01 = sent by the device on its own (pushes, relayed replies); 00 = echoed from the request (local replies)
-    b6    channel       the device's dispatch key
-    b7    flags | msgtype hi   high nibble: 0x80 fragmented, 0x40 encrypted; low nibble: message type bits 8-11
-    b8    msgtype lo
-    b9    fragment index << 4 | total   (only when 0x80 is set)
-    ...   payload
-    last  XOR checksum
-
-Bytes ``b4-6`` are the pattern
-(:py:data:`PacketPattern <SolixBLE.constructs.PacketPattern>`) and bytes
-``b7-8`` the command
-(:py:data:`PacketCommand <SolixBLE.constructs.PacketCommand>`).
-
-- Message type = ``(b7 & 0x0f) << 8 | b8``. A response is the request's message
-  type with ``0x800`` set.
-- The flag nibble is the frame's own state. On the session channels the library
-  decrypts a received frame only when ``0x40`` is set.
-- The library reassembles fragments only when ``0x80`` is set. The first payload
-  byte is then ``index << 4 | total``, counting from 1; a single fragment reads
-  ``11``. Fragments are reassembled before decryption.
-
-
-Channels
-^^^^^^^^
-
-.. list-table::
-   :header-rows: 1
-
-   * - Channel
-     - Carries
-     - Handled as
-   * - ``0x01``
-     - negotiation requests and replies, and the grant the device pushes on
-       pattern ``030101`` after its button is pressed
-     - negotiation
-   * - ``0x0f``, ``0x11``
-     - session commands, replies (composer ``00``) and pushes (composer ``01``)
-     - futures, then telemetry
-   * - ``0x02``, ``0x13``
-     - WiFi provisioning
-     - logged, not handled
-   * - ``0x0c``
-     - factory
-     - logged, not handled
-   * - ``0x10``
-     - MCU link
-     - logged, not handled
-   * - any other
-     -
-     - logged
-
-.. note::
-
-    Negotiation frames are decrypted by the negotiation itself, whatever their
-    ``0x40`` flag.
-
-
-Building and parsing a packet
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Sending:
+Both functions call the same underlying `_send_packet()` command which converts the parameters into 
+bytes to make up the payload, optionally encrypts the payload using `_encrypt_payload()`, and then 
+builds a packet using the payload with the specified pattern and command and then writes it to the 
+device.
 
 .. mermaid::
 
@@ -408,7 +455,35 @@ Sending:
       enc --> pkt["Packet.build()<br/>ff09, length, pattern, cmd, payload, XOR checksum"]
       pkt --> write["write_gatt_char(UUID_COMMAND, packet)"]
 
-Receiving, on the telemetry characteristic:
+
+Receiving packets
+-----------------
+
+
+Packets from the device are received by subscribing to a telemetry GATT characteristic defined in 
+the transport which calls `_process_notification()` when a new packet is received. 
+
+The basic metadata of the packet (e.g pattern, cmd, etc) is parsed first and this is used to
+determine if the packet is fragmented and requires reassembly using the flags part. 
+Fragmented packets are not processed until the last fragment arrives, at which point
+the payload is reconstructed.
+
+Next the channel part of the pattern is used to determine what to do with the packet, negotiation 
+packets are processed and responses sent under the `_process_negotiation()` function, unsupported 
+channels are logged and ignored, and supported ones then proceed to the next step.
+
+The flags part of the packet is then used to determine if the packet needs decryption, which handles by 
+the `_decrypt_payload()` function. 
+
+Once the raw payload is available the packet is then checked to see if it matches any pre-registered 
+listeners. These allow for a device to listen for a packet sent by the device in response to a command 
+and get the parsed payload returned to them for custom processing (e.g requesting a ToU schedule). 
+
+If no listeners match it is then is processed by the `_process_session()` function which determines 
+if the packet is a telemetry packet based upon the cmd value, and passes it to `_process_telemetry()`
+which will store the values inside the device class to update any device attributes (e.g ac_output, light_status, etc)
+and trigger any registered device state update callbacks.
+
 
 .. mermaid::
 
@@ -437,61 +512,12 @@ Receiving, on the telemetry characteristic:
 - Telemetry is matched on the message type, so ``c405``, ``4405`` and a clear ``8405`` are one message.
 
 
-Advertisement
-^^^^^^^^^^^^^
-
-Anker devices publish a record under BLE company identifier ``0xffff``, readable
-before connecting:
-
-.. code-block:: text
-
-    version(1) | mac(6) | bind_type(1) | product_type(2) | sku(3 or 4 by version) | capability(0-1)
-
-.. list-table::
-   :header-rows: 1
-
-   * - Helper
-     - Returns
-   * - :py:func:`capability_from_advertisement() <SolixBLE.capability_from_advertisement>`
-     - the last byte (``capability``), or None if absent; bit ``0x04`` = the
-       device accepts the encrypted negotiation
-   * - :py:func:`device_class_from_advertisement() <SolixBLE.device_class_from_advertisement>`
-     - the model class from ``product_type``, else from the advertised name (the
-       model's own, or a Prime-style ``<part number>_<last four MAC digits>``),
-       else :py:class:`SolixBLE.Generic`; None for a device on a transport no
-       class speaks yet (legacy ``1780``, ``2215``)
-
-.. note::
-
-    :py:func:`device_class_from_advertisement() <SolixBLE.device_class_from_advertisement>`
-    does not check that the device is an Anker device. Match the record or
-    the advertised service first, as below; a passive scan can carry the
-    record without the services. Some firmware advertises the device serial as
-    its name, and the legacy transport sends only the MAC (reversed) under
-    ``0xffff``, which decodes to None.
-
-.. code-block:: python
-
-    from bleak import BleakScanner
-
-    from SolixBLE import capability_from_advertisement, device_class_from_advertisement
-    from SolixBLE.advertisement import ANKER_COMPANY_ID
-    from SolixBLE.const import UUID_IDENTIFIERS
-
-    def detected(device, advertisement_data):
-        if ANKER_COMPANY_ID not in advertisement_data.manufacturer_data and not any(
-            uuid in advertisement_data.service_uuids for uuid in UUID_IDENTIFIERS
-        ):
-            return
-        device_class = device_class_from_advertisement(advertisement_data, device.name)
-        capability = capability_from_advertisement(advertisement_data)
-        print(device.address, device_class and device_class.__name__, capability)
-
-    scanner = BleakScanner(detection_callback=detected)
-
-
 Outer protocols
 ---------------
+
+The outer class defines protocol specific information needed to negotiate an encrypted session 
+with the device such as encryption algorithms (e.g AES GCM vs AES CBC), what encryption to use 
+if no key has been negotiated, and what negotiation packets need to contain.
 
 On the negotiating transport a device holds a negotiated session for each
 connection. The session's outer protocol is how the negotiation travels and
@@ -517,7 +543,7 @@ opening frame.
      - AES-128-GCM
      - ``4827`` status ``00``, or the first session push the client can decrypt
 
-Both outers run the same opening (``x001``, ``x003`` for the device's
+Both outers run the same opening command (``x001``, ``x003`` for the device's
 capabilities, ``x029`` for its serial and MAC), then an ECDH key exchange on
 P-256 with a fresh key for every negotiation. The key is the first 16 bytes
 of the shared secret; the IV is the next 16 (GCM uses 12 of them).
@@ -554,10 +580,92 @@ first:
    locale's, else ``GB``.
 
 
-Negotiation flow
-^^^^^^^^^^^^^^^^
+The Bluetooth advertisement
+---------------------------
 
-What :py:meth:`connect() <SolixBLE.SolixBLEDevice.connect>` runs:
+The Bluetooth advertisement from an Anker device is useful for two purposes, first to 
+return the correct device class for the device (e.g c1000x.py for C1000(X)), second for 
+finding out what protocols the device supports, since a model might support multiple protocols.
+
+The former is achieved using `device_class_from_advertisement` which given a BLE advertisement returns
+the correct class to use to connect to the device, with the advertisement passed to the device class 
+during initialization being used to determine which protocol to use to connect to the device.
+
+It is possible to connect using no advertisement and the default protocol will be used for the model, but 
+this may result in failure if the device does not support the default protocol, (i.e because its running 
+firmware too old or too new).
+
+.. mermaid::
+
+  flowchart LR
+    adv["Bleak scan result<br/>(AdvertisementData)"]
+    adv -- "device_class_from_advertisement()" --> cls["The model class (e.g C300, C1000, etc)"]
+    adv -- "capability_from_advertisement()" --> cap["The outer to open with (The protocol)<br/>(e.g 0x04 = encrypted)"]
+    cls --> inst["DeviceClass(ble_device, advertisement=advertisement_data)"]
+    cap --> inst
+
+
+.. list-table::
+   :header-rows: 1
+
+   * - Helper
+     - Returns
+   * - :py:func:`capability_from_advertisement() <SolixBLE.capability_from_advertisement>`
+     - the last byte (``capability``), or None if absent; bit ``0x04`` = the
+       device accepts the encrypted negotiation
+   * - :py:func:`device_class_from_advertisement() <SolixBLE.device_class_from_advertisement>`
+     - the model class from ``product_type``, else from the advertised name (the
+       model's own, or a Prime-style ``<part number>_<last four MAC digits>``),
+       else :py:class:`SolixBLE.Generic`; None for a device on a transport no
+       class speaks yet (legacy ``1780``, ``2215``)
+
+.. note::
+
+    :py:func:`device_class_from_advertisement() <SolixBLE.device_class_from_advertisement>`
+    does not check that the device is an Anker device. Match the record or
+    the advertised service first, as below; a passive scan can carry the
+    record without the services. Some firmware advertises the device serial as
+    its name, and the legacy transport sends only the MAC (reversed) under
+    ``0xffff``, which decodes to None.
+
+
+Example usage of :py:func:`capability_from_advertisement() <SolixBLE.capability_from_advertisement>` and :py:func:`device_class_from_advertisement() <SolixBLE.device_class_from_advertisement>`:
+
+.. code-block:: python
+
+    from bleak import BleakScanner
+
+    from SolixBLE import capability_from_advertisement, device_class_from_advertisement
+    from SolixBLE.advertisement import ANKER_COMPANY_ID
+    from SolixBLE.const import UUID_IDENTIFIERS
+
+    def detected(device, advertisement_data):
+        if ANKER_COMPANY_ID not in advertisement_data.manufacturer_data and not any(
+            uuid in advertisement_data.service_uuids for uuid in UUID_IDENTIFIERS
+        ):
+            return
+        device_class = device_class_from_advertisement(advertisement_data, device.name)
+        capability = capability_from_advertisement(advertisement_data)
+        print(device.address, device_class and device_class.__name__, capability)
+
+    scanner = BleakScanner(detection_callback=detected)
+
+
+Negotiation flow
+----------------
+
+Before we are able to control a device or receive any telemetry from it (with the exception 
+of really old firmware), devices will require us to negotiate a session with them which 
+establishes an encryption key to use and other metadata such as the current time and current 
+region.
+
+The contents of the negotiation vary depending upon firmware but generally consists of a 
+request to negotiate, the agreement of capabilities and some metadata, and the exchange 
+of public keys, with some devices also requiring additional messages after this such as 
+a subscription to telemetry updates.
+
+Below is the execution flow of calling :py:meth:`connect() <SolixBLE.SolixBLEDevice.connect>` on 
+a device:
 
 .. mermaid::
 
@@ -578,9 +686,12 @@ What :py:meth:`connect() <SolixBLE.SolixBLEDevice.connect>` runs:
       reopen -- "connect() once more" --> connect
       refused -- no --> fail["False"]
 
-The shared opening, then each path's replies and what each sends next.
 
-Shared opening (``NegotiatedSession``):
+The first few stages of the negotiation are handled in ``NegotiatedSession`` and consist of the 
+same message types/commands (with the exception of the really old ones), where the device tells us its
+capabilities including what forms of negotiation it supports and the hardware MTU. Later stages 
+of the negotiation differ depending upon the supported negotiation pathways of the device (i.e `Prime` style and `Solix` style).
+
 
 .. mermaid::
 
@@ -596,7 +707,12 @@ Shared opening (``NegotiatedSession``):
     Note over C: _record_capability(): MTU, capability, auth<br/>path = _choose_path(): the first of PATHS<br/>whose matches() accepts x803, else UnsupportedNegotiation
     C->>D: x029
 
-``EcdhPath.on_stage()``:
+
+A. The Prime style negotiation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This is the negotiation path for devices which use the newer `Prime` style handshake which contain 
+additional information such as device region. This is handled by ``EcdhPath.on_stage()``.
 
 .. mermaid::
 
@@ -622,7 +738,13 @@ Shared opening (``NegotiatedSession``):
         end
     end
 
-``LegacyAesPath.on_stage()``:
+
+B. The Solix style negotiation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This is the negotiation path for devices which use the older `Solix` style handshake which does not 
+contain information like device region. This is handled by ``LegacyAesPath.on_stage()``.
+
 
 .. mermaid::
 
