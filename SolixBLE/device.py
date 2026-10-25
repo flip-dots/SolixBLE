@@ -275,7 +275,9 @@ class SolixBLEDevice:
             self._auto_reconnect_task = asyncio.create_task(self._auto_reconnect())
 
         # Start a keep-alive task if its not running already
-        if self._keep_alive_task is None:
+        # (The task ends by itself when the connection drops, so restart it on
+        # every successful (re)connection, not just the first.)
+        if self._keep_alive_task is None or self._keep_alive_task.done():
             self._keep_alive_task = asyncio.create_task(self._keep_alive_fn())
 
         # Execute callbacks if enabled
@@ -449,6 +451,7 @@ class SolixBLEDevice:
         # Cancel the keep-alive task
         if self._keep_alive_task is not None:
             self._keep_alive_task.cancel()
+            self._keep_alive_task = None
 
         # If there is a client disconnect and throw it away
         if self._client is not None:
