@@ -713,8 +713,8 @@ class C2000G2(C1000G2):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            message=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_AC_INPUT,
+            CMD_AC_OUTPUT,
+            PARAMETERS_AC_INPUT,
             off=False,
         )
 
@@ -730,8 +730,8 @@ class C2000G2(C1000G2):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            message=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_AC_INPUT,
+            CMD_AC_OUTPUT,
+            PARAMETERS_AC_INPUT,
             off=True,
         )
 
@@ -742,8 +742,8 @@ class C2000G2(C1000G2):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            message=CMD_SYSTEM,
-            parameters=PARAMETERS_OUTAGE_ALERT,
+            CMD_SYSTEM,
+            PARAMETERS_OUTAGE_ALERT,
             on=True,
         )
 
@@ -754,8 +754,8 @@ class C2000G2(C1000G2):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            message=CMD_SYSTEM,
-            parameters=PARAMETERS_OUTAGE_ALERT,
+            CMD_SYSTEM,
+            PARAMETERS_OUTAGE_ALERT,
             on=False,
         )
 
@@ -817,10 +817,10 @@ class C2000G2(C1000G2):
         on its own only while the realtime stream runs; on a connected link
         that stream runs until it is stopped.
         """
-        await self._send_command(message=CMD_SUBSCRIBE, parameters=PARAMETERS_SUBSCRIBE)
+        await self._send_command(CMD_SUBSCRIBE, PARAMETERS_SUBSCRIBE)
         await self._send_command(
-            message=CMD_REALTIME,
-            parameters=PARAMETERS_REALTIME_ON,
+            CMD_REALTIME,
+            PARAMETERS_REALTIME_ON,
         )
 
     async def _request(self, message: int | str, response: int) -> bytes:

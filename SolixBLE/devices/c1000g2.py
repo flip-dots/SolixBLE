@@ -373,7 +373,7 @@ def epoch_to_local(value: int) -> datetime | None:
 
 #: Command sent after connecting to start the telemetry stream. Unlike the gen-1
 #: models, the Gen 2 streams nothing until it receives this subscribe command.
-CMD_SUBSCRIBE = "4100"
+CMD_SUBSCRIBE = 0x100
 
 PARAMETERS_SUBSCRIBE = {
     "a1": {
@@ -381,8 +381,8 @@ PARAMETERS_SUBSCRIBE = {
     },
 }
 
-CMD_AC_OUTPUT = "4101"
-CMD_DC_OUTPUT = "4102"
+CMD_AC_OUTPUT = 0x101
+CMD_DC_OUTPUT = 0x102
 
 PARAMETERS_ON = {
     "a1": {
@@ -430,7 +430,7 @@ PARAMETERS_AC_FAST_CHARGE = {
 }
 
 #: System group: display, SoC limits, language and the outage alert.
-CMD_SYSTEM = "4103"
+CMD_SYSTEM = 0x103
 
 PARAMETERS_MAX_BATTERY = {
     "a1": {
@@ -522,7 +522,7 @@ PARAMETERS_DISPLAY_LANGUAGE = {
 
 #: Backup-plan group: a3 = 3 selects the backup plans, a4 the plan and a5
 #: switches it.
-CMD_BACKUP = "405e"
+CMD_BACKUP = 0x05E
 BACKUP_GROUP = 3
 BACKUP_FAST_CHARGING_PLAN = 0
 BACKUP_STORM_GUARD = 1
@@ -585,7 +585,7 @@ PARAMETERS_BACKUP_WINDOW = {
 }
 
 #: Clock-screen group: the app writes only the tags that change.
-CMD_DISPLAY_PLAN = "4091"
+CMD_DISPLAY_PLAN = 0x091
 
 #: Minutes in a day, the latest a display period may end.
 MINUTES_PER_DAY = 1440
@@ -666,8 +666,8 @@ class C1000G2(SolixBLEDevice):
 
     _EXPECTED_TELEMETRY_LENGTH: int = 253
 
-    #: The Gen 2 pushes telemetry on different command codes to the gen-1 models.
-    _TELEMETRY_COMMANDS: tuple[str, ...] = ("c421", "c900")
+    #: The Gen 2 pushes telemetry on different message types to the gen-1 models.
+    _TELEMETRY_COMMANDS: tuple[int, ...] = (0x421, 0x900)
 
     async def _post_connect(self) -> None:
         """Subscribe to telemetry once connected.
@@ -675,10 +675,7 @@ class C1000G2(SolixBLEDevice):
         The Gen 2 streams no telemetry until it receives this command, so we send
         it after every (re)connection.
         """
-        await self._send_command(
-            cmd=CMD_SUBSCRIBE,
-            parameters=PARAMETERS_SUBSCRIBE,
-        )
+        await self._send_command(CMD_SUBSCRIBE, PARAMETERS_SUBSCRIBE)
 
     async def turn_ac_on(self) -> None:
         """Turn the AC output on.
@@ -686,7 +683,7 @@ class C1000G2(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_ON)
+        await self._send_command(CMD_AC_OUTPUT, PARAMETERS_ON)
 
     async def turn_ac_off(self) -> None:
         """Turn the AC output off.
@@ -694,7 +691,7 @@ class C1000G2(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_OFF)
+        await self._send_command(CMD_AC_OUTPUT, PARAMETERS_OFF)
 
     async def turn_dc_on(self) -> None:
         """Turn the DC output on.
@@ -702,7 +699,7 @@ class C1000G2(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_ON)
+        await self._send_command(CMD_DC_OUTPUT, PARAMETERS_ON)
 
     async def turn_dc_off(self) -> None:
         """Turn the DC output off.
@@ -710,7 +707,7 @@ class C1000G2(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_OFF)
+        await self._send_command(CMD_DC_OUTPUT, PARAMETERS_OFF)
 
     async def set_max_battery_percentage(self, percentage: int) -> None:
         """Set the charge cap, above which the device stops charging.
@@ -726,8 +723,8 @@ class C1000G2(SolixBLEDevice):
         """
         _validate_percentage(percentage)
         await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_MAX_BATTERY,
+            CMD_SYSTEM,
+            PARAMETERS_MAX_BATTERY,
             percentage=percentage,
         )
 
@@ -746,8 +743,8 @@ class C1000G2(SolixBLEDevice):
         """
         _validate_percentage(percentage)
         await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_MIN_BATTERY,
+            CMD_SYSTEM,
+            PARAMETERS_MIN_BATTERY,
             percentage=percentage,
         )
 
@@ -777,8 +774,8 @@ class C1000G2(SolixBLEDevice):
             raise ValueError(msg)
 
         await self._send_command(
-            cmd=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_AC_CHARGING_POWER,
+            CMD_AC_OUTPUT,
+            PARAMETERS_AC_CHARGING_POWER,
             watts=watts,
         )
 
@@ -793,8 +790,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_AC_FAST_CHARGE,
+            CMD_AC_OUTPUT,
+            PARAMETERS_AC_FAST_CHARGE,
             on=True,
         )
 
@@ -805,8 +802,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_AC_FAST_CHARGE,
+            CMD_AC_OUTPUT,
+            PARAMETERS_AC_FAST_CHARGE,
             on=False,
         )
 
@@ -818,8 +815,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_AC_OUTPUT,
-            parameters=PARAMETERS_TIMER,
+            CMD_AC_OUTPUT,
+            PARAMETERS_TIMER,
             seconds=seconds,
         )
 
@@ -831,8 +828,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_DC_OUTPUT,
-            parameters=PARAMETERS_TIMER,
+            CMD_DC_OUTPUT,
+            PARAMETERS_TIMER,
             seconds=seconds,
         )
 
@@ -842,7 +839,7 @@ class C1000G2(SolixBLEDevice):
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(cmd=CMD_SYSTEM, parameters=PARAMETERS_DISPLAY, on=True)
+        await self._send_command(CMD_SYSTEM, PARAMETERS_DISPLAY, on=True)
 
     async def turn_display_off(self) -> None:
         """Turn the display off.
@@ -851,8 +848,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_DISPLAY,
+            CMD_SYSTEM,
+            PARAMETERS_DISPLAY,
             on=False,
         )
 
@@ -877,8 +874,8 @@ class C1000G2(SolixBLEDevice):
             return
 
         await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_DISPLAY_MODE,
+            CMD_SYSTEM,
+            PARAMETERS_DISPLAY_MODE,
             mode=mode.value,
         )
 
@@ -895,8 +892,8 @@ class C1000G2(SolixBLEDevice):
             raise ValueError(msg)
 
         await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_DISPLAY_TIMEOUT,
+            CMD_SYSTEM,
+            PARAMETERS_DISPLAY_TIMEOUT,
             seconds=timeout.value,
         )
 
@@ -913,8 +910,8 @@ class C1000G2(SolixBLEDevice):
             raise ValueError(msg)
 
         await self._send_command(
-            cmd=CMD_SYSTEM,
-            parameters=PARAMETERS_DISPLAY_LANGUAGE,
+            CMD_SYSTEM,
+            PARAMETERS_DISPLAY_LANGUAGE,
             language=language.value,
         )
 
@@ -948,7 +945,7 @@ class C1000G2(SolixBLEDevice):
         if len(parameters) == 1:
             return
 
-        await self._send_command(cmd=CMD_DISPLAY_PLAN, parameters=parameters)
+        await self._send_command(CMD_DISPLAY_PLAN, parameters)
 
     async def turn_fast_charging_plan_on(self) -> None:
         """Turn the Fast Charging Plan on.
@@ -957,8 +954,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_SWITCH,
+            CMD_BACKUP,
+            PARAMETERS_BACKUP_SWITCH,
             plan=BACKUP_FAST_CHARGING_PLAN,
             on=True,
         )
@@ -970,8 +967,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_SWITCH,
+            CMD_BACKUP,
+            PARAMETERS_BACKUP_SWITCH,
             plan=BACKUP_FAST_CHARGING_PLAN,
             on=False,
         )
@@ -999,8 +996,8 @@ class C1000G2(SolixBLEDevice):
             raise ValueError(msg)
 
         await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_WINDOW,
+            CMD_BACKUP,
+            PARAMETERS_BACKUP_WINDOW,
             start=start_epoch,
             end=end_epoch,
         )
@@ -1012,8 +1009,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_SWITCH,
+            CMD_BACKUP,
+            PARAMETERS_BACKUP_SWITCH,
             plan=BACKUP_STORM_GUARD,
             on=True,
         )
@@ -1025,8 +1022,8 @@ class C1000G2(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_BACKUP,
-            parameters=PARAMETERS_BACKUP_SWITCH,
+            CMD_BACKUP,
+            PARAMETERS_BACKUP_SWITCH,
             plan=BACKUP_STORM_GUARD,
             on=False,
         )
