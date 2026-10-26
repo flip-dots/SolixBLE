@@ -8,6 +8,7 @@ import pytest
 from SolixBLE.const import FALLBACK_TZ
 from SolixBLE.constructs import Packet
 from SolixBLE.protocols import (
+    Announcement,
     EcdhPath,
     EncryptedOuter,
     LegacyAesPath,
@@ -15,7 +16,6 @@ from SolixBLE.protocols import (
     Outer,
     PlainOuter,
     UnsupportedNegotiation,
-    new_announcement,
 )
 from SolixBLE.protocols.outer import STATIC_KEYS
 from tests.helpers import RECORDING_CLIENT_ID, RecordingLink, feed_negotiation
@@ -41,8 +41,10 @@ LEGACY_NEW_KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
 
 def test_unsupported_names_the_announcement() -> None:
     """The error names what the device announced and where it stopped."""
-    announcement = new_announcement()
-    announcement.update({"base_method": 0x00, "encrypt_method": 0x10, "mtu": 253})
+    announcement = Announcement()
+    announcement.base_method = 0x00
+    announcement.encrypt_method = 0x10
+    announcement.mtu = 253
     error = UnsupportedNegotiation(announcement, "no path for the plain outer")
     assert str(error) == (
         "Unsupported negotiation: base_method=0x00, encrypt_method=0x10, "
@@ -71,7 +73,7 @@ async def test_capability_reply_chooses_the_path(
     x803: str,
     path: type,
 ) -> None:
-    """``x803`` picks ECDH when it offers it, else legacy AES on either outer."""
+    """The capability reply picks ECDH if offered, else legacy AES on either outer."""
     session = NegotiatedSession(outer, RecordingLink())
     await feed_negotiation(session, [("0803", x803)])
     assert type(session.path) is path
@@ -116,17 +118,17 @@ async def test_unknown_path_is_reported(
     [
         pytest.param(
             [("0803", ECDH_X803), ("0829", X829), ("0805", "01")],
-            "x805 status 01",
+            "SET_CAPABILITY status 01",
             id="ecdh_x805_refused",
         ),
         pytest.param(
             [("0803", ECDH_X803), ("0829", X829), ("0805", "00"), ("0821", "00")],
-            "x821 without a device key",
+            "GET_PUBLIC_KEY reply without a device key",
             id="ecdh_x821_empty",
         ),
         pytest.param(
             [("0803", LEGACY_X803), ("0829", X829), ("0805", "01")],
-            "x805 status 01",
+            "SET_CAPABILITY status 01",
             id="legacy_x805_refused",
         ),
     ],

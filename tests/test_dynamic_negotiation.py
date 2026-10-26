@@ -10,7 +10,7 @@ import pytest
 
 from SolixBLE import C300, C1000G2, PrimeCharger160w, SolixBLEDevice
 from SolixBLE.advertisement import ANKER_COMPANY_ID
-from SolixBLE.constructs import Packet
+from SolixBLE.constructs import Negotiation, Packet
 from SolixBLE.protocols import EncryptedOuter, Outer, PlainOuter
 from tests.const import (
     MOCK_BLE_DEVICE,
@@ -19,7 +19,7 @@ from tests.const import (
     NEGOTIATION_RESPONSES_PRIME,
     NEGOTIATION_RESPONSES_SOLIX,
 )
-from tests.helpers import MockDevice, make_advertisement
+from tests.helpers import MockDevice, build_frame, make_advertisement
 
 #: x803 with no AES bit in a1 and no ECDH bit in a3.
 UNKNOWN_X803 = "00a10100a202fd00a30110a40101a50102"
@@ -50,7 +50,8 @@ async def test_refused_plain_reopens_encrypted(
         assert await device.connect()
         mock_bluetooth.check_assertions()
 
-    assert Packet.parse(mock_bluetooth.writes[0]).cmd.hex() == "0001"
+    opening = Packet.parse(mock_bluetooth.writes[0])
+    assert (opening.encrypted, opening.message) == (False, Negotiation.CONNECT)
     assert device._outer_class is EncryptedOuter  # noqa: SLF001
     assert type(device) is PlainFirst
 
@@ -75,7 +76,8 @@ async def test_refusal_during_the_write_reopens_encrypted(
         assert await device.connect()
         mock_bluetooth.check_assertions()
 
-    assert Packet.parse(mock_bluetooth.writes[0]).cmd.hex() == "0001"
+    opening = Packet.parse(mock_bluetooth.writes[0])
+    assert (opening.encrypted, opening.message) == (False, Negotiation.CONNECT)
     assert device._outer_class.name == EncryptedOuter.name  # noqa: SLF001
 
 
@@ -118,9 +120,10 @@ async def test_refusal_then_second_drop_returns_false(
         assert not await device.connect()
         mock_bluetooth.check_assertions()
 
-    assert [Packet.parse(write).cmd.hex() for write in mock_bluetooth.writes] == [
-        "0001",
-        "4001",
+    writes = [Packet.parse(write) for write in mock_bluetooth.writes]
+    assert [(write.encrypted, write.message) for write in writes] == [
+        (False, Negotiation.CONNECT),
+        (True, Negotiation.CONNECT),
     ]
 
 
@@ -220,13 +223,7 @@ async def test_unknown_path_fails_fast(
 ) -> None:
     """A capability reply no path handles fails the connect without retrying."""
     device = C300(MOCK_BLE_DEVICE)
-    unknown_x803 = Packet.build(
-        {
-            "pattern": bytes.fromhex("030001"),
-            "cmd": bytes.fromhex("0803"),
-            "payload_bytes": bytes.fromhex(UNKNOWN_X803),
-        },
-    )
+    unknown_x803 = build_frame("030001", "0803", bytes.fromhex(UNKNOWN_X803))
     loop = asyncio.get_running_loop()
     async with MockDevice() as mock_bluetooth:
         mock_bluetooth.expect_ordered(
@@ -247,9 +244,10 @@ async def test_unknown_path_fails_fast(
         elapsed = loop.time() - started
         mock_bluetooth.check_assertions()
 
-    assert [Packet.parse(write).cmd.hex() for write in mock_bluetooth.writes] == [
-        "0001",
-        "0003",
+    writes = [Packet.parse(write) for write in mock_bluetooth.writes]
+    assert [(write.encrypted, write.message) for write in writes] == [
+        (False, Negotiation.CONNECT),
+        (False, Negotiation.NEGOTIATE_CAPABILITY),
     ]
     assert "encrypt_method=0x10" in caplog.text
     assert elapsed < device._negotiation_deadline() / TIME_SCALE  # noqa: SLF001
