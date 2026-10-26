@@ -37,6 +37,7 @@ from tests.devices.f2600 import (
     F2600_TEST_COMMANDS_RESPONSES,
 )
 from tests.devices.f3800 import F3800_TEST_COMMANDS, F3800_TEST_COMMANDS_E2E
+from tests.devices.maggo_3in1 import MAGGO_3IN1_TEST_COMMANDS
 from tests.devices.prime_160w_charger import (
     PRIME_CHARGER_160W_TEST_COMMANDS,
     PRIME_CHARGER_160W_TEST_COMMANDS_E2E,
@@ -62,6 +63,7 @@ AC_OUTPUT = 0x101
         *C1000G2_TEST_COMMANDS,
         *F2600_TEST_COMMANDS,
         *F3800_TEST_COMMANDS,
+        *MAGGO_3IN1_TEST_COMMANDS,
         *PRIME_CHARGER_160W_TEST_COMMANDS,
         *PRIME_CHARGER_250W_TEST_COMMANDS,
     ],
