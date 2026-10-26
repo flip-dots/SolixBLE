@@ -43,7 +43,7 @@ UUID_STRING = "79ebed35-dc9c-4904-b40c-72c4e863aa10"
 
 #: Command sent after connecting to start the telemetry stream. This must
 #: be sent every ~10 seconds or no telemetry will be sent by the device.
-CMD_SUB_AND_KEEP_ALIVE = "420b"
+CMD_SUB_AND_KEEP_ALIVE = 0x20B
 
 PARAMETERS_KEEP_ALIVE = {
     "a1": {
@@ -52,7 +52,7 @@ PARAMETERS_KEEP_ALIVE = {
 }
 
 #: Command that requests the snapshot (``4a00``, fragmented as ``ca00``).
-CMD_REQUEST_SNAPSHOT = "4200"
+CMD_REQUEST_SNAPSHOT = 0x200
 
 #: Seconds between keep-alives for a device that streams. One ``420b`` buys
 #: ten ``4303`` pushes, and the cycle also fits the snapshot request, so 9 s
@@ -65,14 +65,14 @@ SNAPSHOT_TO_STREAM_DELAY = 0.4
 
 #: Port commands: on/off, daily schedule and countdown. Each takes the port's
 #: wire index, which each model numbers its own way.
-CMD_PORT_OUTPUT = "4207"
-CMD_PORT_SCHEDULE = "4208"
-CMD_PORT_TIMER = "4209"
+CMD_PORT_OUTPUT = 0x207
+CMD_PORT_SCHEDULE = 0x208
+CMD_PORT_TIMER = 0x209
 
 #: Settings commands that carry a single byte.
-CMD_DISPLAY_TIMEOUT = "4203"
-CMD_DISPLAY_BRIGHTNESS = "4204"
-CMD_CLOCK_FORMAT = "4210"
+CMD_DISPLAY_TIMEOUT = 0x203
+CMD_DISPLAY_BRIGHTNESS = 0x204
+CMD_CLOCK_FORMAT = 0x210
 
 PARAMETERS_ON_OFF = {
     "a1": {
@@ -238,15 +238,9 @@ class PrimeDevice(SolixBLEDevice):
         if self._KEEP_ALIVE_INTERVAL is None:
             return None
         if self._SNAPSHOT_COMMANDS:
-            await self._send_command(
-                cmd=CMD_REQUEST_SNAPSHOT,
-                parameters=PARAMETERS_KEEP_ALIVE,
-            )
+            await self._send_command(CMD_REQUEST_SNAPSHOT, PARAMETERS_KEEP_ALIVE)
             await asyncio.sleep(SNAPSHOT_TO_STREAM_DELAY)
-        await self._send_command(
-            cmd=CMD_SUB_AND_KEEP_ALIVE,
-            parameters=PARAMETERS_KEEP_ALIVE,
-        )
+        await self._send_command(CMD_SUB_AND_KEEP_ALIVE, PARAMETERS_KEEP_ALIVE)
         return self._KEEP_ALIVE_INTERVAL
 
     async def _turn_port(self, port: int, *, on: bool) -> None:
@@ -258,8 +252,8 @@ class PrimeDevice(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_PORT_OUTPUT,
-            parameters=PARAMETERS_ON_OFF,
+            CMD_PORT_OUTPUT,
+            PARAMETERS_ON_OFF,
             port=port,
             on=on,
         )
@@ -273,8 +267,8 @@ class PrimeDevice(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_PORT_TIMER,
-            parameters=PARAMETERS_TIMER,
+            CMD_PORT_TIMER,
+            PARAMETERS_TIMER,
             port=port,
             seconds=seconds,
         )
@@ -289,8 +283,8 @@ class PrimeDevice(SolixBLEDevice):
         :raises BleakError: If command transmission fails.
         """
         await self._send_command(
-            cmd=CMD_PORT_SCHEDULE,
-            parameters=PARAMETERS_SCHEDULE,
+            CMD_PORT_SCHEDULE,
+            PARAMETERS_SCHEDULE,
             port=port,
             time=SCHEDULE_ON_TIME,
             enabled=schedule.on_time_enabled,
@@ -299,8 +293,8 @@ class PrimeDevice(SolixBLEDevice):
             weekdays=schedule.on_time_weekdays,
         )
         await self._send_command(
-            cmd=CMD_PORT_SCHEDULE,
-            parameters=PARAMETERS_SCHEDULE,
+            CMD_PORT_SCHEDULE,
+            PARAMETERS_SCHEDULE,
             port=port,
             time=SCHEDULE_OFF_TIME,
             enabled=schedule.off_time_enabled,
@@ -309,19 +303,15 @@ class PrimeDevice(SolixBLEDevice):
             weekdays=schedule.off_time_weekdays,
         )
 
-    async def _send_setting(self, cmd: str, setting: int | bytes) -> None:
+    async def _send_setting(self, message: int, setting: int | bytes) -> None:
         """Send a settings command that carries a single byte.
 
-        :param cmd: The settings command.
+        :param message: The settings command's message type.
         :param setting: The byte to send, as an integer or built by a construct.
         :raises ConnectionError: If not connected to device.
         :raises BleakError: If command transmission fails.
         """
-        await self._send_command(
-            cmd=cmd,
-            parameters=PARAMETERS_SETTING,
-            setting=setting,
-        )
+        await self._send_command(message, PARAMETERS_SETTING, setting=setting)
 
     def _snapshot_version(self, key: str) -> str:
         """Read a firmware version a snapshot tag packs as decimal digits.

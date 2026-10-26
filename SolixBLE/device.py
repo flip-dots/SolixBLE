@@ -116,11 +116,11 @@ class SolixBLEDevice:
     #: lists. A model where one of them means something else sets this empty.
     _ALWAYS_TELEMETRY_MSGTYPES: frozenset[int] = frozenset({TELEMETRY_MSGTYPE})
 
-    #: Command codes (hex) that carry a settings/status snapshot for this
-    #: device, separate from its regular telemetry stream (e.g the Prime
-    #: devices' ``ca00``/``4a00`` snapshot, requested on demand rather than
-    #: pushed continuously). Empty on models with no such snapshot.
-    _SNAPSHOT_COMMANDS: tuple[str, ...] = ()
+    #: Message types that carry a settings/status snapshot for this device,
+    #: separate from its regular telemetry stream (e.g the Prime devices'
+    #: ``0xa00`` snapshot, ``4a00``/``ca00`` on the wire, requested on demand
+    #: rather than pushed continuously). Empty on models with no such snapshot.
+    _SNAPSHOT_COMMANDS: tuple[int, ...] = ()
 
     #: The BLE transport this device uses. Subclasses on the legacy transport
     #: (GATT service ``1780``) set :class:`~SolixBLE.transport.LegacyTransport`,
@@ -911,10 +911,7 @@ class SolixBLEDevice:
 
     def _snapshot_msgtypes(self) -> set[int]:
         """Return the message types of this model's snapshot commands."""
-        return {
-            PacketCommand.parse(bytes.fromhex(cmd)).msgtype
-            for cmd in self._SNAPSHOT_COMMANDS
-        }
+        return set(self._SNAPSHOT_COMMANDS)
 
     async def _process_session(
         self, msgtype: int, payload: bytes, *, encrypted: bool,

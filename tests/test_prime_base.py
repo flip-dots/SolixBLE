@@ -67,7 +67,7 @@ UPDATE_PROGRESS = 42
         pytest.param(
             "_send_command",
             {
-                "cmd": CMD_PORT_SCHEDULE,
+                "message": CMD_PORT_SCHEDULE,
                 "parameters": PARAMETERS_SCHEDULE,
                 "port": 2,
                 "time": SCHEDULE_ON_TIME,
@@ -82,14 +82,14 @@ UPDATE_PROGRESS = 42
         ),
         pytest.param(
             "_send_setting",
-            {"cmd": CMD_DISPLAY_TIMEOUT, "setting": 1},
+            {"message": CMD_DISPLAY_TIMEOUT, "setting": 1},
             0x203,
             "a10121a2020101",
             id="4203_timeout_30_s",
         ),
         pytest.param(
             "_send_setting",
-            {"cmd": CMD_CLOCK_FORMAT, "setting": 1},
+            {"message": CMD_CLOCK_FORMAT, "setting": 1},
             0x210,
             "a10121a2020101",
             id="4210_24_h",
@@ -128,7 +128,7 @@ async def test_port_and_setting_payloads(  # noqa: PLR0913, PLR0917
 @pytest.mark.parametrize(
     ("snapshot_commands", "msgtypes"),
     [
-        pytest.param(("4a00",), [0x200, 0x20B], id="snapshot_model"),
+        pytest.param((0xA00,), [0x200, 0x20B], id="snapshot_model"),
         pytest.param((), [0x20B], id="no_snapshot_model"),
     ],
 )
@@ -136,7 +136,7 @@ async def test_keep_alive_requests_snapshot_first(
     fake_time: None,  # noqa: ARG001
     fast_sleep: None,  # noqa: ARG001
     fast_timeouts: None,  # noqa: ARG001
-    snapshot_commands: tuple[str, ...],
+    snapshot_commands: tuple[int, ...],
     msgtypes: list[int],
 ) -> None:
     """A model with a snapshot asks for one before re-arming the stream."""

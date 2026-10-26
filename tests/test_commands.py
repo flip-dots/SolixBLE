@@ -51,6 +51,9 @@ from tests.helpers import MockDevice, install_session_keys
 #: A session message type (the C300's AC output switch).
 AC_OUTPUT = 0x101
 
+#: Session keys for a negotiated device, so commands carry the encrypted flag.
+SESSION_SECRET = bytes(range(32))
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -85,6 +88,7 @@ async def test_send_command(
     """
     device = device_class(MOCK_BLE_DEVICE)
     device._client = mock.AsyncMock()
+    install_session_keys(device, SESSION_SECRET)
     device._encrypt_payload = lambda x: x
     with (
         mock.patch("SolixBLE.constructs.Packet.build") as mock_build,
@@ -188,6 +192,7 @@ async def test_send_command_response(  # noqa: PLR0913, PLR0917
     """
     device = device_class(MOCK_BLE_DEVICE)
     device._client = mock.AsyncMock()
+    install_session_keys(device, SESSION_SECRET)
     device._encrypt_payload = lambda x: x
 
     with (

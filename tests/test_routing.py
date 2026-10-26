@@ -317,7 +317,7 @@ async def test_clear_fragmented_telemetry_is_telemetry(
 async def test_snapshot_messages_are_stored_separately_from_telemetry() -> None:
     """A snapshot command is dispatched and stored apart from the telemetry stream."""
     device = PrimeCharger160w(MOCK_BLE_DEVICE)
-    device._SNAPSHOT_COMMANDS = ("4a00",)  # noqa: SLF001
+    device._SNAPSHOT_COMMANDS = (0xA00,)  # noqa: SLF001
 
     await device._process_session(  # noqa: SLF001
         0xA00,
@@ -338,7 +338,7 @@ async def test_status_only_reply_keeps_snapshot(
 ) -> None:
     """A bare status reply on a snapshot command leaves the stored snapshot."""
     device = C300(MOCK_BLE_DEVICE)
-    device._SNAPSHOT_COMMANDS = ("4a00",)  # noqa: SLF001
+    device._SNAPSHOT_COMMANDS = (0xA00,)  # noqa: SLF001
     frames = [
         build_frame("03010f", "0a00", bytes.fromhex(payload))
         for payload in ("b0020101", "01")

@@ -119,6 +119,7 @@ async def test_post_authorize_sends_region_and_owner(
     prime = PrimeDevice(MOCK_BLE_DEVICE)
     prime._client_token = OWNER_TOKEN
     prime._client = mock.AsyncMock()
+    install_session_keys(prime, bytes(range(32)))
     timestamp = prime._timestamp().hex()
 
     with (
