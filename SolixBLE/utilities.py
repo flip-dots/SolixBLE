@@ -5,18 +5,22 @@
 """
 
 import asyncio
-import importlib.resources as resources
 import inspect
 import locale
 import logging
 import re
 import time
-from typing import Callable
+from collections.abc import Callable
+from importlib import resources
 
 import tzlocal
 from bleak import BleakScanner, BLEDevice
 from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Construct,
+    Container,
     Int32sl,
+    SizeofError,
+    Struct,
 )
 from Crypto.Cipher import AES
 from cryptography.hazmat.primitives import serialization
@@ -36,7 +40,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def discover_devices(
-    scanner: type[BleakScanner] | None = None, timeout: int = 5
+    scanner: type[BleakScanner] | None = None,
+    timeout: int = 5,
 ) -> list[BLEDevice]:
     """Scan feature.
 
@@ -55,18 +60,15 @@ async def discover_devices(
 
     def callback(device, advertising_data):
         _LOGGER.debug(
-            f"Found generic BT device '{device}' with advertising data: '{advertising_data}'"
+            f"Found generic BT device '{device}' with advertising data: '{advertising_data}'",
         )
         # A passive scan can miss the services; the record is always there
         if (
-            (
-                ANKER_COMPANY_ID in advertising_data.manufacturer_data
-                or any(uuid in advertising_data.service_uuids for uuid in UUID_IDENTIFIERS)
-            )
-            and device not in devices
-        ):
+            ANKER_COMPANY_ID in advertising_data.manufacturer_data
+            or any(uuid in advertising_data.service_uuids for uuid in UUID_IDENTIFIERS)
+        ) and device not in devices:
             _LOGGER.debug(
-                f"Found Anker device '{device}' with advertising data: '{advertising_data}'"
+                f"Found Anker device '{device}' with advertising data: '{advertising_data}'",
             )
             devices.append(device)
 
@@ -74,6 +76,7 @@ async def discover_devices(
         await asyncio.sleep(timeout)
 
     return devices
+
 
 def _filter_kwargs(function: Callable, args: dict) -> dict:
     """
@@ -84,12 +87,13 @@ def _filter_kwargs(function: Callable, args: dict) -> dict:
     :returns: Filtered arguments.
     """
     signature = inspect.signature(function)
-    return {
-        k: v for k, v in args.items()
-        if k in signature.parameters and k != "self"
-    }
+    return {k: v for k, v in args.items() if k in signature.parameters and k != "self"}
 
-def _to_bytes(data: bytes | str | int | Callable | None, **kwargs: dict) -> bytes:
+
+def _to_bytes(
+    data: bytes | str | int | Callable[..., bytes | str | int | None] | None,
+    **kwargs: object,
+) -> bytes:
     """Return input in byte form.
 
     Lambda functions are executed using keyword arguments.
@@ -107,9 +111,90 @@ def _to_bytes(data: bytes | str | int | Callable | None, **kwargs: dict) -> byte
         return bytes.fromhex(data)
     if type(data) is int:
         return int.to_bytes(data, **_filter_kwargs(int.to_bytes, kwargs))
-    if isinstance(data, Callable):
-        return _to_bytes(data(*[kwargs[x] for x in data.__code__.co_varnames]), **kwargs)
+    if callable(data):
+        return _to_bytes(
+            data(*[kwargs[x] for x in data.__code__.co_varnames]),
+            **kwargs,
+        )
     raise ValueError(f"Unable to convert '{type(data)}' to bytes!")
+
+
+def _construct_min_length(struct: Construct, value: bytes | None = None) -> int:
+    """Return the fewest bytes ``struct`` needs to parse ``value`` safely.
+
+    :data:`~construct.Construct.sizeof` raises when any part of a struct has
+    no static size (a trailing :func:`~construct.Optional` field, a
+    :func:`~construct.PascalString`, or an :func:`~construct.Array` counted
+    by a sibling field). This walks the struct's named fields in order,
+    summing each one's static size, and - given the real bytes already read
+    so far - resolves a trailing dynamically-sized field (a length-prefixed
+    string, or a field-counted array) by reading its declared length
+    straight from ``value`` instead of hardcoding it. Any fixed fields after
+    a resolved dynamic one are summed the same way, so a static tail
+    following an array (e.g a backup-plan record after a TOU period array)
+    is included automatically. Multiple independent dynamic fields in one
+    struct (e.g two Pascal strings in sequence) resolve correctly too, since
+    each is handled as its turn in the field order comes up.
+
+    :param struct: The construct to measure.
+    :param value: The real bytes being guarded, needed only to resolve a
+        dynamically-sized field; omit to get just the static prefix length.
+    :returns: The minimum byte length ``struct.parse(value)`` needs.
+    """
+    try:
+        return int(struct.sizeof())
+    except SizeofError:
+        pass
+
+    total = 0
+    subcons = list(getattr(struct, "subcons", []))
+    for index, subcon in enumerate(subcons):
+        try:
+            total += subcon.sizeof()
+            continue
+        except SizeofError:
+            pass
+
+        if value is None:
+            break
+
+        inner = getattr(subcon, "subcon", subcon)
+
+        # A field-counted array (e.g Array(this.period_count, ...)): read the
+        # count from the sibling field already summed into total above.
+        count_path = getattr(inner, "count", None)
+        if count_path is not None and hasattr(count_path, "__getfield__"):
+            prefix = Struct(*subcons[:index]).parse(value[:total])
+            count = prefix[count_path.__getfield__()]
+            total += count * inner.subcon.sizeof()
+            continue
+
+        # A length-prefixed string (e.g PascalString(Int8ub, "ascii")): read
+        # its declared length directly from value.
+        length_field = getattr(getattr(inner, "subcon", None), "lengthfield", None)
+        if length_field is not None:
+            field_size = length_field.sizeof()
+            declared = length_field.parse(value[total : total + field_size])
+            total += field_size + declared
+            continue
+
+        break
+
+    return total
+
+
+def _parse_guarded(value: bytes, struct: Construct) -> Container | None:
+    """Parse ``value`` with ``struct``, or None if it is too short.
+
+    :param value: The raw bytes to parse.
+    :param struct: The construct to parse them with.
+    :returns: The parsed value, or None if ``value`` is shorter than
+        :func:`_construct_min_length` requires.
+    """
+    if len(value) < _construct_min_length(struct, value):
+        return None
+    return struct.parse(value)
+
 
 def get_posix_tz() -> str | None:
     """Return the current time zone as a POSIX timezone string.
@@ -128,9 +213,12 @@ def get_posix_tz() -> str | None:
             return lines[-1].decode("ascii").strip()
     except Exception:
         _LOGGER.exception("Unable to determine system time zone!")
+        return None
+
 
 #: Region set by :func:`set_region`, None to follow the host locale.
 _region: str | None = None
+
 
 def set_region(code: str | None) -> None:
     """Set the region sent to devices that store one (e.g Prime chargers).
@@ -140,6 +228,7 @@ def set_region(code: str | None) -> None:
     """
     global _region  # noqa: PLW0603
     _region = code.upper() if code else None
+
 
 def region() -> str:
     """Return the region: the one set, else the host locale's, else the default.
@@ -157,6 +246,7 @@ def region() -> str:
         return territory.upper()
     return DEFAULT_REGION
 
+
 def _offset_seconds_west() -> bytes:
     """UTC offset of the local zone as a signed int32 LE, in seconds west of UTC.
 
@@ -169,12 +259,14 @@ def _offset_seconds_west() -> bytes:
     offset: bytes = Int32sl.build(seconds_west)
     return offset
 
+
 def generate_ecdh_key() -> EllipticCurvePrivateKey:
     """Create a fresh P-256 private key for one ECDH negotiation.
 
     :returns: The private key.
     """
     return generate_private_key(SECP256R1())
+
 
 def ecdh_public_bytes(private_key: EllipticCurvePrivateKey) -> bytes:
     """Return the public point of a key as the raw ``X || Y`` bytes.
@@ -185,11 +277,14 @@ def ecdh_public_bytes(private_key: EllipticCurvePrivateKey) -> bytes:
     :returns: 64 bytes of public point.
     """
     return private_key.public_key().public_bytes(
-        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint,
+        serialization.Encoding.X962,
+        serialization.PublicFormat.UncompressedPoint,
     )[1:]
 
+
 def ecdh_shared_secret(
-    private_key: EllipticCurvePrivateKey, device_public_bytes: bytes,
+    private_key: EllipticCurvePrivateKey,
+    device_public_bytes: bytes,
 ) -> bytes:
     """Derive the ECDH shared secret from the device's raw public point.
 
@@ -198,9 +293,11 @@ def ecdh_shared_secret(
     :returns: The 32-byte shared secret.
     """
     device_public_key = EllipticCurvePublicKey.from_encoded_point(
-        SECP256R1(), b"\x04" + device_public_bytes,
+        SECP256R1(),
+        b"\x04" + device_public_bytes,
     )
     return private_key.exchange(ECDH(), device_public_key)
+
 
 def cbc_encrypt(key: bytes, iv: bytes, payload: bytes) -> bytes:
     """AES-CBC encrypt a payload with PKCS7 padding.
@@ -214,6 +311,7 @@ def cbc_encrypt(key: bytes, iv: bytes, payload: bytes) -> bytes:
     padded = padder.update(payload) + padder.finalize()
     return AES.new(key, AES.MODE_CBC, iv=iv).encrypt(padded)
 
+
 def cbc_decrypt(key: bytes, iv: bytes, payload: bytes) -> bytes:
     """AES-CBC decrypt a payload and strip its PKCS7 padding.
 
@@ -225,6 +323,7 @@ def cbc_decrypt(key: bytes, iv: bytes, payload: bytes) -> bytes:
     decrypted = AES.new(key, AES.MODE_CBC, iv=iv).decrypt(payload)
     unpadder = PKCS7(128).unpadder()
     return unpadder.update(decrypted) + unpadder.finalize()
+
 
 def gcm_encrypt(key: bytes, nonce: bytes, aad: bytes, payload: bytes) -> bytes:
     """AES-GCM encrypt a payload, appending the 16-byte MAC.
@@ -239,6 +338,7 @@ def gcm_encrypt(key: bytes, nonce: bytes, aad: bytes, payload: bytes) -> bytes:
     cipher.update(aad)
     encrypted, mac = cipher.encrypt_and_digest(payload)
     return encrypted + mac
+
 
 def gcm_decrypt(key: bytes, nonce: bytes, aad: bytes, payload: bytes) -> bytes:
     """AES-GCM decrypt a payload whose last 16 bytes are the MAC.

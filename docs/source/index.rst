@@ -22,7 +22,9 @@ and other devices
 This Python module enables you to monitor and control (some) Anker Solix devices
 directly from your computer, without the need for any cloud services or Anker app.
 It leverages the Bleak library to interact with Bluetooth Anker devices.
-No pairing is required in order to receive telemetry data or control the device.
+No pairing is required in order to receive telemetry data or control most devices;
+firmware that pairs clients asks for a button press the first time it sees a new
+client token (see :ref:`pairing-with-a-button-press`).
 
 
 .. note::
@@ -134,18 +136,22 @@ Prime charger support
 ======================= ============= ============= ===================
 Parameter               250w (A2345)  160w (A2687)  MagGo 3in1 (A25X7)
 ======================= ============= ============= ===================
-Display status           ❌            ❌            ❌
+Display status           ✅            ❌            ❌
+Display control          ✅            ❌            ❌
 Total power out          ❌            ❌            ✅
 Port on/off control      ✅            ✅            ❌
-Port protocol control    ❌            ❌            ❌
+Port protocol control    ✅            ❌            ❌
 Timer control            ✅            ✅            ❌
+Schedule control         ✅            ❌            ❌
 Individual port status   ✅            ✅            ✅
 Individual port voltage  ✅            ✅            ❌
 Individual port current  ✅            ✅            ❌
 Individual port power    ✅            ✅            ✅
+Port fault status        ✅            ❌            ❌
+Charging mode control    ✅            ❌            ❌
 Temperature              ❌            ❌            ❌
-Firmware version         ❌            ❌            ❌
-Serial number            ❌            ❌            ❌
+Firmware version         ✅            ❌            ❌
+Serial number            ✅            ❌            ❌
 ======================= ============= ============= ===================
 
 
