@@ -314,7 +314,7 @@ All payloads follow `a1 01 21`; the reply is the `0x0800` response with `<status
 |---|---|---|---|
 | `4200` | `getAllDeviceInfo` | — | snapshot |
 | `4201` | — | any | **factory reset** |
-| `4202` | `getScreensaver` | — | `4a02`: `a2` = bit 7 clock on, bit 6 holiday (only with bit 7), low 6 bits theme index · `a3` theme id u32 · `a4` path / url · `a6` port-widgets flag · `fe` |
+| `4202` | `getScreensaver` | — | `4a02`: `a2` = bit 7 clock on, bit 6 holiday (only with bit 7), low 6 bits theme index · `a3` theme id u32 · `a4` path / url · `a6` custom screensaver time display (`4222`): 1 shown, 0 hidden · `fe` |
 | `4203` | `setScreenTimeout` | `a2 02 01 <enum>` (as `b0`) | sets `b0` |
 | `4204` | `setScreenBrightness` | `a2 02 01 <0–100>` | sets `b3` |
 | `4205` | `setScreenSaverSwitchAndTheme` | `a2` = `0x80` \| theme index (bit 7 clear = clock off). Preset `80` / `81` / `82` + `a6` asset path; network `83` / custom `85` + `a3 05 03 <theme id>` `a4 05 03 <image crc32>` `a5 05 03 <text colour, ffffffff default>` + url in `a7` (else `a6`). The app fills an unused `a6` with the ASCII `1234567890123456` | downloads the image itself when not cached |
@@ -337,7 +337,7 @@ All payloads follow `a1 01 21`; the reply is the `0x0800` response with `<status
 | `4218` | — | — | `a2` 8 B: two status bytes per USB-C port |
 | `4220` | `prepareSendScreensaver` | `a2 <kind: 0 JPEG / 2>` `a3 05 03 <theme id>` `a4 05 03 <crc32>` `a5 05 03 <size>` `a6 <window>` `a7 03 02 <chunk 192>` `a8 03 02 <count>` `a9 11 04 <url>` | opens the image upload |
 | `4221` | `sendScreensaverData` | `a2 <u16 index> a3 <JPEG chunk>` | status `00` window ack, `10` done, `11` CRC error, `12` resend from index |
-| `4222` | — | `a2 02 01 <0 / 1>` | shows or hides the per-port icons and values on the port display page; read back as `4202 a6` |
+| `4222` | — | `a2 02 01 <0 / 1>` | shows or hides the time and date on a custom uploaded screensaver (no effect on the preset or network themes); read back as `4202 a6` |
 | `4223` | (device identification switch) | `a2 02 01 <0 / 1>` | sets `bf` |
 
 **`420a`.** `a2` is a type byte plus two ASCII characters (uppercased; the type byte is ignored, so `03 02 'US'` and `03 04 'US'` are equal). `a3` is the owner: 40 bytes (the app's account id) or 36 (a UUID). Only a changed owner has effects: it raises an owner-change event, leaves custom charging mode, and resets the theme to preset; an identical re-send (the app sends it every 1–2 s) is acked and does nothing. A missing or short `a2`, or a bad `a3`, answers `04`.
