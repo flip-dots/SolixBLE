@@ -406,7 +406,7 @@ The A2345 also pushes `0312`, MQTT only: its `a1 32` routes to `state_info`, nev
 | network | `a2` `83`, `a3` theme id, `a4` image CRC32 | `4205`, then `4220` and `4221` × count; the device can also fetch the url itself |
 | custom | `a2` `85` | `4205`, `4220`, then `4221` × count (192-byte chunks, raw JPEG) |
 
-Network theme ids: Celestial 948897111, Robotic 236632206, Lunar 938963984, Galactic 819158638, Meteorite 95294588, Floral Waltz 130254227, Rhythmic Hue 496957652 (image CRC32 `f9abd0b5`).
+Network theme ids: Celestial 948897111, Robotic 236632206, Lunar 938963984, Galactic 819158638, Meteorite 95294588, Floral Waltz 130254227, Impressionist Bloom 347235639, Sweet Treats 172033515, Rhythmic Hue 496957652 (image CRC32 `f9abd0b5`).
 
 ### Secret Features
 
