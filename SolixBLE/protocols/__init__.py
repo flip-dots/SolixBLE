@@ -7,6 +7,7 @@
 # ruff: noqa: N999
 
 from .base import (
+    Announcement,
     Keys,
     Link,
     Outer,
@@ -14,16 +15,19 @@ from .base import (
     Session,
     UnsupportedNegotiation,
     client_parameters,
-    new_announcement,
 )
 from .ecdh import EcdhPath
+from .legacy import LegacyAesPath
 from .outer import EncryptedOuter, PlainOuter
-from .session import NegotiatedSession
+from .session import PATHS, NegotiatedSession
 
 __all__ = [
+    "PATHS",
+    "Announcement",
     "EcdhPath",
     "EncryptedOuter",
     "Keys",
+    "LegacyAesPath",
     "Link",
     "NegotiatedSession",
     "Outer",
@@ -32,5 +36,4 @@ __all__ = [
     "Session",
     "UnsupportedNegotiation",
     "client_parameters",
-    "new_announcement",
 ]

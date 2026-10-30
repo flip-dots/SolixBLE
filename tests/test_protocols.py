@@ -11,8 +11,9 @@ from typing import TYPE_CHECKING, ClassVar
 import pytest
 
 from SolixBLE.const import FALLBACK_TZ
-from SolixBLE.constructs import ParameterDict
+from SolixBLE.constructs import Negotiation, ParameterDict
 from SolixBLE.protocols import (
+    Announcement,
     EcdhPath,
     EncryptedOuter,
     NegotiatedSession,
@@ -21,15 +22,15 @@ from SolixBLE.protocols import (
     PlainOuter,
 )
 from SolixBLE.protocols.base import NegotiatedSessionLike, override
-from tests.helpers import RECORDING_CLIENT_ID, RecordingLink
+from tests.helpers import RECORDING_CLIENT_ID, RecordingLink, frame_header
 
 if TYPE_CHECKING:
     from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
         Container,
     )
 
-NEGOTIATION = bytes.fromhex("030001")
-GRANT = bytes.fromhex("030101")
+#: Pattern of the grant the device pushes after its button is pressed.
+GRANT = "030101"
 
 TIMESTAMP = bytes.fromhex("42ad8c69")
 CLIENT_ID = RECORDING_CLIENT_ID.encode()
@@ -158,8 +159,7 @@ async def test_x801_asks_for_capabilities(
     link = RecordingLink()
     session = NegotiatedSession(outer, link)
     await session.on_plaintext(
-        NEGOTIATION,
-        bytes.fromhex(reply),
+        frame_header(reply),
         bytes.fromhex(PLAIN_X801),
     )
     assert link.sent == [("030001", cmd, parameters)]
@@ -187,8 +187,7 @@ async def test_on_reply_decrypts_flagged_frames() -> None:
     link = RecordingLink()
     session = NegotiatedSession(EncryptedOuter(), link)
     await session.on_reply(
-        NEGOTIATION,
-        bytes.fromhex("4801"),
+        frame_header("4801"),
         bytes.fromhex(SEALED_X801),
     )
     assert session.replied
@@ -207,18 +206,23 @@ async def test_status_byte_reaches_the_path() -> None:
             self.keys: Container | None = None
             self.authorized = False
 
+        @classmethod
+        @override
+        def matches(cls, announcement: Announcement, outer: Outer) -> bool:  # noqa: ARG003  # the protocol's signature
+            return True
+
         @override
         async def on_stage(
             self,
             session: NegotiatedSessionLike,
-            msgtype: int,
+            message: int,
             status: int,
             parameters: ParameterDict,
         ) -> None:
             received.append(
                 (
                     session.outer.name,
-                    msgtype,
+                    message,
                     status,
                     {tag: p.value_legacy.hex() for tag, p in parameters.items()},
                 ),
@@ -227,11 +231,12 @@ async def test_status_byte_reaches_the_path() -> None:
     session = NegotiatedSession(EncryptedOuter(), RecordingLink())
     session.path = Probe()
     await session.on_plaintext(
-        NEGOTIATION,
-        bytes.fromhex("4827"),
+        frame_header("4827"),
         bytes.fromhex(CONFIRM_30S),
     )
-    assert received == [("encrypted", 0x827, STATUS_CONFIRM, {"a1": "1e00"})]
+    assert received == [
+        ("encrypted", Negotiation.GET_AUTHENTICATION, STATUS_CONFIRM, {"a1": "1e00"}),
+    ]
 
 
 @pytest.mark.asyncio
@@ -262,8 +267,7 @@ async def test_capability_exchange_chooses_ecdh(
     session = NegotiatedSession(outer, link)
     for cmd, plaintext in flow[:3]:
         await session.on_plaintext(
-            NEGOTIATION,
-            bytes.fromhex(cmd),
+            frame_header(cmd),
             bytes.fromhex(plaintext),
         )
     assert isinstance(session.path, EcdhPath)
@@ -307,8 +311,7 @@ async def test_x005_states_the_method_per_outer(
     x803 = PLAIN_X803.replace("a30144", "a301" + method)
     for cmd, plaintext in (flow[0], (flow[1][0], x803), flow[2]):
         await session.on_plaintext(
-            NEGOTIATION,
-            bytes.fromhex(cmd),
+            frame_header(cmd),
             bytes.fromhex(plaintext),
         )
     assert link.sent[-1] == x005
@@ -349,8 +352,7 @@ async def test_key_exchange_sets_the_clock(
     session = NegotiatedSession(outer, link)
     for cmd, plaintext in flow:
         await session.on_plaintext(
-            NEGOTIATION,
-            bytes.fromhex(cmd),
+            frame_header(cmd),
             bytes.fromhex(plaintext),
         )
     assert link.sent[-2] == ("030001", x021, {"a1": CLIENT_PUBLIC_KEY})
@@ -384,14 +386,12 @@ async def test_x822_registers_an_unauthorized_client(
     session = NegotiatedSession(outer, link)
     for cmd, plaintext in flow:
         await session.on_plaintext(
-            NEGOTIATION,
-            bytes.fromhex(cmd),
+            frame_header(cmd),
             bytes.fromhex(plaintext),
         )
     sent = len(link.sent)
     await session.on_plaintext(
-        NEGOTIATION,
-        bytes.fromhex("4822"),
+        frame_header("4822"),
         bytes.fromhex(STATUS_OK),
     )
     assert link.sent[sent:] == registration
@@ -403,14 +403,12 @@ async def test_registration_accepted_authorizes() -> None:
     session = NegotiatedSession(EncryptedOuter(), RecordingLink())
     for cmd, plaintext in ENCRYPTED_FLOW:
         await session.on_plaintext(
-            NEGOTIATION,
-            bytes.fromhex(cmd),
+            frame_header(cmd),
             bytes.fromhex(plaintext),
         )
     assert not session.authorized
     await session.on_plaintext(
-        NEGOTIATION,
-        bytes.fromhex("4827"),
+        frame_header("4827"),
         bytes.fromhex(STATUS_OK),
     )
     assert session.announcement.registration_status == STATUS_ACCEPTED
@@ -423,13 +421,11 @@ async def test_confirmation_required_until_a_session_push() -> None:
     session = NegotiatedSession(EncryptedOuter(), RecordingLink())
     for cmd, plaintext in ENCRYPTED_FLOW:
         await session.on_plaintext(
-            NEGOTIATION,
-            bytes.fromhex(cmd),
+            frame_header(cmd),
             bytes.fromhex(plaintext),
         )
     await session.on_plaintext(
-        NEGOTIATION,
-        bytes.fromhex("4827"),
+        frame_header("4827"),
         bytes.fromhex(CONFIRM_180S),
     )
     assert session.announcement.registration_status == STATUS_CONFIRM
@@ -445,18 +441,19 @@ async def test_grant_after_confirmation_authorizes() -> None:
     session = NegotiatedSession(EncryptedOuter(), RecordingLink())
     for cmd, plaintext in ENCRYPTED_FLOW:
         await session.on_plaintext(
-            NEGOTIATION,
-            bytes.fromhex(cmd),
+            frame_header(cmd),
             bytes.fromhex(plaintext),
         )
     await session.on_plaintext(
-        NEGOTIATION,
-        bytes.fromhex("4827"),
+        frame_header("4827"),
         bytes.fromhex(CONFIRM_30S),
     )
     assert session.announcement.registration_status == STATUS_CONFIRM
     assert session.announcement.confirmation_window == WINDOW_30S
     assert not session.authorized
-    await session.on_plaintext(GRANT, bytes.fromhex("4827"), bytes.fromhex(STATUS_OK))
+    await session.on_plaintext(
+        frame_header("4827", GRANT),
+        bytes.fromhex(STATUS_OK),
+    )
     assert session.announcement.registration_status == STATUS_ACCEPTED
     assert session.authorized

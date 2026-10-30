@@ -6,6 +6,8 @@
 
 import asyncio
 import logging
+import struct
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Self, Union
@@ -21,7 +23,12 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
     derive_private_key,
 )
 
+from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Container,
+)
+
 from SolixBLE.const import FALLBACK_TZ
+from SolixBLE.constructs import Composer, Packet, PacketCommand, PacketPattern
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.protocols import EcdhPath, Keys, NegotiatedSession
 from SolixBLE.utilities import _to_bytes
@@ -119,6 +126,9 @@ class MockDevice:
         # The GATT UUIDs the module under test subscribed to and wrote to
         self.notify_uuids: list[str | bytes] = []
         self.write_uuids: list[str | bytes] = []
+
+        # The response argument of every write, None where it was left out
+        self.write_responses: list[bool | None] = []
 
         # Every packet the module under test wrote, in order
         self.writes: list[bytes] = []
@@ -291,7 +301,7 @@ class MockDevice:
                 await asyncio.sleep(0.1)
 
     async def write_gatt_char(
-        self, char_specifier: str, data: bytes, response: bool = False
+        self, char_specifier: str, data: bytes, response: bool | None = None
     ):
         """
         Patched version of the bleak clients write_gatt_char function
@@ -301,10 +311,11 @@ class MockDevice:
 
         :param char_specifier: Not used, would be the UUID the module wants to write to.
         :param data: The data the module wants to write.
-        :param response: Not used. Bool of if the module wants a response to its write.
+        :param response: Recorded in write_responses. The ATT write type, None if left out.
         """
         _LOGGER.debug(f"Mock device has received data: '{data.hex()}'")
         self.write_uuids.append(char_specifier)
+        self.write_responses.append(response)
 
         # Find the request/response for this write
         request_response = None
@@ -458,17 +469,18 @@ class RecordingLink:
         self.sent: list[tuple[str, str, dict[str, bytes]]] = []
 
     async def _send_packet(
-        self, pattern: str, cmd: str, parameters: dict[str, Any],
+        self, channel: int, command: Container, parameters: dict[str, Any],
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         """
         Record a packet instead of sending it.
 
-        :param pattern: Pattern of the packet.
-        :param cmd: Command of the packet.
+        :param channel: Channel of the packet.
+        :param command: The command's fields.
         :param parameters: Parameters by tag, values may be lambdas taking self.
         """
-        self.sent.append((pattern, cmd, {
+        pattern = PacketPattern.build({"composer": Composer.REPLY, "channel": channel})
+        self.sent.append((pattern.hex(), PacketCommand.build(command).hex(), {
             tag: _to_bytes(data=item["value"], **kwargs | { "self": self })
             for tag, item in parameters.items()
         }))
@@ -491,3 +503,276 @@ class RecordingLink:
             int.from_bytes(bytes.fromhex(SOLIX_TEST_PRIVATE_KEY), byteorder="big"),
             SECP256R1(),
         )
+
+
+async def feed_negotiation(
+    session: NegotiatedSession, replies: list[tuple[str, str]],
+) -> None:
+    """
+    Feed a negotiation session decrypted device replies in order.
+
+    :param session: Session under test.
+    :param replies: Pairs of command and plaintext payload, both as hex.
+    """
+    for cmd, plaintext in replies:
+        await session.on_plaintext(frame_header(cmd), bytes.fromhex(plaintext))
+
+
+def build_frame(pattern: str, cmd: str, payload: bytes = b"") -> bytes:
+    """
+    Build a frame from its header bytes as written on the wire.
+
+    :param pattern: The 3-byte pattern as hex (e.g. ``03010f``).
+    :param cmd: The 2-byte command as hex (e.g. ``c402``).
+    :param payload: The payload bytes.
+    :returns: The whole frame, checksum included.
+    """
+    header = PacketPattern.parse(bytes.fromhex(pattern))
+    command = PacketCommand.parse(bytes.fromhex(cmd))
+    return Packet.build({
+        "composer": header.composer,
+        "channel": header.channel,
+        "fragmented": command.fragmented,
+        "encrypted": command.encrypted,
+        "msgtype": command.msgtype,
+        "payload_bytes": payload,
+    })
+
+
+def frame_header(cmd: str, pattern: str = "030001") -> Container:
+    """
+    Return the parsed header of a frame, as the device hands it on.
+
+    :param cmd: The 2-byte command as hex (e.g. ``4801``).
+    :param pattern: The 3-byte pattern as hex.
+    :returns: The parsed packet, with an empty payload.
+    """
+    return Packet.parse(build_frame(pattern, cmd))
+
+
+def session_reply(device: SolixBLEDevice, cmd: str, plaintext: str) -> bytes:
+    """
+    Build a session frame from the device, sealed under its negotiated session.
+
+    :param device: The negotiated device under test.
+    :param cmd: The 2-byte command as hex (e.g. ``4a05``).
+    :param plaintext: The payload as hex.
+    :returns: The whole frame, as the device notifies it.
+    """
+    sealed = device._encrypt_payload(bytes.fromhex(plaintext))  # noqa: SLF001
+    return build_frame("03010f", cmd, sealed)
+
+
+def sent_payloads(device: SolixBLEDevice, writes: list[bytes]) -> list[tuple[int, str]]:
+    """
+    Return the message type and the decrypted payload of each written frame.
+
+    :param device: The negotiated device that wrote the frames.
+    :param writes: The frames, e.g. ``MockDevice.writes``.
+    :returns: Pairs of message type and payload as hex.
+    """
+    packets = [Packet.parse(write) for write in writes]
+    return [
+        (packet.msgtype, device._decrypt_payload(packet.payload_bytes).hex())  # noqa: SLF001
+        for packet in packets
+    ]
+
+
+async def connect_recorded(
+    device: SolixBLEDevice,
+    mock_bluetooth: MockDevice,
+    responses: dict[str, list[str]],
+) -> None:
+    """
+    Connect a device through a recorded negotiation on the mock device.
+
+    :param device: Device under test.
+    :param mock_bluetooth: The active mock device.
+    :param responses: Maps each sent frame (as hex) to its replies (as hex),
+        e.g. NEGOTIATION_RESPONSES_PRIME.
+    """
+    for expected, replies in responses.items():
+        mock_bluetooth.expect_ordered(
+            bytes.fromhex(expected), [bytes.fromhex(reply) for reply in replies],
+        )
+    assert await device.connect()
+
+
+def window_acks(
+    device: SolixBLEDevice, count: int, final: list[bytes], window: int = 10,
+) -> list[list[bytes]]:
+    """
+    Return the device's replies to each chunk of an upload that goes through.
+
+    A ``4a21`` status 00 with the next index after each full window, and
+    ``final`` after the last chunk.
+
+    :param device: The negotiated device under test.
+    :param count: Number of chunks.
+    :param final: The replies to the last chunk.
+    :param window: Chunks per window.
+    """
+    replies: list[list[bytes]] = []
+    for index in range(count):
+        if index == count - 1:
+            replies.append(final)
+        elif (index + 1) % window == 0:
+            next_index = struct.pack("<H", index + 1).hex()
+            replies.append(
+                [session_reply(device, "4a21", f"00a10131a20302{next_index}")],
+            )
+        else:
+            replies.append([])
+    return replies
+
+
+def chunk_payload(
+    image: bytes, index: int, chunk_size: int = 192, *, pad: bool = True,
+) -> str:
+    """
+    Return a ``4221`` chunk's payload before its timestamp, as hex.
+
+    The index as u16 LE in ``a2``; ``a3`` a type byte then the chunk, the last
+    one zero-padded to ``chunk_size`` unless ``pad`` is off.
+
+    :param image: The whole image.
+    :param index: The chunk's index.
+    :param chunk_size: Bytes per chunk.
+    :param pad: Zero-pad the last chunk.
+    """
+    chunk = image[index * chunk_size:(index + 1) * chunk_size]
+    if pad:
+        chunk = chunk.ljust(chunk_size, b"\x00")
+    return (
+        f"a10121a20302{struct.pack('<H', index).hex()}"
+        f"a3{len(chunk) + 1:02x}04{chunk.hex()}"
+    )
+
+
+def jpeg_segment(marker: int, body: bytes) -> bytes:
+    """
+    Build a JPEG marker segment: ``ff``, the marker, the length, the body.
+
+    :param marker: The marker byte (e.g. ``0xdb``).
+    :param body: The segment's body.
+    """
+    return struct.pack(">BBH", 0xFF, marker, len(body) + 2) + body
+
+
+def jpeg_scan(header: bytes, size: int = 0) -> bytes:
+    """
+    Complete a JPEG header with scan bytes free of ``ff`` and an EOI.
+
+    :param header: The bytes from SOI through the scan header.
+    :param size: The whole image's length, or 0 for 64 scan bytes.
+    """
+    length = size - len(header) - 2 if size else 64
+    return header + bytes(index % 0xFF for index in range(length)) + b"\xff\xd9"
+
+
+def jpeg_image(  # noqa: PLR0913
+    *,
+    width: int = 480,
+    height: int = 200,
+    precision: int = 8,
+    components: int = 3,
+    luma_sampling: int = 0x22,
+    frame_marker: int = 0xC0,
+    before_frame: bytes = b"",
+    size: int = 0,
+) -> bytes:
+    """
+    Build a JPEG in a baseline encoder's segment order.
+
+    SOI, JFIF, the quantisation tables, the frame header, the Huffman tables
+    and the scan header, then the scan bytes and EOI.
+
+    :param width: Frame width in pixels.
+    :param height: Frame height in pixels.
+    :param precision: Sample precision in bits.
+    :param components: Number of colour components.
+    :param luma_sampling: The first component's sampling byte (h << 4 | v).
+    :param frame_marker: The frame header's marker (``0xc0`` baseline).
+    :param before_frame: Bytes placed just before the frame header.
+    :param size: The whole image's length, or 0 for a short scan.
+    """
+    jfif = jpeg_segment(0xE0, bytes.fromhex("4a46494600010100000100010000"))
+    quantisation = jpeg_segment(0xDB, b"\x00" + bytes(64) + b"\x01" + bytes(64))
+    frame = jpeg_segment(frame_marker, struct.pack(
+        ">BHHB", precision, height, width, components,
+    ) + b"".join(
+        bytes([index + 1, luma_sampling if index == 0 else 0x11, min(index, 1)])
+        for index in range(components)
+    ))
+    huffman = jpeg_segment(0xC4, b"".join(
+        bytes([table]) + b"\x01" + bytes(15) + b"\x00"
+        for table in (0x00, 0x10, 0x01, 0x11)
+    ))
+    scan = jpeg_segment(0xDA, bytes([components]) + b"".join(
+        bytes([index + 1, 0x00 if index == 0 else 0x11])
+        for index in range(components)
+    ) + b"\x00\x3f\x00")
+    header = (
+        b"\xff\xd8" + jfif + quantisation + before_frame + frame + huffman + scan
+    )
+    return jpeg_scan(header, size)
+
+
+def with_crc32(image: bytes, crc: int) -> bytes:
+    """
+    Return the image with the four bytes before its EOI set so its CRC32 is ``crc``.
+
+    :param image: An image ending in four scan bytes and EOI.
+    :param crc: The CRC32 to reach.
+    """
+    table = []
+    for byte in range(256):
+        entry = byte
+        for _ in range(8):
+            entry = (entry >> 1) ^ 0xEDB88320 if entry & 1 else entry >> 1
+        table.append(entry)
+    by_top_byte = {entry >> 24: index for index, entry in enumerate(table)}
+    prefix, suffix = image[:-6], image[-2:]
+
+    # The CRC register after the four bytes, run back from the end
+    register = crc ^ 0xFFFFFFFF
+    for byte in reversed(suffix):
+        index = by_top_byte[register >> 24]
+        register = ((register ^ table[index]) << 8 & 0xFFFFFFFF) | (index ^ byte)
+
+    # The table indices that register needs depend on its top bytes alone
+    indices: list[int] = []
+    for _ in range(4):
+        index = by_top_byte[register >> 24]
+        indices.insert(0, index)
+        register = (register ^ table[index]) << 8 & 0xFFFFFFFF
+
+    register = zlib.crc32(prefix) ^ 0xFFFFFFFF
+    forged = bytearray()
+    for index in indices:
+        forged.append((register ^ index) & 0xFF)
+        register = table[index] ^ (register >> 8)
+    return prefix + bytes(forged) + suffix
+
+
+def negotiation_steps_through(
+    responses: dict[str, list[str]], stop_after: int,
+) -> list[tuple[bytes, list[bytes]]]:
+    """
+    Return a recorded negotiation's steps, up to and including one request.
+
+    Use to script a :class:`MockDevice` through a prefix of a recorded
+    negotiation (e.g. up to the clock/time zone exchange), before swapping in
+    a substitute reply for whatever request comes next.
+
+    :param responses: Maps a sent frame's bytes (as hex) to its replies
+        (as hex), in order, e.g. NEGOTIATION_RESPONSES_PRIME.
+    :param stop_after: The request's message (e.g. ``Negotiation.GET_AES_KEY``)
+        to stop after, inclusive.
+    """
+    steps = []
+    for sent, replies in responses.items():
+        steps.append((bytes.fromhex(sent), [bytes.fromhex(reply) for reply in replies]))
+        if Packet.parse(bytes.fromhex(sent)).message == stop_after:
+            break
+    return steps
