@@ -9,20 +9,26 @@ Overview
 Anker has implemented many protocols over the years for communicating with their devices,
 with each generally getting more complicated than the last. Some devices support older 
 protocols, some accept both older and newer ones, and some only accept the latest, with 
-this often changing with firmware updates and dependant on hardware revision. This page
-details the underlying protocol and the structure that SolixBLE uses to handle this. 
+this often changing with firmware updates and dependent on hardware revision. This page
+details the underlying protocol and the structure that SolixBLE uses to handle this.
+
+.. note::
+
+   A byte-level reference for each device family (frames, negotiation, authorization,
+   commands and telemetry, with real frames decoded field by field) is in the repository's
+   `docs/deep-documentation <https://github.com/flip-dots/SolixBLE/tree/main/docs/deep-documentation>`_.
 
 
 The legacy protocol (Not supported)
 -----------------------------------
 
-This is the first protocol used only by early hardware revisions of the F2000, is 
+This is the first protocol used only by early hardware revisions of the F2000, it
 is completely distinct from the later protocols and shares nothing with them. These 
 devices are currently not supported.
 
 
-The early `Solix` protocol (Removed in firmware update)
--------------------------------------------------------
+The early ``Solix`` protocol (Removed in firmware update)
+---------------------------------------------------------
 
 This is the first protocol that was used by multiple devices. It used no encryption and 
 transmitted data in plain text and was used by the C300(X), C800(X), C1000(X) and potentially
@@ -30,19 +36,19 @@ more. This was the first version that SolixBLE supported and this protocol was r
 a firmware update forcing all devices to use the encryption of the next protocol.
 
 
-The `Solix` protocol (Used by old devices)
-------------------------------------------
+The ``Solix`` protocol (Used by old devices)
+--------------------------------------------
 
 This is the protocol used by G1 Solix devices today, such as the C300(X) and C1000(X), it 
 implements encryption by performing ECDH key negotiation during connection and then uses
 AES CBC for encrypting all communication using the shared secret.
 
 
-The `Prime` protocol
---------------------
+The ``Prime`` protocol
+----------------------
 
-This is the protocol used by older `Prime` devices today such as the 160w and 250w desktop 
-chargers. It differs from the `Solix` protocol in that it uses AES GCM for encryption and 
+This is the protocol used by older ``Prime`` devices today such as the 160w and 250w desktop
+chargers. It differs from the ``Solix`` protocol in that it uses AES GCM for encryption and 
 the initial negotiation and ECDH exchange is encrypted using a static key. It is worth 
 noting that there is a newer variant of this protocol which requires you to press a button 
 when pairing.
@@ -61,24 +67,36 @@ across multiple packets (fragmentation), see the later diagram.
 
 .. mermaid::
 
+  ---
+  config:
+    packet:
+      bitsPerRow: 72
+      bitWidth: 16
+  ---
   packet-beta
   title General Packet Layout Example
   0-15: "Header (2B)"
   16-31: "Length (2B)"
   32-55: "Pattern (3B)"
   56-71: "CMD (2B)"
-  72-327: "Payload (variable)"
-  328-335: "Checksum (1B)"
+  72-135: "Payload (variable)"
+  136-143: "Checksum (1B)"
 
 
 Example of a decoded packet:
 
 .. mermaid::
 
+  ---
+  config:
+    packet:
+      bitsPerRow: 72
+      bitWidth: 16
+  ---
   packet-beta
   title Packet Structure for ff090e00030001080100a1010152
   0-15: "Header: 0xFF09 (2B)"
-  16-31: "Length: 0x0E00 (2B)"
+  16-31: "Length: 14, 0x0E00 little-endian (2B)"
   32-55: "Pattern: 0x030001 (3B)"
   56-71: "CMD: 0x0801 (2B)"
   72-103: "Payload: 0x00A10101 (4B)"
@@ -87,7 +105,7 @@ Example of a decoded packet:
 
 .. note::
 
-  In this example the payload is not encrypted (encryption is determined by the pattern field) as the example
+  In this example the payload is not encrypted (encryption is flagged by 0x40 in the CMD's first byte) as the example
   is from a negotiation packet of an older Solix device, normal payloads may require defragmentation and will
   require decryption.
 
@@ -102,6 +120,12 @@ Frames on the negotiating transport have this layout (0-based byte offsets):
 
 .. mermaid::
 
+  ---
+  config:
+    packet:
+      bitsPerRow: 72
+      bitWidth: 16
+  ---
   packet-beta
   0-15: "magic (ff09)"
   16-31: "length (u16 LE)"
@@ -109,7 +133,8 @@ Frames on the negotiating transport have this layout (0-based byte offsets):
   40-47: "composer"
   48-55: "channel"
   56-59: "flags"
-  60-71: "message type"
+  60-60: "response"
+  61-71: "message"
   72-79: "fragment index / total (only when fragmented)"
   80-95: "payload (...)"
   96-103: "XOR checksum"
@@ -119,10 +144,11 @@ Frames on the negotiating transport have this layout (0-based byte offsets):
 * The pattern is made up of 3 bytes and is used for packet routing with each byte specifying something.
 
   * The first byte is always 0x03.
-  * The second byte is the channel and is 0x01 if the packet was sent by the device on its own and is 0x00 if its an echo of a command.
-  * The third byte is the dispatch key and specifies what type of command the packet contains.
-* The flags specify if the message is fragmented (0x08), encrypted (0x04), or neither (0x00).
-* The message type is effectively the command of the packet (e.g switch USB on/off, send negotiation stage 1 payload, etc).
+  * The second byte is the composer: 0x01 if the packet was sent by the device on its own and 0x00 if it is a reply that echoes the request.
+  * The third byte is the channel, the device's dispatch key, which says what kind of message the packet carries (negotiation, session, ...).
+* The flags are the high nibble of the CMD's first byte: fragmented (0x80), encrypted (0x40), or neither (0x00).
+* The response bit (0x08 of the CMD's first byte) marks a reply to a request with the same message.
+* The message is effectively the command of the packet (e.g switch USB on/off, send negotiation stage 1 payload, etc).
 * The fragment index is an optional field only present if the fragmented field is set and contains the index of this fragment and the total number of fragments.
 * The payload is the TLV encoded parameters of the message type / command (e.g specifying which USB port to turn on/off).
 * The last byte of the packet is an XOR checksum of the entire content of the packet.
@@ -135,8 +161,8 @@ Frames on the negotiating transport have this layout (0-based byte offsets):
     b4    03            pattern family
     b5    composer      01 = sent by the device on its own (pushes, relayed replies); 00 = echoed from the request (local replies)
     b6    channel       the device's dispatch key
-    b7    flags | msgtype hi   high nibble: 0x80 fragmented, 0x40 encrypted; low nibble: message type bits 8-11
-    b8    msgtype lo
+    b7    flags | response | message hi   high nibble: 0x80 fragmented, 0x40 encrypted; 0x08 response; low 3 bits: message bits 8-10
+    b8    message lo
     b9    fragment index << 4 | total   (only when 0x80 is set)
     ...   payload
     last  XOR checksum
@@ -145,9 +171,41 @@ Bytes ``b4-6`` are the pattern
 (:py:data:`PacketPattern <SolixBLE.constructs.PacketPattern>`) and bytes
 ``b7-8`` the command
 (:py:data:`PacketCommand <SolixBLE.constructs.PacketCommand>`).
+:py:data:`Packet <SolixBLE.constructs.Packet>` parses both into fields:
 
-- Message type = ``(b7 & 0x0f) << 8 | b8``. A response is the request's message
-  type with ``0x800`` set.
+.. list-table::
+   :header-rows: 1
+
+   * - Field
+     - Bits
+     - Value
+   * - ``composer``
+     - ``b5``
+     - :py:class:`Composer <SolixBLE.constructs.Composer>`: ``REPLY`` (``00``)
+       or ``SEND`` (``01``)
+   * - ``channel``
+     - ``b6``
+     - :py:class:`Channel <SolixBLE.constructs.Channel>`: ``NEGOTIATION``
+       (``01``), ``SESSION`` (``0f``), ``APP`` (``11``); other channels stay
+       integers
+   * - ``fragmented``, ``encrypted``
+     - ``b7`` ``0x80``, ``0x40``
+     - flags
+   * - ``response``
+     - ``b7`` ``0x08``
+     - set on a reply
+   * - ``message``
+     - ``b7`` low 3 bits, ``b8``
+     - on the negotiation channel a
+       :py:class:`Negotiation <SolixBLE.constructs.Negotiation>` member
+       (``CONNECT``, ``NEGOTIATE_CAPABILITY``, ...), else an integer
+   * - ``msgtype``
+     - ``b7`` low nibble, ``b8``
+     - the 12-bit message type, response bit included (``c900`` is
+       ``0x900``); replies and telemetry are matched on it
+
+- A response is the request's message with ``response`` set: the reply to
+  ``CONNECT`` (``0001``) is ``0801``.
 - The flag nibble is the frame's own state. On the session channels the library
   decrypts a received frame only when ``0x40`` is set.
 - The library reassembles fragments only when ``0x80`` is set. The first payload
@@ -158,7 +216,7 @@ Bytes ``b4-6`` are the pattern
 Channels
 --------
 
-The channel is the second byte of the pattern and specifies the routing of the 
+The channel is the third byte of the pattern and specifies the routing of the
 packet. These are the channel values that have been observed.
 
 .. list-table::
@@ -199,7 +257,8 @@ Decrypted payload structure
 Once the payload has been defragmented and decrypted (protocol specific) the plain text payload may be decoded. 
 This structure is the same across all protocols (except for early revisions of the F2000) and uses TLV encoding, where the
 payload is made up of a list of parameters and each parameter contains a key, length field, optional type field,
-and value. 
+and value. Negotiation payloads (channel 0x01) carry no type fields; in session payloads a parameter longer than
+one byte starts with a type byte, which the length counts.
 
 .. mermaid::
 
@@ -208,9 +267,9 @@ and value.
   0-7: "Key (1B)"
   8-15: "Length (1B)"
   16-23: "Type (optional) (1B)"
-  24-31: "Value (Length bytes)"
- 
-Example of a decoded payload:
+  24-31: "Value (Length bytes, less the type byte)"
+
+Example of a decoded payload, a negotiation reply (no type fields):
 
 .. mermaid::
 
@@ -222,8 +281,7 @@ Example of a decoded payload:
     24-31: "P1 Value: 0x02 (1B)"
     32-39: "P2 Key: 0xA2 (1B)"
     40-47: "P2 Length: 0x02 (1B)"
-    48-55: "P2 Type: 0xFD (1B)"
-    56-63: "P2 Value: 0x00 (1B)"
+    48-63: "P2 Value: 0xFD00, MTU 253 little-endian (2B)"
     64-71: "P3 Key: 0xA3 (1B)"
     72-79: "P3 Length: 0x01 (1B)"
     80-87: "P3 Value: 0x44 (1B)"
@@ -245,9 +303,11 @@ The exact steps in decoding a payload:
       HasPrefix --> ReadKey[Read Parameter Key: 1B]
       
       ReadKey --> ReadLen[Read Parameter Length: 1B]
-      ReadLen --> CheckLen{Length > 1?}
-      
-      CheckLen -- Yes --> HasType[Read Optional Type Field: 1B]
+      ReadLen --> CheckNeg{Negotiation payload?}
+      CheckNeg -- Yes --> SkipType
+      CheckNeg -- No --> CheckLen{Length > 1?}
+
+      CheckLen -- Yes --> HasType[Read Type Field: 1B]
       CheckLen -- No --> SkipType[No Type Field]
       
       HasType --> ReadVal[Read Remaining Bytes as Value]
@@ -270,6 +330,12 @@ about the hardware and its capabilities.
 
 .. mermaid::
 
+  ---
+  config:
+    packet:
+      bitsPerRow: 56
+      bitWidth: 16
+  ---
   packet-beta
   0-7: "version (1B)"
   8-55: "mac (6B)"
@@ -297,7 +363,7 @@ SolixBLE structure
 SolixBLE is structured into a hierarchy of classes, with devices able to override or implement additional 
 functionality to handle device (e.g C1000) or device class specific (Prime style) quirks.
 
-The `SolixBLEDevice` class is the main class of the program which implements the main control flow of the
+The ``SolixBLEDevice`` class is the main class of the program which implements the main control flow of the
 program with device class specific details (such as the transport implementation) being split out into 
 helper classes.
 
@@ -349,13 +415,26 @@ helper classes.
           path
           announcement
           link
+          encrypts
           open()
-          on_reply()
+          send(message, parameters)
+          send_clock()
+          on_reply(packet, payload)
           encrypt(payload)
           decrypt(payload)
       }
       SolixBLEDevice --> NegotiatedSession : _session, a new one for each opening
       NegotiatedSession --> Link : link
+
+      class Announcement {
+          mtu, base_method, encrypt_method, auth_method
+          serial, mac
+          registration_status, confirmation_window
+          record_capability(parameters)
+          record_device_info(parameters)
+          record_confirmation(parameters)
+      }
+      NegotiatedSession --> Announcement : announcement
 
       class Outer {
           <<protocol>>
@@ -374,20 +453,21 @@ helper classes.
           keys
           authorized
           matches(announcement, outer)$
-          on_stage(session, msgtype, status, parameters)
+          on_stage(session, message, status, parameters)
           encrypt_override(payload)
       }
       Path <|.. EcdhPath
       Path <|.. LegacyAesPath
-      NegotiatedSession --> Path : path, the first of PATHS whose matches() accepts x803
+      NegotiatedSession --> Path : path, the first of PATHS whose matches() accepts the capability reply
 
 - The outer is how the negotiation travels and which cipher (e.g AES CBC, GCM, etc) the session uses (see `Outer protocols`_).
-- The path is the key exchange and authorization after the shared opening (see Paths).
+- The path is the key exchange and authorization after the shared opening (see `Paths`_).
 - The session ties one outer and one path to one connection; the device is its link, which builds and writes the frames.
-- ``_TRANSPORT`` specifies what GATT characteristics to use to communicate with the device and whether negotiation is required..
+- ``_TRANSPORT`` specifies what GATT characteristics to use to communicate with the device and whether negotiation is required.
 - ``_OUTER_HINT`` is the default outer to use if this cannot be determined from the BLE advertisement and is ``PlainOuter`` unless the device class (e.g Prime 160w) overrides it.
 - ``_outer_class`` is the outer to use and starts as ``_initial_outer(advertisement)`` and will be upgraded to ``EncryptedOuter`` if the connection is refused using ``PlainOuter`` and will remain as the last outer that authorized successfully.
-- ``announcement`` holds what the device declared.
+- ``announcement`` is an ``Announcement``, which records what the device declared from its own replies.
+- ``encrypts`` says whether a frame sent now carries the encrypted flag: always on the encrypted outer, on the plain outer once a path has installed keys.
 - ``NegotiatedSession.encrypt()`` uses ``path.encrypt_override()``, else ``outer.encrypt()`` under ``path.keys``. ``NegotiatedSession.decrypt()`` uses ``outer.decrypt()`` under ``path.keys``.
 
 
@@ -428,59 +508,72 @@ characteristics the library subscribes to and writes to.
 Sending packets
 ---------------
 
-Sending a command can be achieved by calling either `_send_command()` on the device class
-or `send()` on a negotiated session object. `_send_command()` can be used to send a command 
-to the device and it uses the command pattern and adds and it automatically adds additional 
-information such as the current timestamp to the command which is required by some Anker devices to 
-provide protection against replay attacks.
+Sending a command can be achieved by calling either ``_send_command()`` on the device class
+or ``send()`` on a negotiated session object. ``_send_command()`` sends a command on the
+session channel and automatically adds additional information such as the current timestamp
+to the command, which is required by some Anker devices to provide protection against replay attacks.
+It takes the message type (e.g ``0x101``) and sets the encrypted flag the way the session does
+on its own frames.
 
-`send()` is a lower level implementation which is used during negotiation and allows for the pattern 
-to be set and does not automatically include the timestamp.
+``send()`` is a lower level implementation which is used during negotiation: it sends a
+:py:class:`Negotiation <SolixBLE.constructs.Negotiation>` message on the negotiation channel
+and does not automatically include the timestamp.
 
-Both functions call the same underlying `_send_packet()` command which converts the parameters into 
-bytes to make up the payload, optionally encrypts the payload using `_encrypt_payload()`, and then 
-builds a packet using the payload with the specified pattern and command and then writes it to the 
+Both functions call the same underlying ``_send_packet()`` command which converts the parameters into
+bytes to make up the payload, optionally encrypts the payload using ``_encrypt_payload()``, and then
+builds a packet using the payload with the specified channel and command fields and then writes it to the
 device.
 
 .. mermaid::
 
   flowchart TD
-      cmd["_send_command(cmd, parameters)<br/>session commands: pattern 03000f, adds fe"]
-      neg["NegotiatedSession.send(msgtype, ...)<br/>negotiation: pattern 030001,<br/>cmd from PacketCommand.build(flags, msgtype)"]
-      sp["_send_packet(pattern, cmd, parameters)"]
+      cmd["_send_command(message, parameters)<br/>channel SESSION, adds fe,<br/>encrypted flag from session.encrypts"]
+      neg["NegotiatedSession.send(message, ...)<br/>channel NEGOTIATION,<br/>encrypted flag from session.encrypts"]
+      sp["_send_packet(channel, command, parameters)"]
       cmd --> sp
       neg --> sp
       sp --> build["Parameters.build()<br/>tag-length-value parameters<br/>(lambdas called with the device)"]
       build --> enc["_encrypt_payload() -> session.encrypt()<br/>path.encrypt_override(), else<br/>outer.encrypt(payload, path.keys)"]
-      enc --> pkt["Packet.build()<br/>ff09, length, pattern, cmd, payload, XOR checksum"]
+      enc --> pkt["Packet.build()<br/>ff09, length, composer, channel, flags,<br/>message, payload, XOR checksum"]
       pkt --> write["write_gatt_char(UUID_COMMAND, packet)"]
+
+.. note::
+   :collapsible: closed
+
+   The device classes written before these fields existed still pass the
+   command as hex, e.g ``_send_command("4200", ...)`` or
+   ``_send_command(cmd="4101", ...)``, and their ``_TELEMETRY_COMMANDS`` and
+   ``_listen_for_packet()`` arguments as hex strings or bytes. These are
+   accepted unchanged: a hex command is sent with its flags as written, and a
+   pattern or command given to ``_listen_for_packet()`` is read for its channel
+   and message type.
 
 
 Receiving packets
 -----------------
 
 
-Packets from the device are received by subscribing to a telemetry GATT characteristic defined in 
-the transport which calls `_process_notification()` when a new packet is received. 
+Packets from the device are received by subscribing to a telemetry GATT characteristic defined in
+the transport which calls ``_process_notification()`` when a new packet is received.
 
-The basic metadata of the packet (e.g pattern, cmd, etc) is parsed first and this is used to
-determine if the packet is fragmented and requires reassembly using the flags part. 
+The basic metadata of the packet (composer, channel, flags and message) is parsed first and the
+fragmented flag decides whether the packet requires reassembly.
 Fragmented packets are not processed until the last fragment arrives, at which point
 the payload is reconstructed.
 
-Next the channel part of the pattern is used to determine what to do with the packet, negotiation 
-packets are processed and responses sent under the `_process_negotiation()` function, unsupported 
+Next the channel is used to determine what to do with the packet, negotiation
+packets are processed and responses sent under the ``_process_negotiation()`` function, unsupported
 channels are logged and ignored, and supported ones then proceed to the next step.
 
-The flags part of the packet is then used to determine if the packet needs decryption, which handles by 
-the `_decrypt_payload()` function. 
+The encrypted flag then decides whether the packet needs decryption, which is handled by
+the ``_decrypt_payload()`` function.
 
-Once the raw payload is available the packet is then checked to see if it matches any pre-registered 
-listeners. These allow for a device to listen for a packet sent by the device in response to a command 
-and get the parsed payload returned to them for custom processing (e.g requesting a ToU schedule). 
+Once the raw payload is available the packet is then checked to see if it matches any pre-registered
+listeners. These allow for a device to listen for a packet sent by the device in response to a command
+and get the parsed payload returned to them for custom processing (e.g requesting a ToU schedule).
 
-If no listeners match it is then is processed by the `_process_session()` function which determines 
-if the packet is a telemetry packet based upon the cmd value, and passes it to `_process_telemetry()`
+If no listeners match it is then processed by the ``_process_session()`` function which determines
+if the packet is a telemetry packet based upon its message type, and passes it to ``_process_telemetry()``
 which will store the values inside the device class to update any device attributes (e.g ac_output, light_status, etc)
 and trigger any registered device state update callbacks.
 
@@ -489,10 +582,10 @@ and trigger any registered device state update callbacks.
 
   flowchart TD
       notif["_process_notification(client, handle, data)"]
-      parse["Packet.parse(): checks the ff09 header and the checksum<br/>PacketPattern.parse(): family, composer, channel<br/>PacketCommand.parse(): fragmented (0x80), encrypted (0x40), msgtype"]
+      parse["Packet.parse(): checks the ff09 header and the checksum,<br/>then composer, channel, fragmented (0x80),<br/>encrypted (0x40), response, message, msgtype"]
       notif --> parse
       parse --> frag{"fragmented?"}
-      frag -- yes --> reasm["_reassemble(): FragmentedPayload,<br/>buffered by pattern + cmd"]
+      frag -- yes --> reasm["_reassemble(): FragmentedPayload,<br/>buffered by channel + msgtype"]
       reasm -- "the joined payload,<br/>once every fragment is in" --> chan
       frag -- no --> chan{"channel?"}
       chan -- "0x01" --> nego["_process_negotiation() -> session.on_reply()<br/>(decrypts if 0x40 is set; see Negotiation flow)"]
@@ -502,12 +595,12 @@ and trigger any registered device state update callbacks.
       encq -- no --> fut
       dec --> fut{"future for channel + msgtype?<br/>(_future_key(): the composer<br/>and flags don't matter)"}
       fut -- yes --> setres["future.set_result(payload)<br/>(_listen_for_packet())"]
-      fut -- no --> sess["_process_session(cmd, payload, encrypted=...)"]
+      fut -- no --> sess["_process_session(msgtype, payload, encrypted=...)"]
       sess --> tel{"msgtype 0x300 or in<br/>_TELEMETRY_COMMANDS?"}
       tel -- yes --> telem["Parameters.parse()<br/>encrypted -> session.on_session_push()<br/>_process_telemetry() -> state callbacks"]
       tel -- no --> logged["logged"]
 
-- ``_send_command()`` raises ``ConnectionError`` until the device is negotiated; its ``cmd`` carries the flags as given (e.g ``4200``).
+- ``_send_command()`` raises ``ConnectionError`` until the device is negotiated.
 - The library sends every packet whole; only received packets are reassembled.
 - Telemetry is matched on the message type, so ``c405``, ``4405`` and a clear ``8405`` are one message.
 
@@ -531,22 +624,22 @@ opening frame.
      - Opening
      - Before keys
      - Session cipher
-     - Client authorized at
+     - Client authorized at (ECDH path)
    * - Plain (:py:class:`SolixBLE.protocols.PlainOuter`)
-     - ``0001``
+     - ``CONNECT`` in clear (``0001``)
      - clear
      - AES-128-CBC, PKCS7
-     - ``0821``
+     - the ``GET_PUBLIC_KEY`` reply (``0821``)
    * - Encrypted (:py:class:`SolixBLE.protocols.EncryptedOuter`)
-     - ``4001``
+     - ``CONNECT`` encrypted (``4001``)
      - AES-128-GCM under a static key
      - AES-128-GCM
-     - ``4827`` status ``00``, or the first session push the client can decrypt
+     - the ``GET_AUTHENTICATION`` reply with status ``00`` (``4827 00``), or the first session push the client can decrypt
 
-Both outers run the same opening command (``x001``, ``x003`` for the device's
-capabilities, ``x029`` for its serial and MAC), then an ECDH key exchange on
-P-256 with a fresh key for every negotiation. The key is the first 16 bytes
-of the shared secret; the IV is the next 16 (GCM uses 12 of them).
+Both outers run the same opening messages (``CONNECT``, ``NEGOTIATE_CAPABILITY``
+for the device's capabilities, ``GET_DEVICE_INFO`` for its serial and MAC), then
+a path picked from the ``NEGOTIATE_CAPABILITY`` reply establishes the keys (see
+`Paths`_).
 
 Which outer is tried first comes from the best hint available, strongest
 first:
@@ -584,15 +677,15 @@ The Bluetooth advertisement
 ---------------------------
 
 The Bluetooth advertisement from an Anker device is useful for two purposes, first to 
-return the correct device class for the device (e.g c1000x.py for C1000(X)), second for 
+return the correct device class for the device (e.g ``devices/c1000.py`` for C1000(X)), second for
 finding out what protocols the device supports, since a model might support multiple protocols.
 
-The former is achieved using `device_class_from_advertisement` which given a BLE advertisement returns
+The former is achieved using ``device_class_from_advertisement`` which given a BLE advertisement returns
 the correct class to use to connect to the device, with the advertisement passed to the device class 
 during initialization being used to determine which protocol to use to connect to the device.
 
 It is possible to connect using no advertisement and the default protocol will be used for the model, but 
-this may result in failure if the device does not support the default protocol, (i.e because its running 
+this may result in failure if the device does not support the default protocol, (i.e because it's running
 firmware too old or too new).
 
 .. mermaid::
@@ -651,6 +744,7 @@ Example usage of :py:func:`capability_from_advertisement() <SolixBLE.capability_
     scanner = BleakScanner(detection_callback=detected)
 
 
+
 Negotiation flow
 ----------------
 
@@ -674,8 +768,8 @@ a device:
       est["establish_connection()<br/>start_notify(UUID_TELEMETRY, _process_notification)"]
       nego["_negotiate()<br/>until negotiated, the link drops,<br/>an UnsupportedNegotiation, or NEGOTIATION_TIMEOUT"]
       init["_initiate_negotiations()<br/>again if the device sends nothing for<br/>NEGOTIATION_RESPONSE_TIMEOUT seconds"]
-      open["_session = NegotiatedSession(_outer_class(), self)<br/>_session.open(): sends x001"]
-      reply["each reply: _process_notification() -> _process_negotiation()<br/>-> NegotiatedSession.on_reply() -> on_plaintext()<br/>x801, x803: handled by the session<br/>later: path.on_stage() (EcdhPath or LegacyAesPath)"]
+      open["_session = NegotiatedSession(_outer_class(), self)<br/>_session.open(): sends CONNECT"]
+      reply["each reply: _process_notification() -> _process_negotiation()<br/>-> NegotiatedSession.on_reply() -> on_plaintext()<br/>CONNECT, NEGOTIATE_CAPABILITY replies: handled by the session<br/>later: path.on_stage() (EcdhPath or LegacyAesPath)"]
       connect --> est --> nego --> init --> open
       open -.-> reply
       reply -.-> nego
@@ -687,10 +781,45 @@ a device:
       refused -- no --> fail["False"]
 
 
-The first few stages of the negotiation are handled in ``NegotiatedSession`` and consist of the 
-same message types/commands (with the exception of the really old ones), where the device tells us its
-capabilities including what forms of negotiation it supports and the hardware MTU. Later stages 
-of the negotiation differ depending upon the supported negotiation pathways of the device (i.e `Prime` style and `Solix` style).
+The first few stages of the negotiation are handled in ``NegotiatedSession`` and consist of the
+same messages (with the exception of the really old ones), where the device tells us its
+capabilities including what forms of negotiation it supports and the hardware MTU. Later stages
+of the negotiation follow the path picked from the ``NEGOTIATE_CAPABILITY`` reply (see `Paths`_).
+
+Negotiation messages are named after the Anker app's
+(:py:class:`Negotiation <SolixBLE.constructs.Negotiation>`); on the wire each is the
+message below with the flag nibble ``x`` and, on a reply, ``0x800``:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Message
+     - Request
+     - Reply
+   * - ``CONNECT``
+     - ``x001``
+     - ``x801``
+   * - ``NEGOTIATE_CAPABILITY``
+     - ``x003``
+     - ``x803``
+   * - ``SET_CAPABILITY``
+     - ``x005``
+     - ``x805``
+   * - ``GET_PUBLIC_KEY``
+     - ``x021``
+     - ``x821``
+   * - ``GET_AES_KEY``
+     - ``x022``
+     - ``x822``
+   * - ``BIND_USER``
+     - ``x023``
+     - ``x823``
+   * - ``GET_AUTHENTICATION``
+     - ``x027``
+     - ``x827``
+   * - ``GET_DEVICE_INFO``
+     - ``x029``
+     - ``x829``
 
 
 .. mermaid::
@@ -699,51 +828,106 @@ of the negotiation differ depending upon the supported negotiation pathways of t
     participant C as Client (NegotiatedSession)
     participant D as Device
     Note over C: open()
-    C->>D: x001 time (+ client id)
-    D->>C: x801
+    C->>D: CONNECT time (+ client id)
+    D->>C: CONNECT reply
     Note over C: on_plaintext()
-    C->>D: x003 client MTU
-    D->>C: x803
-    Note over C: _record_capability(): MTU, capability, auth<br/>path = _choose_path(): the first of PATHS<br/>whose matches() accepts x803, else UnsupportedNegotiation
-    C->>D: x029
+    C->>D: NEGOTIATE_CAPABILITY client MTU
+    D->>C: NEGOTIATE_CAPABILITY reply
+    Note over C: announcement.record_capability(): MTU, capability, auth<br/>path = _choose_path(): the first of PATHS<br/>whose matches() accepts the reply, else UnsupportedNegotiation
+    C->>D: GET_DEVICE_INFO
 
 
-A. The Prime style negotiation
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Paths
+^^^^^
 
-This is the negotiation path for devices which use the newer `Prime` style handshake which contain 
-additional information such as device region. This is handled by ``EcdhPath.on_stage()``.
+After the shared opening the device's capability reply (``NEGOTIATE_CAPABILITY``)
+picks the path that establishes the session keys. Paths are tried in order;
+the first that handles the reply runs the rest of the negotiation.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Capability reply
+     - Path
+     - Outer
+     - Keys
+     - Client authorized at
+   * - ``a3 & 0x44`` (ECDH) and an auth method in ``a5``
+     - ECDH (:py:class:`SolixBLE.protocols.EcdhPath`): ``SET_CAPABILITY``
+       states ECDH, ``GET_PUBLIC_KEY`` exchanges P-256 points,
+       ``GET_AES_KEY`` sets the clock, ``GET_AUTHENTICATION`` registers the
+       client
+     - plain or encrypted
+     - P-256 with a fresh key for every negotiation; the shared secret's first 16 bytes, IV the next 16 (GCM uses 12 of them)
+     - see `Outer protocols`_
+   * - otherwise ``a1 & 0x02`` (AES), e.g. ``a1 02`` · ``a3 04`` with no
+       ``a5`` on older module builds
+     - Legacy AES (:py:class:`SolixBLE.protocols.LegacyAesPath`):
+       ``SET_CAPABILITY`` states AES (``a5 02``), ``GET_AES_KEY`` sets the
+       clock and its reply returns the session key, ``BIND_USER`` binds the
+       client
+     - plain or encrypted
+     - until the ``GET_AES_KEY`` reply, CBC under a bootstrap key: on the plain outer the client id's first 16 bytes with the serial's as IV (when ``CONNECT`` carries no client id the device uses its default account instead, :py:data:`ANKER_DEFAULT_ACCOUNT_1 <SolixBLE.const.ANKER_DEFAULT_ACCOUNT_1>`), on the encrypted outer the static key and IV; after it, the key the reply carries, with the same IV
+     - the ``GET_AES_KEY`` reply
+   * - neither
+     - none: ``connect()`` returns ``False`` and logs
+       :py:class:`SolixBLE.UnsupportedNegotiation` naming the values
+     - N/A
+     - N/A
+     - N/A
+
+A device that rejects the stated method (a ``SET_CAPABILITY`` status other
+than ``00``) or answers ``GET_PUBLIC_KEY`` without its key also fails the
+connect with :py:class:`SolixBLE.UnsupportedNegotiation`, naming the stage.
+
+.. note::
+   :collapsible: closed
+
+   A path is a class with a ``matches(announcement, outer)`` class method,
+   which says whether it handles what the device declared on that outer,
+   and an ``on_stage(session, message, status, parameters)`` coroutine that
+   handles each reply after the ``GET_DEVICE_INFO`` request. It sets ``keys``
+   when it installs session keys and ``authorized`` when the device accepts
+   the client. New paths are added to :py:data:`SolixBLE.protocols.PATHS`.
+
+
+
+A. ECDH (``EcdhPath``)
+""""""""""""""""""""""
+
+This path runs when the capability reply offers ECDH and an auth method, on
+either outer. It is handled by ``EcdhPath.on_stage()``.
 
 .. mermaid::
 
   sequenceDiagram
     participant C as Client (EcdhPath)
     participant D as Device
-    D->>C: x829
-    Note over C: record_identity(): serial, MAC
-    C->>D: x005 method ECDH, MTU (outer.x005_tags())
-    D->>C: x805
+    D->>C: GET_DEVICE_INFO reply
+    Note over C: announcement.record_device_info(): serial, MAC
+    C->>D: SET_CAPABILITY method ECDH, MTU (outer.x005_tags())
+    D->>C: SET_CAPABILITY reply
     Note over C: status 00, else UnsupportedNegotiation<br/>link._generate_private_key()
-    C->>D: x021 client public key
-    D->>C: x821
+    C->>D: GET_PUBLIC_KEY client public key
+    D->>C: GET_PUBLIC_KEY reply
     Note over C: _exchange_keys(): keys = Keys.parse(ecdh_shared_secret(...))<br/>plain outer: authorized
-    C->>D: x022 time, time zone (send_clock())
-    D->>C: x822
+    C->>D: GET_AES_KEY time, time zone (session.send_clock())
+    D->>C: GET_AES_KEY reply
     opt encrypted outer, not yet authorized
-        C->>D: x027 client token
-        D->>C: x827
-        Note over C: _register(): status 00 authorized<br/>09 sets confirmation_window
+        C->>D: GET_AUTHENTICATION client token
+        D->>C: GET_AUTHENTICATION reply
+        Note over C: _register(): status 00 authorized<br/>09 records confirmation_window
         opt status 09, once the device's button is pressed
-            D->>C: x827 pushed on pattern 030101
+            D->>C: GET_AUTHENTICATION reply pushed on pattern 030101
         end
     end
 
 
-B. The Solix style negotiation
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+B. Legacy AES (``LegacyAesPath``)
+"""""""""""""""""""""""""""""""""
 
-This is the negotiation path for devices which use the older `Solix` style handshake which does not 
-contain information like device region. This is handled by ``LegacyAesPath.on_stage()``.
+This path runs when the capability reply offers AES but not ECDH, on either
+outer. It is handled by ``LegacyAesPath.on_stage()``.
 
 
 .. mermaid::
@@ -751,22 +935,22 @@ contain information like device region. This is handled by ``LegacyAesPath.on_st
   sequenceDiagram
     participant C as Client (LegacyAesPath)
     participant D as Device
-    D->>C: x829
-    Note over C: record_identity(): serial, MAC
-    C->>D: x005 method AES (a5 02), MTU
-    D->>C: x805
+    D->>C: GET_DEVICE_INFO reply
+    Note over C: announcement.record_device_info(): serial, MAC
+    C->>D: SET_CAPABILITY method AES (a5 02), MTU
+    D->>C: SET_CAPABILITY reply
     Note over C: status 00, else UnsupportedNegotiation<br/>keys = _bootstrap_keys()
-    C->>D: x022 time, time zone (send_clock()), CBC-sealed by encrypt_override()
-    D->>C: x822
+    C->>D: GET_AES_KEY time, time zone (session.send_clock()), CBC-sealed by encrypt_override()
+    D->>C: GET_AES_KEY reply
     Note over C: status 00 with a1, else UnsupportedNegotiation<br/>keys = a1[:16] + _ongoing_iv(), authorized
-    C->>D: x023 serial
-    D->>C: x823
+    C->>D: BIND_USER serial
+    D->>C: BIND_USER reply
     Note over C: bind status logged
 
-- ``x`` is the flag nibble: ``0`` on the plain outer until keys are installed and ``4`` after (``0021``, then ``4022``), always ``4`` on the encrypted outer. Replies set ``0x800`` (``0801`` / ``4801``).
-- Before keys, the plain outer sends in clear and the encrypted outer under the static GCM key. Once ``x821`` installs the keys, the session cipher is CBC (plain) or GCM (encrypted).
-- The plain outer authorizes at ``0821``. The encrypted outer authorizes at ``4827`` status ``00``, the ``030101`` grant, or the first session push the client can decrypt (``on_session_push()``).
-- ``(+ client id)``: the plain outer inserts the client id as ``a2`` in ``0001``, ``0003``, ``0029``, ``0005`` and ``4022``; the encrypted outer sends none.
+- On the wire ``x`` is the flag nibble: ``0`` on the plain outer until a path installs keys and ``4`` after (``0021``, then ``4022``), always ``4`` on the encrypted outer. Replies set ``0x800`` (``0801`` / ``4801``).
+- Before keys, the plain outer sends in clear and the encrypted outer under the static GCM key. Once the path installs keys, the session cipher is the outer's: CBC (plain) or GCM (encrypted). The legacy path's bootstrap request is the one exception: ``encrypt_override()`` seals it in CBC on either outer until the session key authorizes the path.
+- ECDH authorizes at the ``GET_PUBLIC_KEY`` reply on the plain outer; on the encrypted outer at the ``GET_AUTHENTICATION`` reply with status ``00``, the ``030101`` grant, or the first session push the client can decrypt (``on_session_push()``). Legacy AES authorizes at the ``GET_AES_KEY`` reply on either outer.
+- ``(+ client id)``: the plain outer inserts the client id as ``a2`` in ``CONNECT``, ``NEGOTIATE_CAPABILITY``, ``GET_DEVICE_INFO``, ``SET_CAPABILITY``, ``GET_AES_KEY`` and the legacy ``BIND_USER``; the encrypted outer sends none.
 
 
 .. note::

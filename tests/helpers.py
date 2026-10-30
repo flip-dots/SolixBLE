@@ -21,11 +21,21 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
     derive_private_key,
 )
 
-from SolixBLE.const import FALLBACK_TZ
+from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Container,
+)
+
+from SolixBLE.cli import Console
+from SolixBLE.const import FALLBACK_TZ, UUID_IDENTIFIER
+from SolixBLE.constructs import Composer, Packet, PacketCommand, PacketPattern
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.protocols import EcdhPath, Keys, NegotiatedSession
 from SolixBLE.utilities import _to_bytes
-from tests.const import SOLIX_TEST_PRIVATE_KEY
+from tests.const import (
+    MOCK_BLE_DEVICE,
+    NEGOTIATION_RESPONSES_SOLIX,
+    SOLIX_TEST_PRIVATE_KEY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -367,6 +377,7 @@ def make_advertisement(
     manufacturer_data: dict[int, bytes] | None = None,
     service_uuids: list[str] | None = None,
     local_name: str | None = None,
+    service_data: dict[str, bytes] | None = None,
 ) -> AdvertisementData:
     """
     Build a bleak scan result with the given fields.
@@ -374,11 +385,12 @@ def make_advertisement(
     :param manufacturer_data: Manufacturer data by company identifier.
     :param service_uuids: Advertised service UUIDs.
     :param local_name: Advertised local name.
+    :param service_data: Service data by service UUID.
     """
     return AdvertisementData(
         local_name=local_name,
         manufacturer_data=manufacturer_data or {},
-        service_data={},
+        service_data=service_data or {},
         service_uuids=service_uuids or [],
         tx_power=None,
         rssi=-60,
@@ -458,17 +470,18 @@ class RecordingLink:
         self.sent: list[tuple[str, str, dict[str, bytes]]] = []
 
     async def _send_packet(
-        self, pattern: str, cmd: str, parameters: dict[str, Any],
+        self, channel: int, command: Container, parameters: dict[str, Any],
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         """
         Record a packet instead of sending it.
 
-        :param pattern: Pattern of the packet.
-        :param cmd: Command of the packet.
+        :param channel: Channel of the packet.
+        :param command: The command's fields.
         :param parameters: Parameters by tag, values may be lambdas taking self.
         """
-        self.sent.append((pattern, cmd, {
+        pattern = PacketPattern.build({"composer": Composer.REPLY, "channel": channel})
+        self.sent.append((pattern.hex(), PacketCommand.build(command).hex(), {
             tag: _to_bytes(data=item["value"], **kwargs | { "self": self })
             for tag, item in parameters.items()
         }))
@@ -491,3 +504,81 @@ class RecordingLink:
             int.from_bytes(bytes.fromhex(SOLIX_TEST_PRIVATE_KEY), byteorder="big"),
             SECP256R1(),
         )
+
+
+async def feed_negotiation(
+    session: NegotiatedSession, replies: list[tuple[str, str]],
+) -> None:
+    """
+    Feed a negotiation session decrypted device replies in order.
+
+    :param session: Session under test.
+    :param replies: Pairs of command and plaintext payload, both as hex.
+    """
+    for cmd, plaintext in replies:
+        await session.on_plaintext(frame_header(cmd), bytes.fromhex(plaintext))
+
+
+def build_frame(pattern: str, cmd: str, payload: bytes = b"") -> bytes:
+    """
+    Build a frame from its header bytes as written on the wire.
+
+    :param pattern: The 3-byte pattern as hex (e.g. ``03010f``).
+    :param cmd: The 2-byte command as hex (e.g. ``c402``).
+    :param payload: The payload bytes.
+    :returns: The whole frame, checksum included.
+    """
+    header = PacketPattern.parse(bytes.fromhex(pattern))
+    command = PacketCommand.parse(bytes.fromhex(cmd))
+    return Packet.build({
+        "composer": header.composer,
+        "channel": header.channel,
+        "fragmented": command.fragmented,
+        "encrypted": command.encrypted,
+        "msgtype": command.msgtype,
+        "payload_bytes": payload,
+    })
+
+
+def frame_header(cmd: str, pattern: str = "030001") -> Container:
+    """
+    Return the parsed header of a frame, as the device hands it on.
+
+    :param cmd: The 2-byte command as hex (e.g. ``4801``).
+    :param pattern: The 3-byte pattern as hex.
+    :returns: The parsed packet, with an empty payload.
+    """
+    return Packet.parse(build_frame(pattern, cmd))
+
+
+def console_seeing_c300(**kwargs: Any) -> Console:
+    """
+    Return a console whose scanner reports the mock device as a negotiating
+    Anker device without a manufacturer record.
+
+    :param kwargs: Passed through to the console.
+    """
+    advertisement = make_advertisement(service_uuids=[UUID_IDENTIFIER])
+    return Console(
+        scanner=scanner_reporting([(MOCK_BLE_DEVICE, advertisement)]),
+        reply_wait=0,
+        **kwargs,
+    )
+
+
+async def connect_console(console: Console, mock_bluetooth: MockDevice) -> list[str]:
+    """
+    Scan and connect the console to the mock device as a C300 that answers
+    with the recorded negotiation.
+
+    :param console: Console under test, from console_seeing_c300.
+    :param mock_bluetooth: The active mock device.
+    :returns: What the connect command printed.
+    """
+    for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+        mock_bluetooth.expect_ordered(
+            bytes.fromhex(expected),
+            [bytes.fromhex(response) for response in responses],
+        )
+    await console.run_line("scan 0")
+    return await console.run_line("connect 0 C300")

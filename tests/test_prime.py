@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from SolixBLE.constructs import Packet
+from SolixBLE.constructs import Channel, Packet, PacketCommand
 from SolixBLE.prime_device import PrimeDevice
 from tests.const import MOCK_BLE_DEVICE
 from tests.helpers import install_session_keys
@@ -108,13 +108,13 @@ async def test_post_authorize_sends_region_and_owner(
 
     assert [call.args[0] for call in mock_build.call_args_list] == [
         {
-            "pattern": bytes.fromhex("03000f"),
-            "cmd": bytes.fromhex("4200"),
+            **PacketCommand.parse(bytes.fromhex("4200")),
+            "channel": Channel.SESSION,
             "payload_bytes": bytes.fromhex(f"a10121fe0503{timestamp}"),
         },
         {
-            "pattern": bytes.fromhex("03000f"),
-            "cmd": bytes.fromhex("420a"),
+            **PacketCommand.parse(bytes.fromhex("420a")),
+            "channel": Channel.SESSION,
             "payload_bytes": bytes.fromhex(
                 "a10121"
                 + "a203025553"

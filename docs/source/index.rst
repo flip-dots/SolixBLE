@@ -187,6 +187,7 @@ Contents
    examples
    usage
    protocols
+   cli
    api
    limitations
    new_devices

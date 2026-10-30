@@ -12,9 +12,9 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from functools import partial
+from typing import Any
 
 from bleak import BleakClient, BleakError
-from bleak.backends.client import BaseBleakClient
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from bleak_retry_connector import establish_connection
@@ -28,9 +28,7 @@ from SolixBLE.advertisement import (
     capability_from_advertisement,
 )
 from SolixBLE.constructs import (
-    CHANNEL_APP,
-    CHANNEL_NEGOTIATION,
-    CHANNEL_SESSION,
+    Channel,
     FragmentedPayload,
     Packet,
     PacketCommand,
@@ -39,6 +37,7 @@ from SolixBLE.constructs import (
     Parameters,
 )
 from SolixBLE.protocols import (
+    Announcement,
     EncryptedOuter,
     NegotiatedSession,
     Outer,
@@ -73,13 +72,41 @@ UUID_STRING = "b2dc0b17-b75d-4abf-ba6e-ec7c997c23e7"
 TELEMETRY_MSGTYPE = 0x300
 
 
+def _as_channel(pattern: int | str | bytes) -> int:
+    """Return the channel of a pattern; a channel passes through.
+
+    :param pattern: A :class:`~SolixBLE.constructs.Channel`, or the older form:
+        the 3-byte pattern as hex or bytes (e.g. ``"03010f"``).
+    """
+    if isinstance(pattern, int):
+        return pattern
+    channel: int = PacketPattern.parse(_to_bytes(pattern)).channel
+    return channel
+
+
+def _as_command(command: int | str | bytes, *, encrypted: bool = False) -> Container:
+    """Return a command's flags, response bit, message and msgtype.
+
+    :param command: A message type (e.g. ``0x101``), sent unfragmented with
+        ``encrypted``; or the older form, the 2-byte command as hex or bytes
+        (e.g. ``"4101"``), which keeps its flags as written.
+    :param encrypted: The encrypted flag for a message type.
+    """
+    if isinstance(command, int):
+        return PacketCommand.parse(
+            PacketCommand.build({"msgtype": command, "encrypted": encrypted}),
+        )
+    return PacketCommand.parse(_to_bytes(command))
+
+
 class SolixBLEDevice:
     """Solix BLE device object."""
 
-    #: Command codes (hex) that carry telemetry for this device. Subclasses can
-    #: override this if their model uses different telemetry command codes
-    #: (e.g the C1000 Gen 2 uses ``c421``/``c900`` instead of ``c402``/``c405``).
-    _TELEMETRY_COMMANDS: tuple[str, ...] = ("c402", "4300", "c405")
+    #: Message types that carry telemetry for this device. Subclasses can
+    #: override this if their model uses different ones (e.g the C1000 Gen 2
+    #: uses ``0x421``/``0x900`` instead of ``0x402``/``0x405``). Hex command
+    #: strings (e.g. ``"c421"``) are accepted too; their flags are ignored.
+    _TELEMETRY_COMMANDS: tuple[int | str, ...] = (0x402, 0x300, 0x405)
 
     #: The BLE transport this device uses. Subclasses on the legacy transport
     #: (GATT service ``1780``) set :class:`~SolixBLE.transport.LegacyTransport`,
@@ -117,18 +144,19 @@ class SolixBLEDevice:
         """
 
         _LOGGER.debug(
-            f"Initializing Solix device '{ble_device.name}' with"
+            f"Initializing Solix device '{ble_device.name}' with "
             f"address '{ble_device.address}' and details '{ble_device.details}'"
         )
 
         self._ble_device: BLEDevice = ble_device
         self._client: BleakClient | None = None
-        self._fragment_buffers: dict[bytes, list[FragmentedPayload]] = {}
+        self._disposed_client: BleakClient | None = None
+        self._fragment_buffers: dict[tuple[int, int], list[FragmentedPayload]] = {}
         self._data: ParameterDict | None = None
         self._last_data_timestamp: datetime | None = None
         self._last_packet_timestamp: datetime | None = None
         self._state_changed_callbacks: list[Callable[[], None]] = []
-        self._packet_futures: dict[bytes, list[asyncio.Future]] = {}
+        self._packet_futures: dict[tuple[int, int], list[asyncio.Future]] = {}
         self._auto_reconnect_task: asyncio.Task | None = None
         self._keep_alive_task: asyncio.Task | None = None
         self._disconnect_event: asyncio.Event = asyncio.Event()
@@ -489,7 +517,7 @@ class SolixBLEDevice:
         )
 
     @property
-    def announcement(self) -> Container | None:
+    def announcement(self) -> Announcement | None:
         """What the device declared in its latest negotiation.
 
         .. note::
@@ -620,13 +648,14 @@ class SolixBLEDevice:
         # Parse payload
         payload = FragmentedPayload.parse(packet.payload_bytes)
 
-        _LOGGER.debug(f"Received fragment {payload.frag.index}/{payload.frag.total} for p: {packet.pattern.hex()}, c: {packet.cmd.hex()}")
+        _LOGGER.debug(f"Received fragment {payload.frag.index}/{payload.frag.total} for channel {packet.channel:02x}, msgtype {packet.msgtype:03x}")
 
         # Get existing fragments or create list of one does not exist
-        fragments = self._fragment_buffers.get(packet.pattern + packet.cmd)
+        key = (packet.channel, packet.msgtype)
+        fragments = self._fragment_buffers.get(key)
         if fragments is None:
             fragments = []
-            self._fragment_buffers[packet.pattern + packet.cmd] = fragments
+            self._fragment_buffers[key] = fragments
 
         # Add to list of fragments
         fragments.append(payload)
@@ -675,49 +704,47 @@ class SolixBLEDevice:
             # Parse packet and decode its header
             packet = Packet.parse(data)
             _LOGGER.debug(f"Packet: {packet}")
-            pattern = packet.pattern
-            cmd = packet.cmd
             payload = packet.payload_bytes
-            header = PacketPattern.parse(pattern)
-            command = PacketCommand.parse(cmd)
 
             # Fragments are handed to the re-assembler which will
             # re-assemble the payload when all fragments are available
-            if command.fragmented:
+            if packet.fragmented:
                 payload = self._reassemble(packet)
                 if payload is None:
                     return None
 
             # Negotiation messages (requests, replies and the grant the
             # device pushes after its button is pressed) decrypt themselves
-            if header.channel == CHANNEL_NEGOTIATION:
+            if packet.channel == Channel.NEGOTIATION:
                 _LOGGER.debug("Received negotiation message!")
-                return await self._process_negotiation(pattern, cmd, payload)
+                return await self._process_negotiation(packet, payload)
 
-            if header.channel not in (CHANNEL_SESSION, CHANNEL_APP):
+            if packet.channel not in (Channel.SESSION, Channel.APP):
                 _LOGGER.debug(
-                    f"Unhandled channel {header.channel:02x} "
-                    f"(composer {header.composer:02x}), cmd {cmd.hex()}",
+                    f"Unhandled channel {packet.channel:02x} "
+                    f"(composer {packet.composer:02x}), msgtype {packet.msgtype:03x}",
                 )
                 return None
 
             # Session messages are decrypted once, if the frame says so
-            if command.encrypted:
+            if packet.encrypted:
                 payload = self._decrypt_payload(payload)
                 _LOGGER.debug(f"Plain-text payload: {payload.hex()}")
 
             # If the packet has a future registered then we just trigger that
-            # future instead of processing it here
-            if pattern + cmd in self._packet_futures:
+            # future instead of processing it here, matched on the channel and
+            # message type whatever the composer and flags
+            key = (packet.channel, packet.msgtype)
+            if key in self._packet_futures:
                 _LOGGER.debug(
                     "Packet has future(s) registered. Triggering future(s) and ignoring packet..."
                 )
-                for future in self._packet_futures[pattern + cmd]:
+                for future in self._packet_futures[key]:
                     future.set_result(payload)
                 return None
 
             return await self._process_session(
-                cmd, payload, encrypted=command.encrypted,
+                packet.msgtype, payload, encrypted=packet.encrypted,
             )
 
         except Exception:
@@ -727,25 +754,21 @@ class SolixBLEDevice:
 
     def _telemetry_msgtypes(self) -> set[int]:
         """Return the message types of this model's telemetry commands."""
-        return {
-            PacketCommand.parse(bytes.fromhex(cmd)).msgtype
-            for cmd in self._TELEMETRY_COMMANDS
-        }
+        return {_as_command(command).msgtype for command in self._TELEMETRY_COMMANDS}
 
     async def _process_session(
-        self, cmd: bytes, payload: bytes, *, encrypted: bool,
+        self, msgtype: int, payload: bytes, *, encrypted: bool,
     ) -> None:
         """
         Process a session message from the device.
 
-        :param cmd: The command code of the packet.
+        :param msgtype: The packet's message type.
         :param payload: The plain-text payload.
         :param encrypted: Whether the packet arrived encrypted.
         """
 
         # Telemetry messages, matched on the message type whatever the
         # fragment and encryption flags (a clear 8405 is a c405)
-        msgtype = PacketCommand.parse(cmd).msgtype
         if msgtype == TELEMETRY_MSGTYPE or msgtype in self._telemetry_msgtypes():
             _LOGGER.debug(
                 "Received encrypted telemetry message!"
@@ -761,15 +784,26 @@ class SolixBLEDevice:
             return await self._process_telemetry(parameters)
 
         # Unknown messages
-        _LOGGER.debug(f"Received unknown message of type: {cmd.hex()}")
+        _LOGGER.debug(f"Received unknown message of type: {msgtype:03x}")
         return None
 
-    async def _send_packet(self, pattern: str, cmd: str, parameters: dict, **kwargs: dict) -> None:
+    async def _send_packet(
+        self,
+        channel: int,
+        command: Container,
+        parameters: dict[str, Any],
+        **kwargs: dict,
+    ) -> None:
         """
         Build and send packet to device.
 
         Parameter values may use lambda functions which will be executed at
         this point, where variables may be passed in as keyword arguments.
+
+        :param channel: The :class:`~SolixBLE.constructs.Channel` to send on.
+        :param command: The command's fields (``fragmented``, ``encrypted``,
+            ``message`` and ``response``, or ``msgtype``).
+        :param parameters: Parameter dictionary to send.
         """
         _LOGGER.debug(f"Building payload with parameters: {parameters}")
 
@@ -786,10 +820,9 @@ class SolixBLEDevice:
         _LOGGER.debug(f"Payload bytes: {payload.hex()}")
         encrypted_payload = self._encrypt_payload(payload)
 
-        _LOGGER.debug(f"Building packet with pattern: {pattern} and cmd: {cmd}...")
         packet = Packet.build({
-            "pattern": bytes.fromhex(pattern),
-            "cmd": bytes.fromhex(cmd),
+            **command,
+            "channel": channel,
             "payload_bytes": encrypted_payload,
         })
         _LOGGER.debug(f"Built packet: {packet.hex()}")
@@ -797,35 +830,32 @@ class SolixBLEDevice:
         await self._client.write_gatt_char(self.UUID_COMMAND, packet)
         _LOGGER.debug("Packet sent!")
 
-    async def _process_negotiation(
-        self, pattern: bytes, cmd: bytes, payload: bytes,
-    ) -> None:
+    async def _process_negotiation(self, packet: Container, payload: bytes) -> None:
         """Hand a negotiation frame to the session negotiating with the device.
 
-        :param pattern: The frame's pattern.
-        :param cmd: The frame's command.
+        :param packet: The parsed frame.
         :param payload: The frame's reassembled payload.
         """
 
         if self._session is None:
             _LOGGER.warning(
                 f"Received negotiation message from '{self.name}' "
-                f"before negotiating! cmd: '{cmd.hex()}'",
+                f"before negotiating! msgtype: '{packet.msgtype:03x}'",
             )
             return
 
         # The device announced something no path handles; connect() reports it
         try:
-            await self._session.on_reply(pattern, cmd, payload)
+            await self._session.on_reply(packet, payload)
         except UnsupportedNegotiation as error:
             self._negotiation_error = error
 
     def _timezone_offset(self) -> bytes:
-        """Return the local UTC offset as int32 LE seconds west, for ``x022``."""
+        """Return the local UTC offset as int32 LE seconds west, for ``GET_AES_KEY``."""
         return _offset_seconds_west()
 
     def _posix_timezone(self) -> str:
-        """Return the local POSIX time zone string, for ``x022``."""
+        """Return the local POSIX time zone string, for ``GET_AES_KEY``."""
         return get_posix_tz() or FALLBACK_TZ
 
     def _generate_private_key(self) -> EllipticCurvePrivateKey:
@@ -836,23 +866,41 @@ class SolixBLEDevice:
         """Unix timestamp in byte form (4B)."""
         return int(time.time()).to_bytes(length=4, byteorder="little", signed=False)
 
-    async def _send_command(self, cmd: str, parameters: dict, **kwargs: dict) -> None:
+    async def _send_command(
+        self,
+        message: int | str | bytes | None = None,
+        parameters: dict[str, Any] | None = None,
+        *,
+        cmd: str | bytes | None = None,
+        **kwargs: dict,
+    ) -> None:
         """Send a command to the device.
 
         Parameter values may use lambda functions which will be executed at
         this point, where variables may be passed in as keyword arguments.
 
-        :param cmd: 2 bytes containing command type.
+        :param message: The message type (e.g. ``0x101``), sent with the
+            encrypted flag the session sets on its own frames.
         :param parameters: Parameter dictionary to send.
+        :param cmd: The older form: the 2-byte command as hex (e.g. ``"4101"``),
+            sent with its flags as written. A hex string as ``message`` is
+            read the same way.
         :raises ConnectionError: If not connected/negotiated to device.
+        :raises TypeError: If the message type or the parameters are missing.
         """
+
+        command = cmd if cmd is not None else message
+        if command is None or parameters is None:
+            msg = "A message type and parameters are required"
+            raise TypeError(msg)
 
         if not self.negotiated:
             raise ConnectionError("Not connected to device")
 
+        encrypted = self._session is not None and self._session.encrypts
         await self._send_packet(
-            pattern="03000f",
-            cmd=cmd,
+            channel=Channel.SESSION,
+            command=_as_command(command, encrypted=encrypted),
             parameters=parameters | { "fe": {
                 "key": bytes.fromhex("fe"),
                 "type": 3,
@@ -862,41 +910,55 @@ class SolixBLEDevice:
         )
 
     def _register_future(
-        self, future: asyncio.Future, pattern: bytes, cmd: bytes
+        self, future: asyncio.Future, channel: int | bytes, message: int | bytes
     ) -> None:
-        """Register a future to be triggered when the pattern and cmd bytes are received."""
+        """Register a future to be triggered when the channel and message type are received."""
 
         # If there are no futures registered for these bytes then we need to
         # create the list
-        if pattern + cmd not in self._packet_futures:
-            self._packet_futures[pattern + cmd] = [future]
+        key = self._future_key(channel, message)
+        if key not in self._packet_futures:
+            self._packet_futures[key] = [future]
 
         # Else we add our future to the futures for these bytes
         else:
-            self._packet_futures[pattern + cmd].append(future)
+            self._packet_futures[key].append(future)
 
     def _deregister_future(
-        self, future: asyncio.Future, pattern: bytes, cmd: bytes
+        self, future: asyncio.Future, channel: int | bytes, message: int | bytes
     ) -> None:
-        """Deregister a future to be triggered when the pattern and cmd bytes are received."""
+        """Deregister a future to be triggered when the channel and message type are received."""
 
         # If there are no futures registered for these bytes we do nothing
-        if pattern + cmd not in self._packet_futures:
+        key = self._future_key(channel, message)
+        if key not in self._packet_futures:
             return
 
         # If the future is not set for these bytes we do nothing
-        if future not in self._packet_futures.get(pattern + cmd):
+        if future not in self._packet_futures[key]:
             return
 
         # Otherwise remove the future from the list of futures for these bytes
-        self._packet_futures.get(pattern + cmd).remove(future)
+        self._packet_futures[key].remove(future)
 
         # If there are no futures left for these bytes then remove the key
-        if len(self._packet_futures.get(pattern + cmd)) == 0:
-            self._packet_futures.pop(pattern + cmd)
+        if len(self._packet_futures[key]) == 0:
+            self._packet_futures.pop(key)
+
+    @staticmethod
+    def _future_key(channel: int | bytes, message: int | bytes) -> tuple[int, int]:
+        """Return the channel and message type a reply future waits for.
+
+        :param channel: The channel, or the older form: the 3 byte pattern
+            (e.g 03010f).
+        :param message: The message type (e.g ``0x840``), or the older form:
+            the 2 byte command (e.g c840), whose flags don't matter.
+        :returns: The channel and the message type.
+        """
+        return _as_channel(channel), _as_command(message).msgtype
 
     async def _listen_for_packet(
-        self, pattern: bytes, cmd: bytes, timeout: int = 10
+        self, channel: int | bytes, message: int | bytes, timeout: int = 10
     ) -> bytes | None:
         """Wait for a response and return its payload bytes.
 
@@ -908,19 +970,21 @@ class SolixBLEDevice:
         packet (i.e if you listen for a regular telemetry packet that packet
         will not be used to automatically populate device attributes).
 
-        :param pattern: 3 byte pattern (e.g 03010f).
-        :param cmd: 2 byte command (e.g c402).
+        :param channel: The channel (e.g ``Channel.SESSION``), or the older
+            form: the 3 byte pattern (e.g 03010f).
+        :param message: The message type (e.g ``0x840``), or the older form:
+            the 2 byte command (e.g c840).
         :param timeout: Maximum time to wait for matching response.
         :returns: Payload bytes if response found else None.
         """
         future = asyncio.Future()
         try:
-            self._register_future(future, pattern, cmd)
+            self._register_future(future, channel, message)
             return await asyncio.wait_for(future, timeout)
         except asyncio.CancelledError:
             return None
         finally:
-            self._deregister_future(future, pattern, cmd)
+            self._deregister_future(future, channel, message)
 
     def _run_state_changed_callbacks(self) -> None:
         """Execute all registered callbacks for a state change."""
@@ -1056,7 +1120,7 @@ class SolixBLEDevice:
         except Exception:
             _LOGGER.exception("Unexpected exception in keep-alive task!")
 
-    def _disconnect_callback(self, client: BaseBleakClient) -> None:
+    def _disconnect_callback(self, client: BleakClient) -> None:
         """Callback executed by bleak when the connection is lost.
 
         This clears the negotiated values which are now invalid
@@ -1068,6 +1132,11 @@ class SolixBLEDevice:
 
         :param client: Bleak client.
         """
+
+        # The client we disconnected on purpose
+        if client is self._disposed_client:
+            _LOGGER.debug(f"Disconnected from '{self.name}'.")
+            return
 
         # Ignore disconnect callbacks from old clients
         if client is not self._client:
@@ -1088,6 +1157,7 @@ class SolixBLEDevice:
         """Dispose of current bleak client."""
         client = self._client
         self._client = None
+        self._disposed_client = client
         try:
             await client.disconnect()
         except Exception:
@@ -1109,7 +1179,7 @@ class SolixBLEDevice:
         self._fragment_buffers = {}
         self._negotiation_error = None
         self._last_packet_timestamp = None
-        self._packet_futures: dict[bytes, list[asyncio.Future]] = {}
+        self._packet_futures = {}
 
     def __str__(self) -> str:
         """Return string representation of device state.
