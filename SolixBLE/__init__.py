@@ -25,13 +25,18 @@ from .devices import (
 )
 from .factory import device_class_from_advertisement
 from .prime_device import PrimeDevice
+from .protocols import UnsupportedNegotiation
 from .states import (
     ChargingStatus,
     ChargingStatusF3800,
+    ClockFormat,
+    ClockTheme,
     DisplayTimeout,
     LightStatus,
     PortOverload,
+    PortSchedule,
     PortStatus,
+    PortTimer,
     TemperatureUnit,
 )
 from .utilities import discover_devices, set_region
@@ -47,12 +52,16 @@ __all__ = [
     "F3800",
     "ChargingStatus",
     "ChargingStatusF3800",
+    "ClockFormat",
+    "ClockTheme",
     "DisplayTimeout",
     "Generic",
     "LightStatus",
     "MagGo3in1",
     "PortOverload",
+    "PortSchedule",
     "PortStatus",
+    "PortTimer",
     "PrimeCharger160w",
     "PrimeCharger250w",
     "PrimeDevice",
@@ -65,4 +74,5 @@ __all__ = [
     "device_class_from_advertisement",
     "discover_devices",
     "set_region",
+    "UnsupportedNegotiation",
 ]
