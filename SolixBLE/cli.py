@@ -396,7 +396,7 @@ class FrameTap(SolixBLEDevice):
         before the write returns.
         """
         if self._sending is not None:
-            self._record("out", *self._sending, payload)
+            self._record_frame("out", *self._sending, payload)
             if self.manual and not PacketCommand.parse(self._sending[1]).encrypted:
                 return payload
         return super()._encrypt_payload(payload)
@@ -440,7 +440,7 @@ class FrameTap(SolixBLEDevice):
         try:
             packet = Packet.parse(raw)
         except (ConstructError, ValueError):
-            self._record("in", b"", b"", None, raw)
+            self._record_frame("in", b"", b"", None, raw)
         else:
             if not packet.fragmented:
                 self._record_received(packet, packet.payload_bytes, raw)
@@ -467,9 +467,9 @@ class FrameTap(SolixBLEDevice):
                 cleartext = self._session.decrypt(payload)
             except ValueError:
                 cleartext = None
-        self._record("in", *wire_header(packet), cleartext, raw)
+        self._record_frame("in", *wire_header(packet), cleartext, raw)
 
-    def _record(
+    def _record_frame(
         self,
         direction: str,
         pattern: bytes,
