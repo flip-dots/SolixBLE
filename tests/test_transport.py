@@ -64,6 +64,36 @@ async def test_negotiating_transport_uuids(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("write_response", "sent"),
+    [
+        pytest.param(None, None, id="bleak_default"),
+        pytest.param(False, False, id="without_response"),
+    ],
+)
+async def test_command_write_type(
+    fake_time: None,  # noqa: ARG001
+    fast_sleep: None,  # noqa: ARG001
+    fast_timeouts: None,  # noqa: ARG001
+    write_response: bool | None,  # noqa: FBT001
+    sent: bool | None,  # noqa: FBT001
+) -> None:
+    """Every write, negotiation included, uses the device's command write type."""
+    device = C300(MOCK_BLE_DEVICE)
+    device._COMMAND_WRITE_RESPONSE = write_response  # noqa: SLF001
+    async with MockDevice() as mock_bluetooth:
+        for expected, responses in NEGOTIATION_RESPONSES_SOLIX.items():
+            mock_bluetooth.expect_ordered(
+                bytes.fromhex(expected),
+                [bytes.fromhex(response) for response in responses],
+            )
+        assert await device.connect()
+        assert mock_bluetooth.write_responses
+        assert set(mock_bluetooth.write_responses) == {sent}
+        await device.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_transport_2215_uuids(
     fake_time: None,  # noqa: ARG001
     fast_sleep: None,  # noqa: ARG001

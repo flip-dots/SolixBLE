@@ -5,7 +5,7 @@
 """
 
 import asyncio
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from unittest import mock
 
 import pytest
@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 from SolixBLE.const import FALLBACK_TZ
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.prime_device import PrimeDevice
+from SolixBLE.utilities import ecdh_shared_secret
 from tests.const import PRIME_TEST_PRIVATE_KEY, SOLIX_TEST_PRIVATE_KEY
 
 
@@ -73,3 +74,24 @@ def fake_time() -> Generator[None, None, None]:
         mock.patch("SolixBLE.prime_device.region", return_value="GB"),
     ):
         yield
+
+
+@pytest.fixture
+def pin_shared_secret() -> Generator[Callable[[bytes, bytes], None], None, None]:
+    """Pin the ECDH secret a recorded device point derives to the secret logged with it.
+
+    A recorded negotiation's replies are sealed under that session's secret, which
+    no pinned client key reproduces. Points not pinned derive as usual.
+    """
+    pinned: dict[bytes, bytes] = {}
+
+    def _shared_secret(
+        private_key: EllipticCurvePrivateKey,
+        device_public_bytes: bytes,
+    ) -> bytes:
+        if device_public_bytes in pinned:
+            return pinned[device_public_bytes]
+        return ecdh_shared_secret(private_key, device_public_bytes)
+
+    with mock.patch("SolixBLE.protocols.ecdh.ecdh_shared_secret", new=_shared_secret):
+        yield pinned.__setitem__
