@@ -344,7 +344,7 @@ All payloads follow `a1 01 21`; the reply is the `0x0800` response with `<status
 | `4215`–`4217`, `4219`–`421f` | — | — | ignored (the cloud sends `421d a2 04 7a00×4`) |
 | `4218` | — | — | `a2` 8 B: two status bytes per USB-C port |
 | `4220` | `prepareSendScreensaver` | `a2 <kind: 0 JPEG / 2>` `a3 05 03 <theme id>` `a4 05 03 <crc32>` `a5 05 03 <size>` `a6 <window>` `a7 03 02 <chunk 192>` `a8 03 02 <count>` `a9 11 04 <url>` | opens the image upload |
-| `4221` | `sendScreensaverData` | `a2 03 02 <u16 index>` `a3 c1 04 <192-byte JPEG chunk>` (the last chunk shorter, unpadded) | reply `<status> a1 01 31 a2 03 02 <u16 index>`, after each window's last chunk: `00` window ack + next index, `10` done + chunk count, `11` CRC error + chunk count, `12` resend from index |
+| `4221` | `sendScreensaverData` | `a2 03 02 <u16 index>` `a3 c1 04 <192-byte JPEG chunk>`; every chunk is 192 bytes, the last zero-padded; `4220 a5` is the true size and the CRC32 covers only those bytes | reply `<status> a1 01 31 a2 03 02 <u16 index>`, after each window's last chunk: `00` window ack + next index, `10` done + chunk count, `11` CRC error + chunk count, `12` resend from index |
 | `4222` | — | `a2 02 01 <0 / 1>` | shows or hides the time and date on a custom uploaded screensaver (no effect on the preset or network themes); read back as `4202 a6` |
 | `4223` | (device identification switch) | `a2 02 01 <0 / 1>` | sets `bf` |
 
@@ -415,6 +415,8 @@ A network or custom `4205` needs a non-zero `a3` id and `a4` CRC32 and a url of 
 | 2 | image not stored, WiFi up | the device downloads the `4205` url itself; 3 follows at its first chunk, then 1 |
 | 1 | image stored and shown | — (sent at once for a stored id + CRC, and before the last chunk's `4a21` `10`) |
 | 0 | a download or update is busy, or the image is bad | — |
+
+A custom image is stored encrypted in 16-byte blocks, over each chunk's received length, so a last chunk not padded to a multiple of 16 bytes is stored cut short: the upload still ends `4311` 1 and `4a21` `10`, but the first draw fails its CRC, the image is erased, and the display falls back to a built-in theme.
 
 The display decodes only a baseline JPEG: before the scan, only `APPn`, `COM`, `DQT`, `DHT`, `SOF0` and `SOS` markers; 8-bit, 3 components, luma sampling 1×1, 2×1 or 2×2; 1–65 534 bytes. It copies 200 rows × 480 px, so only a 480 × 200 image shows correctly. An image it can't decode is erased and the display falls back to a built-in theme.
 

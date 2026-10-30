@@ -94,6 +94,9 @@ class FileTransfer:
         ``chunk``, the chunk's bytes.
     :param window: Chunks the device acknowledges at once.
     :param chunk_size: Bytes per chunk; the last chunk can be shorter.
+    :param pad_last_chunk: Zero-pad the last chunk to ``chunk_size``. The
+        announced size and count, and the caller's checksum, stay on the
+        file's own bytes.
     :param reply_timeout: Seconds to wait for each reply.
     :param retries: Times a window is sent again before giving up.
     """
@@ -104,6 +107,7 @@ class FileTransfer:
     chunk_parameters: dict[str, Any]
     window: int
     chunk_size: int
+    pad_last_chunk: bool
     reply_timeout: float
     retries: int
 
@@ -1333,11 +1337,14 @@ class SolixBLEDevice:
             ) as reply:
                 for chunk_index in range(index, end):
                     start = chunk_index * chunk_size
+                    chunk = data[start:start + chunk_size]
+                    if transfer.pad_last_chunk:
+                        chunk = chunk.ljust(chunk_size, b"\x00")
                     await self._send_command(
                         transfer.chunk_message,
                         transfer.chunk_parameters,
                         index=chunk_index,
-                        chunk=data[start:start + chunk_size],
+                        chunk=chunk,
                     )
                 try:
                     async with asyncio.timeout(transfer.reply_timeout):

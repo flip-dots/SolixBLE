@@ -626,18 +626,23 @@ def window_acks(
     return replies
 
 
-def chunk_payload(image: bytes, index: int, chunk_size: int = 192) -> str:
+def chunk_payload(
+    image: bytes, index: int, chunk_size: int = 192, *, pad: bool = True,
+) -> str:
     """
     Return a ``4221`` chunk's payload before its timestamp, as hex.
 
     The index as u16 LE in ``a2``; ``a3`` a type byte then the chunk, the last
-    one short and unpadded.
+    one zero-padded to ``chunk_size`` unless ``pad`` is off.
 
     :param image: The whole image.
     :param index: The chunk's index.
     :param chunk_size: Bytes per chunk.
+    :param pad: Zero-pad the last chunk.
     """
     chunk = image[index * chunk_size:(index + 1) * chunk_size]
+    if pad:
+        chunk = chunk.ljust(chunk_size, b"\x00")
     return (
         f"a10121a20302{struct.pack('<H', index).hex()}"
         f"a3{len(chunk) + 1:02x}04{chunk.hex()}"

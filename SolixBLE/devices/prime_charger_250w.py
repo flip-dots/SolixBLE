@@ -253,6 +253,7 @@ THEME_IMAGE_TRANSFER = FileTransfer(
     chunk_parameters=PARAMETERS_UPLOAD_CHUNK,
     window=UPLOAD_WINDOW,
     chunk_size=UPLOAD_CHUNK_SIZE,
+    pad_last_chunk=True,
     reply_timeout=UPLOAD_REPLY_TIMEOUT,
     retries=UPLOAD_RETRIES,
 )
