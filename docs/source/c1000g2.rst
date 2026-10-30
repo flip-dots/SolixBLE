@@ -7,3 +7,9 @@ C1000(X) G2
    :special-members: __init__
    :member-order: groupwise
    :no-index:
+
+.. autoclass:: SolixBLE.devices.c1000g2.DisplayLanguage
+   :members:
+   :undoc-members:
+
+.. autoclass:: SolixBLE.devices.c1000g2.DisplayPlan

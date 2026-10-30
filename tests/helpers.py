@@ -21,7 +21,12 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
     derive_private_key,
 )
 
+from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Container,
+)
+
 from SolixBLE.const import FALLBACK_TZ
+from SolixBLE.constructs import Composer, Packet, PacketCommand, PacketPattern
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.protocols import EcdhPath, Keys, NegotiatedSession
 from SolixBLE.utilities import _to_bytes
@@ -119,6 +124,9 @@ class MockDevice:
         # The GATT UUIDs the module under test subscribed to and wrote to
         self.notify_uuids: list[str | bytes] = []
         self.write_uuids: list[str | bytes] = []
+
+        # The response argument of every write, None where it was left out
+        self.write_responses: list[bool | None] = []
 
         # Every packet the module under test wrote, in order
         self.writes: list[bytes] = []
@@ -291,7 +299,7 @@ class MockDevice:
                 await asyncio.sleep(0.1)
 
     async def write_gatt_char(
-        self, char_specifier: str, data: bytes, response: bool = False
+        self, char_specifier: str, data: bytes, response: bool | None = None
     ):
         """
         Patched version of the bleak clients write_gatt_char function
@@ -301,10 +309,11 @@ class MockDevice:
 
         :param char_specifier: Not used, would be the UUID the module wants to write to.
         :param data: The data the module wants to write.
-        :param response: Not used. Bool of if the module wants a response to its write.
+        :param response: Recorded in write_responses. The ATT write type, None if left out.
         """
         _LOGGER.debug(f"Mock device has received data: '{data.hex()}'")
         self.write_uuids.append(char_specifier)
+        self.write_responses.append(response)
 
         # Find the request/response for this write
         request_response = None
@@ -458,17 +467,18 @@ class RecordingLink:
         self.sent: list[tuple[str, str, dict[str, bytes]]] = []
 
     async def _send_packet(
-        self, pattern: str, cmd: str, parameters: dict[str, Any],
+        self, channel: int, command: Container, parameters: dict[str, Any],
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         """
         Record a packet instead of sending it.
 
-        :param pattern: Pattern of the packet.
-        :param cmd: Command of the packet.
+        :param channel: Channel of the packet.
+        :param command: The command's fields.
         :param parameters: Parameters by tag, values may be lambdas taking self.
         """
-        self.sent.append((pattern, cmd, {
+        pattern = PacketPattern.build({"composer": Composer.REPLY, "channel": channel})
+        self.sent.append((pattern.hex(), PacketCommand.build(command).hex(), {
             tag: _to_bytes(data=item["value"], **kwargs | { "self": self })
             for tag, item in parameters.items()
         }))
@@ -491,3 +501,71 @@ class RecordingLink:
             int.from_bytes(bytes.fromhex(SOLIX_TEST_PRIVATE_KEY), byteorder="big"),
             SECP256R1(),
         )
+
+
+async def feed_negotiation(
+    session: NegotiatedSession, replies: list[tuple[str, str]],
+) -> None:
+    """
+    Feed a negotiation session decrypted device replies in order.
+
+    :param session: Session under test.
+    :param replies: Pairs of command and plaintext payload, both as hex.
+    """
+    for cmd, plaintext in replies:
+        await session.on_plaintext(frame_header(cmd), bytes.fromhex(plaintext))
+
+
+def build_frame(pattern: str, cmd: str, payload: bytes = b"") -> bytes:
+    """
+    Build a frame from its header bytes as written on the wire.
+
+    :param pattern: The 3-byte pattern as hex (e.g. ``03010f``).
+    :param cmd: The 2-byte command as hex (e.g. ``c402``).
+    :param payload: The payload bytes.
+    :returns: The whole frame, checksum included.
+    """
+    header = PacketPattern.parse(bytes.fromhex(pattern))
+    command = PacketCommand.parse(bytes.fromhex(cmd))
+    return Packet.build({
+        "composer": header.composer,
+        "channel": header.channel,
+        "fragmented": command.fragmented,
+        "encrypted": command.encrypted,
+        "msgtype": command.msgtype,
+        "payload_bytes": payload,
+    })
+
+
+def frame_header(cmd: str, pattern: str = "030001") -> Container:
+    """
+    Return the parsed header of a frame, as the device hands it on.
+
+    :param cmd: The 2-byte command as hex (e.g. ``4801``).
+    :param pattern: The 3-byte pattern as hex.
+    :returns: The parsed packet, with an empty payload.
+    """
+    return Packet.parse(build_frame(pattern, cmd))
+
+
+def negotiation_steps_through(
+    responses: dict[str, list[str]], stop_after: int,
+) -> list[tuple[bytes, list[bytes]]]:
+    """
+    Return a recorded negotiation's steps, up to and including one request.
+
+    Use to script a :class:`MockDevice` through a prefix of a recorded
+    negotiation (e.g. up to the clock/time zone exchange), before swapping in
+    a substitute reply for whatever request comes next.
+
+    :param responses: Maps a sent frame's bytes (as hex) to its replies
+        (as hex), in order, e.g. NEGOTIATION_RESPONSES_PRIME.
+    :param stop_after: The request's message (e.g. ``Negotiation.GET_AES_KEY``)
+        to stop after, inclusive.
+    """
+    steps = []
+    for sent, replies in responses.items():
+        steps.append((bytes.fromhex(sent), [bytes.fromhex(reply) for reply in replies]))
+        if Packet.parse(bytes.fromhex(sent)).message == stop_after:
+            break
+    return steps

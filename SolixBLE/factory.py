@@ -20,6 +20,7 @@ from .devices import (
     C800,
     C1000,
     C1000G2,
+    C2000G2,
     F3800,
     Generic,
     PrimeCharger250w,
@@ -39,6 +40,8 @@ MODELS_BY_PRODUCT_TYPE: dict[str, type[SolixBLEDevice]] = {
     "b402": PrimeCharger250w,
     "b118": C1000G2,  # A1763
     "b119": C1000G2,  # A1765, the same display-board build as the A1763
+    "b11a": C2000G2,  # A1783
+    "b11b": C2000G2,  # A1785, the same display-board build as the A1783
     "b106": F3800,  # A1790
     "b112": F3800,  # A1790P, the same command and telemetry map as the A1790
     "b103": C800,  # A1753 / A1754 / A1755 share one map
@@ -50,6 +53,8 @@ MODELS_BY_NAME: dict[str, type[SolixBLEDevice]] = {
     "SOLIX C1000 Gen 2": C1000G2,
     "SOLIX C1000 Plus": C1000G2,
     "SOLIX C1000X Gen 2": C1000G2,
+    "SOLIX C2000 Gen 2": C2000G2,
+    "SOLIX C2000X Gen 2": C2000G2,
     "Anker SOLIX C1000": C1000,
     "Anker SOLIX C300 DC": C300DC,
     "Anker SOLIX F3800": F3800,
