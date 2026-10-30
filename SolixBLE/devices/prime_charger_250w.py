@@ -4,14 +4,19 @@
 
 """
 
+import asyncio
+import zlib
 from collections.abc import Collection
 from dataclasses import asdict, dataclass
-from enum import Enum
+from enum import Enum, IntEnum
 
+from bleak.backends.device import BLEDevice
+from bleak.backends.scanner import AdvertisementData
 from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
     Container,
     FlagsEnum,
     Int8ub,
+    Int16ul,
     Int32ul,
     Padding,
     Struct,
@@ -28,8 +33,12 @@ from SolixBLE.constructs import (
     FIRMWARE_UPDATE,
     IDENTITY_NONE,
     USB_PD_IDENTITIES,
+    ParameterDict,
+    Parameters,
     WeekdayMask,
 )
+from SolixBLE.device import FileTransfer
+from SolixBLE.images import JpegLimits, check_jpeg
 from SolixBLE.prime_device import (
     CMD_CLOCK_FORMAT,
     CMD_DISPLAY_BRIGHTNESS,
@@ -49,6 +58,7 @@ from SolixBLE.states import (
     PortTimer,
 )
 from SolixBLE.usb_pd_identity import device_name, vendor_name
+from SolixBLE.utilities import _parse_guarded
 
 #: The wire index the port commands take for each port: USB C1-C4 are 0-3,
 #: and 4 switches both USB A outlets together.
@@ -70,7 +80,13 @@ CMD_PRIORITY_PORTS = 0x20C
 CMD_KNOB_DIRECTION = 0x20E
 CMD_SCREENSAVER_WINDOW = 0x213
 CMD_COMPATIBILITY_MODE = 0x214
+CMD_UPLOAD_PREPARE = 0x220
+CMD_UPLOAD_CHUNK = 0x221
+CMD_TIME_DISPLAY = 0x222
 CMD_DEVICE_IDENTIFICATION = 0x223
+
+#: The push that reports whether the charger has a theme's image (``4311``).
+MSG_THEME_IMAGE_STATE = 0x311
 
 #: The screensaver window (snapshot ``b9``, command ``4213``): the hour and
 #: minute it opens and closes, then the days it applies.
@@ -112,6 +128,134 @@ DISPLAY_THEME = Struct(
 
 #: The themes :meth:`PrimeCharger250w.set_display_theme` can set.
 BUILT_IN_THEMES = (ClockTheme.THEME_1, ClockTheme.THEME_2, ClockTheme.THEME_3)
+
+#: The images the clock display decodes: baseline JPEG, 480x200, 4:4:4,
+#: 4:2:2 or 4:2:0.
+THEME_IMAGE_LIMITS = JpegLimits(
+    width=480,
+    height=200,
+    max_size=65534,
+    components=3,
+    luma_sampling=frozenset({(1, 1), (2, 1), (2, 2)}),
+)
+
+#: The url the app sends when the charger isn't to download the image.
+URL_PLACEHOLDER = b"1234567890123456"
+
+#: Bounds of a theme's url in bytes: the charger ignores a shorter one, and a
+#: parameter holds no more.
+MIN_URL_LENGTH = 16
+MAX_URL_LENGTH = 254
+
+#: Text colour of the clock on an image theme, as the app sends it.
+DEFAULT_TEXT_COLOR = 0xFFFFFFFF
+
+#: How a theme's image is sent: chunks per acknowledged window, bytes per
+#: chunk, and the image kind for a catalog or a custom theme.
+UPLOAD_WINDOW = 10
+UPLOAD_CHUNK_SIZE = 192
+UPLOAD_KIND_CATALOG = 0
+UPLOAD_KIND_CUSTOM = 2
+
+#: Seconds to wait for the charger's answer to a theme, and for each step of
+#: its own download of the image.
+THEME_REPLY_TIMEOUT = 5
+THEME_FETCH_TIMEOUT = 30
+
+#: Seconds to wait for each reply while sending an image, and the times a
+#: window of chunks is sent again before giving up.
+UPLOAD_REPLY_TIMEOUT = 5
+UPLOAD_RETRIES = 3
+
+PARAMETERS_DISPLAY_THEME = {
+    "a1": {
+        "value": "21",
+    },
+    "a2": {
+        "type": 1,
+        "value": lambda display: display,
+    },
+    "a3": {
+        "type": 3,
+        "value": lambda theme_id: Int32ul.build(theme_id),
+    },
+    "a4": {
+        "type": 3,
+        "value": lambda crc: Int32ul.build(crc),
+    },
+    "a5": {
+        "type": 3,
+        "value": Int32ul.build(DEFAULT_TEXT_COLOR),
+    },
+    "a6": {
+        "type": 4,
+        "value": lambda url: url,
+    },
+}
+
+PARAMETERS_UPLOAD_PREPARE = {
+    "a1": {
+        "value": "21",
+    },
+    "a2": {
+        "type": 1,
+        "value": lambda kind: Int8ub.build(kind),
+    },
+    "a3": {
+        "type": 3,
+        "value": lambda theme_id: Int32ul.build(theme_id),
+    },
+    "a4": {
+        "type": 3,
+        "value": lambda crc: Int32ul.build(crc),
+    },
+    "a5": {
+        "type": 3,
+        "value": lambda size: Int32ul.build(size),
+    },
+    "a6": {
+        "type": 1,
+        "value": Int8ub.build(UPLOAD_WINDOW),
+    },
+    "a7": {
+        "type": 2,
+        "value": Int16ul.build(UPLOAD_CHUNK_SIZE),
+    },
+    "a8": {
+        "type": 2,
+        "value": lambda count: Int16ul.build(count),
+    },
+    "a9": {
+        "type": 4,
+        "value": URL_PLACEHOLDER,
+    },
+}
+
+PARAMETERS_UPLOAD_CHUNK = {
+    "a1": {
+        "value": "21",
+    },
+    "a2": {
+        "type": 2,
+        "value": lambda index: Int16ul.build(index),
+    },
+    "a3": {
+        "type": 4,
+        "value": lambda chunk: chunk,
+    },
+}
+
+#: How a theme's image is sent (``4220``, then ``4221`` per chunk).
+THEME_IMAGE_TRANSFER = FileTransfer(
+    prepare_message=CMD_UPLOAD_PREPARE,
+    prepare_parameters=PARAMETERS_UPLOAD_PREPARE,
+    chunk_message=CMD_UPLOAD_CHUNK,
+    chunk_parameters=PARAMETERS_UPLOAD_CHUNK,
+    window=UPLOAD_WINDOW,
+    chunk_size=UPLOAD_CHUNK_SIZE,
+    reply_timeout=UPLOAD_REPLY_TIMEOUT,
+    retries=UPLOAD_RETRIES,
+)
 
 #: Highest display brightness, in percent.
 MAX_DISPLAY_BRIGHTNESS = 100
@@ -192,6 +336,25 @@ class CatalogTheme(Enum):
     RHYTHMIC_HUE = 496957652
 
 
+class ThemeImageState(IntEnum):
+    """Whether the charger has a theme's image, as its ``4311`` push reports."""
+
+    #: The charger can't store the image now (busy, or the image is bad).
+    FAILED = 0
+
+    #: The image is stored and the theme shows.
+    STORED = 1
+
+    #: The charger is online and downloads the image from the theme's url.
+    FETCHING = 2
+
+    #: The first part of the downloaded image arrived.
+    FETCH_STARTED = 3
+
+    #: The charger is offline and needs the image sent over Bluetooth.
+    NEEDS_UPLOAD = 4
+
+
 class KnobDirection(Enum):
     """The turning direction of the charger's knob."""
 
@@ -223,6 +386,48 @@ class ScreensaverWindow:
     weekdays: frozenset[int]
 
 
+def _push_value(push: ParameterDict, key: str) -> bytes:
+    """Return a push tag's value bytes, or empty bytes if absent.
+
+    :param push: The parsed push.
+    :param key: The tag (e.g ``"a2"``).
+    """
+    return push[key].value or b"" if key in push else b""
+
+
+async def _theme_state(states: asyncio.Queue[bytes], theme_id: int) -> int:
+    """Wait for the next image state the charger pushes for a theme.
+
+    Pushes for other themes are skipped.
+
+    :param states: The theme image state pushes.
+    :param theme_id: The theme's ID.
+    :returns: The state, a :class:`ThemeImageState` value.
+    """
+    while True:
+        push = Parameters.parse(await states.get())
+        pushed_id = _parse_guarded(_push_value(push, "a2"), Int32ul)
+        state = _parse_guarded(_push_value(push, "a3"), Int8ub)
+        if pushed_id == theme_id and state is not None:
+            return int(state)
+
+
+async def _theme_stored(states: asyncio.Queue[bytes], theme_id: int) -> None:
+    """Wait until the charger reports a theme's image stored.
+
+    :param states: The theme image state pushes.
+    :param theme_id: The theme's ID.
+    :raises ValueError: If the charger reports it can't store the image.
+    """
+    while True:
+        state = await _theme_state(states, theme_id)
+        if state == ThemeImageState.STORED:
+            return
+        if state == ThemeImageState.FAILED:
+            msg = "The charger could not store the theme image"
+            raise ValueError(msg)
+
+
 class PrimeCharger250w(PrimeDevice):
     """
     Anker Prime Charger (250W) model.
@@ -241,6 +446,23 @@ class PrimeCharger250w(PrimeDevice):
     _SNAPSHOT_COMMANDS = (0xA00,)
 
     _KEEP_ALIVE_INTERVAL: int | None = KEEP_ALIVE_INTERVAL
+
+    def __init__(
+        self,
+        ble_device: BLEDevice,
+        advertisement: AdvertisementData | None = None,
+        client_token: str | None = None,
+    ) -> None:
+        """Initialise device object. Does not connect automatically.
+
+        :param ble_device: The bleak device to wrap.
+        :param advertisement: The device's scan result, if available.
+        :param client_token: Sent in the client registration; keep it stable
+            across runs to avoid a repeat button press.
+        """
+        super().__init__(ble_device, advertisement, client_token)
+        self._theme_lock = asyncio.Lock()
+        self._theme_states: asyncio.Queue[bytes] | None = None
 
     @property
     def serial_number(self) -> str:
@@ -1283,6 +1505,246 @@ class PrimeCharger250w(PrimeDevice):
             CMD_DISPLAY,
             DISPLAY.build({"on": clock_display, "theme": theme}),
         )
+
+    async def set_display_catalog_theme(
+        self,
+        theme: CatalogTheme,
+        image: bytes,
+        url: str | None = None,
+    ) -> None:
+        """Show a theme from Anker's online catalog and turn the clock display on.
+
+        .. note::
+           :collapsible: closed
+
+           The charger is sent the theme's ID and the CRC-32 of its image. A
+           charger that already stores that image shows it at once. One that
+           doesn't and is offline is sent the image over Bluetooth in
+           192-byte chunks, which takes a while for a large image. One that
+           is online downloads the image from ``url`` itself; without a
+           ``url`` it would try to download a placeholder, so that raises.
+
+        :param theme: The catalog theme.
+        :param image: The theme's image, a baseline JPEG of 480x200 pixels
+            and at most 65534 bytes, as the catalog serves it.
+        :param url: Where an online charger can download the image, at least
+            16 characters long.
+        :raises ValueError: If the theme is unknown, the image or url isn't
+            usable, or the charger refuses the theme or the image.
+        :raises TimeoutError: If the charger stops replying.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        if theme is CatalogTheme.UNKNOWN:
+            msg = "Cannot set the UNKNOWN catalog theme"
+            raise ValueError(msg)
+        await self._set_image_theme(
+            display=ClockTheme.CATALOG,
+            theme_id=theme.value,
+            image=image,
+            url=url,
+            kind=UPLOAD_KIND_CATALOG,
+        )
+
+    async def set_display_custom_theme(
+        self,
+        image: bytes,
+        url: str | None = None,
+    ) -> None:
+        """Show your own image as the clock theme and turn the clock display on.
+
+        .. note::
+           :collapsible: closed
+
+           The theme's ID is the CRC-32 of the image. A charger that already
+           stores the image shows it at once. One that doesn't and is offline
+           is sent the image over Bluetooth in 192-byte chunks, which takes a
+           while for a large image. One that is online downloads the image
+           from ``url`` itself; without a ``url`` it would try to download a
+           placeholder, so that raises.
+
+        :param image: The image, a baseline JPEG of 480x200 pixels and at most
+            65534 bytes, with 4:4:4, 4:2:2 or 4:2:0 colour sampling.
+        :param url: Where an online charger can download the image, at least
+            16 characters long.
+        :raises ValueError: If the image or url isn't usable, or the charger
+            refuses the theme or the image.
+        :raises TimeoutError: If the charger stops replying.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._set_image_theme(
+            display=ClockTheme.CUSTOM,
+            theme_id=zlib.crc32(image),
+            image=image,
+            url=url,
+            kind=UPLOAD_KIND_CUSTOM,
+        )
+
+    async def turn_time_display_on(self) -> None:
+        """Show the time and date on a custom theme.
+
+        .. note::
+           :collapsible: closed
+
+           This shows only on a theme set with
+           :meth:`set_display_custom_theme`; the built-in and catalog themes
+           look the same either way. The charger remembers the setting for
+           the next custom theme.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_setting(CMD_TIME_DISPLAY, 1)
+
+    async def turn_time_display_off(self) -> None:
+        """Hide the time and date on a custom theme.
+
+        .. note::
+           :collapsible: closed
+
+           This shows only on a theme set with
+           :meth:`set_display_custom_theme`; the built-in and catalog themes
+           look the same either way. The charger remembers the setting for
+           the next custom theme.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_setting(CMD_TIME_DISPLAY, 0)
+
+    async def _set_image_theme(
+        self,
+        *,
+        display: ClockTheme,
+        theme_id: int,
+        image: bytes,
+        url: str | None,
+        kind: int,
+    ) -> None:
+        """Show a theme backed by an image, sending the image if asked for it.
+
+        :param display: :attr:`ClockTheme.CATALOG` or :attr:`ClockTheme.CUSTOM`.
+        :param theme_id: The theme's ID.
+        :param image: The theme's JPEG image.
+        :param url: Where an online charger can download the image, or None.
+        :param kind: The image kind the upload announces.
+        :raises ValueError: If the image or url isn't usable, or the charger
+            refuses the theme or the image.
+        :raises TimeoutError: If the charger stops replying.
+        :raises ConnectionError: If not connected to device.
+        """
+        check_jpeg(image, THEME_IMAGE_LIMITS)
+        crc = zlib.crc32(image)
+        if crc == 0:
+            msg = "The charger ignores an image with a checksum of 0"
+            raise ValueError(msg)
+        url_bytes = URL_PLACEHOLDER if url is None else url.encode()
+        if not MIN_URL_LENGTH <= len(url_bytes) <= MAX_URL_LENGTH:
+            msg = f"The url must be {MIN_URL_LENGTH} to {MAX_URL_LENGTH} bytes"
+            raise ValueError(msg)
+
+        async with self._theme_lock:
+            states: asyncio.Queue[bytes] = asyncio.Queue()
+            self._theme_states = states
+            try:
+                async with asyncio.timeout(THEME_REPLY_TIMEOUT):
+                    await self._send_and_confirm(
+                        CMD_DISPLAY,
+                        PARAMETERS_DISPLAY_THEME,
+                        display=DISPLAY.build({"on": True, "theme": display.value}),
+                        theme_id=theme_id,
+                        crc=crc,
+                        url=url_bytes,
+                    )
+                async with asyncio.timeout(THEME_REPLY_TIMEOUT):
+                    state = await _theme_state(states, theme_id)
+                if state == ThemeImageState.NEEDS_UPLOAD:
+                    await self._upload_theme_image(
+                        states,
+                        theme_id=theme_id,
+                        crc=crc,
+                        image=image,
+                        kind=kind,
+                    )
+                    return
+                if url is None and state in (
+                    ThemeImageState.FETCHING,
+                    ThemeImageState.FETCH_STARTED,
+                ):
+                    msg = (
+                        "The charger is online and would fetch the image; pass its url"
+                    )
+                    raise ValueError(msg)
+                while state != ThemeImageState.STORED:
+                    if state == ThemeImageState.FAILED:
+                        msg = "The charger could not store the theme image"
+                        raise ValueError(msg)
+                    async with asyncio.timeout(THEME_FETCH_TIMEOUT):
+                        state = await _theme_state(states, theme_id)
+            finally:
+                self._theme_states = None
+
+    async def _upload_theme_image(
+        self,
+        states: asyncio.Queue[bytes],
+        *,
+        theme_id: int,
+        crc: int,
+        image: bytes,
+        kind: int,
+    ) -> None:
+        """Send a theme's image until the charger reports it stored.
+
+        The charger reports the image stored before it answers the last
+        chunk, and may not answer it at all, so either ends the upload.
+
+        :param states: The theme image state pushes.
+        :param theme_id: The theme's ID.
+        :param crc: CRC-32 of the image.
+        :param image: The image.
+        :param kind: The image kind the upload announces.
+        :raises ValueError: If the charger rejects the image.
+        :raises TimeoutError: If the charger stops replying.
+        :raises ConnectionError: If not connected to device.
+        """
+        upload = asyncio.create_task(
+            self._upload_file(
+                image,
+                THEME_IMAGE_TRANSFER,
+                kind=kind,
+                theme_id=theme_id,
+                crc=crc,
+            ),
+        )
+        stored = asyncio.create_task(_theme_stored(states, theme_id))
+        tasks = {upload, stored}
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for task in done:
+            task.result()
+
+    async def _process_session(
+        self,
+        msgtype: int,
+        payload: bytes,
+        *,
+        encrypted: bool,
+    ) -> None:
+        """Pass a theme image state push to the theme call waiting for it.
+
+        :param msgtype: The packet's message type.
+        :param payload: The plain-text payload.
+        :param encrypted: Whether the packet arrived encrypted.
+        """
+        if msgtype == MSG_THEME_IMAGE_STATE and self._theme_states is not None:
+            self._theme_states.put_nowait(payload)
+            return
+        await super()._process_session(msgtype, payload, encrypted=encrypted)
 
     async def set_display_brightness(self, brightness: int) -> None:
         """Set the brightness of the display.

@@ -344,7 +344,7 @@ All payloads follow `a1 01 21`; the reply is the `0x0800` response with `<status
 | `4215`–`4217`, `4219`–`421f` | — | — | ignored (the cloud sends `421d a2 04 7a00×4`) |
 | `4218` | — | — | `a2` 8 B: two status bytes per USB-C port |
 | `4220` | `prepareSendScreensaver` | `a2 <kind: 0 JPEG / 2>` `a3 05 03 <theme id>` `a4 05 03 <crc32>` `a5 05 03 <size>` `a6 <window>` `a7 03 02 <chunk 192>` `a8 03 02 <count>` `a9 11 04 <url>` | opens the image upload |
-| `4221` | `sendScreensaverData` | `a2 <u16 index> a3 <JPEG chunk>` | status `00` window ack, `10` done, `11` CRC error, `12` resend from index |
+| `4221` | `sendScreensaverData` | `a2 03 02 <u16 index>` `a3 c1 04 <192-byte JPEG chunk>` (the last chunk shorter, unpadded) | reply `<status> a1 01 31 a2 03 02 <u16 index>`, after each window's last chunk: `00` window ack + next index, `10` done + chunk count, `11` CRC error + chunk count, `12` resend from index |
 | `4222` | — | `a2 02 01 <0 / 1>` | shows or hides the time and date on a custom uploaded screensaver (no effect on the preset or network themes); read back as `4202 a6` |
 | `4223` | (device identification switch) | `a2 02 01 <0 / 1>` | sets `bf` |
 
@@ -391,6 +391,7 @@ All payloads follow `a1 01 21`; the reply is the `0x0800` response with `<status
 | `4308` | after `4208` | the schedule record |
 | `4309` / `430a` / `430b` / `4310` | a setting changed on the unit | screen reports: `a1 01 31 a2 02 01 <value> [a3 05 04 <field>] fe` for `b0` / `b3` / `af[0]` / `b4` |
 | `430d` / `430f` | mode change | charging mode / designated ports |
+| `4311` | after a network or custom `4205`, and when the image is stored | theme image state: `a1 01 31 a2 05 04 <theme id u32> a3 02 01 <state> a4 02 01 <03 network / 05 custom>` (Themes, below) |
 
 Sending a `43xx` back is acked (`4b0a`) but not applied; the setters are the `42xx`. A cloud-bound unit's pushes carry `a1 64` / `44` (the cloud lanes) instead of `31`.
 
@@ -405,6 +406,17 @@ The A2345 also pushes `0312`, MQTT only: its `a1 32` routes to `state_info`, nev
 | preset | `a2` `80` / `81` / `82` (Theme 1 / 2 / 3), `a6` the app's asset path | built in |
 | network | `a2` `83`, `a3` theme id, `a4` image CRC32 | `4205`, then `4220` and `4221` × count; the device can also fetch the url itself |
 | custom | `a2` `85` | `4205`, `4220`, then `4221` × count (192-byte chunks, raw JPEG) |
+
+A network or custom `4205` needs a non-zero `a3` id and `a4` CRC32 and a url of at least 16 characters; the device acks it, then pushes `4311` for the theme id:
+
+| `4311` state | meaning | next |
+|---|---|---|
+| 4 | image not stored, WiFi down | the client sends it: `4220` (`a2` 0 network, 2 custom), then `4221` × count |
+| 2 | image not stored, WiFi up | the device downloads the `4205` url itself; 3 follows at its first chunk, then 1 |
+| 1 | image stored and shown | — (sent at once for a stored id + CRC, and before the last chunk's `4a21` `10`) |
+| 0 | a download or update is busy, or the image is bad | — |
+
+The display decodes only a baseline JPEG: before the scan, only `APPn`, `COM`, `DQT`, `DHT`, `SOF0` and `SOS` markers; 8-bit, 3 components, luma sampling 1×1, 2×1 or 2×2; 1–65 534 bytes. It copies 200 rows × 480 px, so only a 480 × 200 image shows correctly. An image it can't decode is erased and the display falls back to a built-in theme.
 
 Network theme ids: Celestial 948897111, Robotic 236632206, Lunar 938963984, Galactic 819158638, Meteorite 95294588, Floral Waltz 130254227, Impressionist Bloom 347235639, Sweet Treats 172033515, Rhythmic Hue 496957652 (image CRC32 `f9abd0b5`).
 

@@ -33,13 +33,16 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
     If,
     Int8ub,
     Int8ul,
+    Int16ub,
     Int16ul,
     Int32ul,
     Nibble,
     Optional,
     Padding,
+    PrefixedArray,
     RawCopy,
     Rebuild,
+    RepeatUntil,
     Struct,
     this,
 )
@@ -791,4 +794,99 @@ Usage:
         ids = DEVICE_IDENTITIES.parse(be_value)
         name = device_name(ids.usb_c2.device_class, ids.usb_c2.code)
 
+"""
+
+
+class UploadStatus(IntEnum):
+    """Status of a device's reply to a window of file transfer chunks."""
+
+    #: The window arrived; the reply's index is the next chunk to send.
+    WINDOW = 0x00
+
+    #: The last chunk arrived and the file's checksum matches.
+    DONE = 0x10
+
+    #: The last chunk arrived but the file's checksum doesn't match.
+    CRC_MISMATCH = 0x11
+
+    #: A chunk arrived out of order; the reply's index is the one to resend from.
+    RESEND = 0x12
+
+
+UPLOAD_ACK = Struct(
+    "index" / Int16ul,
+)
+"""
+The chunk index a file transfer reply carries in ``a2``: the next chunk to
+send after a :attr:`UploadStatus.WINDOW`, the chunk to resend from after a
+:attr:`UploadStatus.RESEND`, and the chunk count after the last chunk.
+"""
+
+#: JPEG markers a baseline image carries before its scan.
+JPEG_SOF0 = 0xC0
+JPEG_DHT = 0xC4
+JPEG_SOS = 0xDA
+JPEG_DQT = 0xDB
+JPEG_APP0 = 0xE0
+JPEG_APP15 = 0xEF
+JPEG_COM = 0xFE
+
+#: The markers :data:`JPEG_HEADER` reads up to the scan.
+JPEG_HEADER_MARKERS = frozenset(
+    {JPEG_SOF0, JPEG_DHT, JPEG_SOS, JPEG_DQT, JPEG_COM}
+    | set(range(JPEG_APP0, JPEG_APP15 + 1)),
+)
+
+JPEG_SEGMENT = Struct(
+    Const(b"\xff"),
+    "marker" / Int8ub,
+    "segment" / If(
+        lambda this: this.marker in JPEG_HEADER_MARKERS,
+        Struct(
+            "length" / Int16ub,
+            "data" / Bytes(this.length - 2),
+        ),
+    ),
+)
+"""
+A JPEG marker segment: ``ff``, the marker, then for a header marker the
+big-endian length (which counts itself) and the segment's data. Any other
+marker (a restart marker carries no length) is read alone.
+"""
+
+JPEG_HEADER = Struct(
+    Const(b"\xff\xd8"),
+    "segments" / RepeatUntil(
+        lambda segment, _segments, _context: (
+            segment.marker == JPEG_SOS or segment.marker not in JPEG_HEADER_MARKERS
+        ),
+        JPEG_SEGMENT,
+    ),
+)
+"""
+A JPEG image's header: the start-of-image marker, then its marker segments up
+to the scan (``SOS``). Parsing stops early at the first marker a baseline
+header doesn't carry, which is then the last segment.
+"""
+
+JPEG_FRAME = Struct(
+    "precision" / Int8ub,
+    "height" / Int16ub,
+    "width" / Int16ub,
+    "components" / PrefixedArray(
+        Int8ub,
+        Struct(
+            "id" / Int8ub,
+            "sampling" / BitStruct(
+                "horizontal" / Nibble,
+                "vertical" / Nibble,
+            ),
+            "table" / Int8ub,
+        ),
+    ),
+)
+"""
+The data of a JPEG ``SOF0`` segment: sample precision in bits, the image's
+height and width in pixels, then each component's id, sampling factors and
+quantization table. The first component is luma.
 """

@@ -8,8 +8,11 @@ import asyncio
 import copy
 import inspect
 import logging
+import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from typing import Any
@@ -30,6 +33,8 @@ from SolixBLE.advertisement import (
     capability_from_advertisement,
 )
 from SolixBLE.constructs import (
+    RESPONSE_BIT,
+    UPLOAD_ACK,
     Channel,
     FragmentedPayload,
     Packet,
@@ -37,6 +42,7 @@ from SolixBLE.constructs import (
     PacketPattern,
     ParameterDict,
     Parameters,
+    UploadStatus,
 )
 from SolixBLE.protocols import (
     Announcement,
@@ -74,6 +80,32 @@ UUID_STRING = "b2dc0b17-b75d-4abf-ba6e-ec7c997c23e7"
 
 #: Message type handled as telemetry by default (``0300`` / ``4300``)
 TELEMETRY_MSGTYPE = 0x300
+
+
+@dataclass(frozen=True)
+class FileTransfer:
+    """How a device takes a file in acknowledged windows of chunks.
+
+    :param prepare_message: The message type that announces the file.
+    :param prepare_parameters: Its parameters. Lambdas get ``size`` (bytes)
+        and ``count`` (chunks), and the caller's values.
+    :param chunk_message: The message type that carries one chunk.
+    :param chunk_parameters: Its parameters. Lambdas get ``index`` and
+        ``chunk``, the chunk's bytes.
+    :param window: Chunks the device acknowledges at once.
+    :param chunk_size: Bytes per chunk; the last chunk can be shorter.
+    :param reply_timeout: Seconds to wait for each reply.
+    :param retries: Times a window is sent again before giving up.
+    """
+
+    prepare_message: int
+    prepare_parameters: dict[str, Any]
+    chunk_message: int
+    chunk_parameters: dict[str, Any]
+    window: int
+    chunk_size: int
+    reply_timeout: float
+    retries: int
 
 
 def _as_channel(pattern: int | str | bytes) -> int:
@@ -1209,6 +1241,137 @@ class SolixBLEDevice:
             return None
         finally:
             self._deregister_future(future, channel, message)
+
+    @contextmanager
+    def _reply_future(
+        self, channel: int, message: int,
+    ) -> Iterator[asyncio.Future[bytes]]:
+        """Wait for a message while the context is open.
+
+        Open it before writing the frame the message answers: a reply that
+        arrives before its future is registered is dropped.
+
+        :param channel: The :class:`~SolixBLE.constructs.Channel` to wait on.
+        :param message: The message type to wait for (e.g ``0xa21``).
+        :returns: A future that gets the first matching payload.
+        """
+        future: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
+        self._register_future(future, channel, message)
+        try:
+            yield future
+        finally:
+            self._deregister_future(future, channel, message)
+
+    async def _send_and_confirm(
+        self,
+        message: int,
+        parameters: dict[str, Any],
+        **kwargs: object,
+    ) -> ParameterDict:
+        """Send a command and wait for its reply to report success.
+
+        Wrap the call in :func:`asyncio.timeout` to bound the wait.
+
+        :param message: The message type to send.
+        :param parameters: Parameter dictionary to send.
+        :returns: The reply's parameters.
+        :raises ValueError: If the reply's status isn't 0.
+        :raises ConnectionError: If not connected to device.
+        """
+        with self._reply_future(Channel.SESSION, message | RESPONSE_BIT) as reply:
+            await self._send_command(message, parameters, cmd=None, **kwargs)
+            payload = await reply
+
+        result = Parameters.parse(payload)
+        if result.status != 0:
+            msg = f"The device rejected {message:03x} with status {result.status}"
+            raise ValueError(msg)
+        return result
+
+    async def _upload_file(
+        self, data: bytes, transfer: FileTransfer, **kwargs: object,
+    ) -> None:
+        """Send a file to the device in acknowledged windows of chunks.
+
+        .. note::
+           :collapsible: closed
+
+           The prepare message announces the file, and its reply must report
+           success. Chunks are then sent from index 0 up to the next multiple
+           of the window. The device answers the last chunk of each window
+           with an :class:`~SolixBLE.constructs.UploadStatus` and an index
+           (:data:`~SolixBLE.constructs.UPLOAD_ACK`): ``WINDOW`` continues
+           from the index, ``RESEND`` resends from it, and ``DONE`` ends the
+           transfer. A window with no reply is sent again; a ``RESEND`` counts
+           as a retry too.
+
+        :param data: The file.
+        :param transfer: How the device takes files.
+        :param kwargs: Values for the prepare parameters' lambdas, which also
+            get ``size`` (bytes) and ``count`` (chunks).
+        :raises ValueError: If the device rejects the file or its checksum.
+        :raises TimeoutError: If the device stops replying.
+        :raises ConnectionError: If not connected to device.
+        """
+        chunk_size = transfer.chunk_size
+        count = math.ceil(len(data) / chunk_size)
+        async with asyncio.timeout(transfer.reply_timeout):
+            await self._send_and_confirm(
+                transfer.prepare_message,
+                transfer.prepare_parameters,
+                size=len(data),
+                count=count,
+                **kwargs,
+            )
+
+        index = 0
+        attempts = 0
+        while True:
+            end = min((index // transfer.window + 1) * transfer.window, count)
+            with self._reply_future(
+                Channel.SESSION, transfer.chunk_message | RESPONSE_BIT,
+            ) as reply:
+                for chunk_index in range(index, end):
+                    start = chunk_index * chunk_size
+                    await self._send_command(
+                        transfer.chunk_message,
+                        transfer.chunk_parameters,
+                        index=chunk_index,
+                        chunk=data[start:start + chunk_size],
+                    )
+                try:
+                    async with asyncio.timeout(transfer.reply_timeout):
+                        payload = await reply
+                except TimeoutError:
+                    attempts += 1
+                    if attempts > transfer.retries:
+                        raise
+                    continue
+
+            ack = Parameters.parse(payload)
+            if ack.status == UploadStatus.DONE:
+                return
+            if ack.status == UploadStatus.CRC_MISMATCH:
+                msg = "The device rejected the file's checksum"
+                raise ValueError(msg)
+
+            position = _parse_guarded(
+                ack["a2"].value or b"" if "a2" in ack else b"", UPLOAD_ACK,
+            )
+            if position is None or ack.status not in (
+                UploadStatus.WINDOW, UploadStatus.RESEND,
+            ):
+                msg = f"Unexpected upload status {ack.status} from the device"
+                raise ValueError(msg)
+
+            if ack.status == UploadStatus.RESEND:
+                attempts += 1
+                if attempts > transfer.retries:
+                    msg = f"The device kept asking to resend chunk {position.index}"
+                    raise TimeoutError(msg)
+            else:
+                attempts = 0
+            index = position.index
 
     def _run_state_changed_callbacks(self) -> None:
         """Execute all registered callbacks for a state change."""

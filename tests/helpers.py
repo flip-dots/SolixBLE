@@ -6,6 +6,8 @@
 
 import asyncio
 import logging
+import struct
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Self, Union
@@ -546,6 +548,206 @@ def frame_header(cmd: str, pattern: str = "030001") -> Container:
     :returns: The parsed packet, with an empty payload.
     """
     return Packet.parse(build_frame(pattern, cmd))
+
+
+def session_reply(device: SolixBLEDevice, cmd: str, plaintext: str) -> bytes:
+    """
+    Build a session frame from the device, sealed under its negotiated session.
+
+    :param device: The negotiated device under test.
+    :param cmd: The 2-byte command as hex (e.g. ``4a05``).
+    :param plaintext: The payload as hex.
+    :returns: The whole frame, as the device notifies it.
+    """
+    sealed = device._encrypt_payload(bytes.fromhex(plaintext))  # noqa: SLF001
+    return build_frame("03010f", cmd, sealed)
+
+
+def sent_payloads(device: SolixBLEDevice, writes: list[bytes]) -> list[tuple[int, str]]:
+    """
+    Return the message type and the decrypted payload of each written frame.
+
+    :param device: The negotiated device that wrote the frames.
+    :param writes: The frames, e.g. ``MockDevice.writes``.
+    :returns: Pairs of message type and payload as hex.
+    """
+    packets = [Packet.parse(write) for write in writes]
+    return [
+        (packet.msgtype, device._decrypt_payload(packet.payload_bytes).hex())  # noqa: SLF001
+        for packet in packets
+    ]
+
+
+async def connect_recorded(
+    device: SolixBLEDevice,
+    mock_bluetooth: MockDevice,
+    responses: dict[str, list[str]],
+) -> None:
+    """
+    Connect a device through a recorded negotiation on the mock device.
+
+    :param device: Device under test.
+    :param mock_bluetooth: The active mock device.
+    :param responses: Maps each sent frame (as hex) to its replies (as hex),
+        e.g. NEGOTIATION_RESPONSES_PRIME.
+    """
+    for expected, replies in responses.items():
+        mock_bluetooth.expect_ordered(
+            bytes.fromhex(expected), [bytes.fromhex(reply) for reply in replies],
+        )
+    assert await device.connect()
+
+
+def window_acks(
+    device: SolixBLEDevice, count: int, final: list[bytes], window: int = 10,
+) -> list[list[bytes]]:
+    """
+    Return the device's replies to each chunk of an upload that goes through.
+
+    A ``4a21`` status 00 with the next index after each full window, and
+    ``final`` after the last chunk.
+
+    :param device: The negotiated device under test.
+    :param count: Number of chunks.
+    :param final: The replies to the last chunk.
+    :param window: Chunks per window.
+    """
+    replies: list[list[bytes]] = []
+    for index in range(count):
+        if index == count - 1:
+            replies.append(final)
+        elif (index + 1) % window == 0:
+            next_index = struct.pack("<H", index + 1).hex()
+            replies.append(
+                [session_reply(device, "4a21", f"00a10131a20302{next_index}")],
+            )
+        else:
+            replies.append([])
+    return replies
+
+
+def chunk_payload(image: bytes, index: int, chunk_size: int = 192) -> str:
+    """
+    Return a ``4221`` chunk's payload before its timestamp, as hex.
+
+    The index as u16 LE in ``a2``; ``a3`` a type byte then the chunk, the last
+    one short and unpadded.
+
+    :param image: The whole image.
+    :param index: The chunk's index.
+    :param chunk_size: Bytes per chunk.
+    """
+    chunk = image[index * chunk_size:(index + 1) * chunk_size]
+    return (
+        f"a10121a20302{struct.pack('<H', index).hex()}"
+        f"a3{len(chunk) + 1:02x}04{chunk.hex()}"
+    )
+
+
+def jpeg_segment(marker: int, body: bytes) -> bytes:
+    """
+    Build a JPEG marker segment: ``ff``, the marker, the length, the body.
+
+    :param marker: The marker byte (e.g. ``0xdb``).
+    :param body: The segment's body.
+    """
+    return struct.pack(">BBH", 0xFF, marker, len(body) + 2) + body
+
+
+def jpeg_scan(header: bytes, size: int = 0) -> bytes:
+    """
+    Complete a JPEG header with scan bytes free of ``ff`` and an EOI.
+
+    :param header: The bytes from SOI through the scan header.
+    :param size: The whole image's length, or 0 for 64 scan bytes.
+    """
+    length = size - len(header) - 2 if size else 64
+    return header + bytes(index % 0xFF for index in range(length)) + b"\xff\xd9"
+
+
+def jpeg_image(  # noqa: PLR0913
+    *,
+    width: int = 480,
+    height: int = 200,
+    precision: int = 8,
+    components: int = 3,
+    luma_sampling: int = 0x22,
+    frame_marker: int = 0xC0,
+    before_frame: bytes = b"",
+    size: int = 0,
+) -> bytes:
+    """
+    Build a JPEG in a baseline encoder's segment order.
+
+    SOI, JFIF, the quantisation tables, the frame header, the Huffman tables
+    and the scan header, then the scan bytes and EOI.
+
+    :param width: Frame width in pixels.
+    :param height: Frame height in pixels.
+    :param precision: Sample precision in bits.
+    :param components: Number of colour components.
+    :param luma_sampling: The first component's sampling byte (h << 4 | v).
+    :param frame_marker: The frame header's marker (``0xc0`` baseline).
+    :param before_frame: Bytes placed just before the frame header.
+    :param size: The whole image's length, or 0 for a short scan.
+    """
+    jfif = jpeg_segment(0xE0, bytes.fromhex("4a46494600010100000100010000"))
+    quantisation = jpeg_segment(0xDB, b"\x00" + bytes(64) + b"\x01" + bytes(64))
+    frame = jpeg_segment(frame_marker, struct.pack(
+        ">BHHB", precision, height, width, components,
+    ) + b"".join(
+        bytes([index + 1, luma_sampling if index == 0 else 0x11, min(index, 1)])
+        for index in range(components)
+    ))
+    huffman = jpeg_segment(0xC4, b"".join(
+        bytes([table]) + b"\x01" + bytes(15) + b"\x00"
+        for table in (0x00, 0x10, 0x01, 0x11)
+    ))
+    scan = jpeg_segment(0xDA, bytes([components]) + b"".join(
+        bytes([index + 1, 0x00 if index == 0 else 0x11])
+        for index in range(components)
+    ) + b"\x00\x3f\x00")
+    header = (
+        b"\xff\xd8" + jfif + quantisation + before_frame + frame + huffman + scan
+    )
+    return jpeg_scan(header, size)
+
+
+def with_crc32(image: bytes, crc: int) -> bytes:
+    """
+    Return the image with the four bytes before its EOI set so its CRC32 is ``crc``.
+
+    :param image: An image ending in four scan bytes and EOI.
+    :param crc: The CRC32 to reach.
+    """
+    table = []
+    for byte in range(256):
+        entry = byte
+        for _ in range(8):
+            entry = (entry >> 1) ^ 0xEDB88320 if entry & 1 else entry >> 1
+        table.append(entry)
+    by_top_byte = {entry >> 24: index for index, entry in enumerate(table)}
+    prefix, suffix = image[:-6], image[-2:]
+
+    # The CRC register after the four bytes, run back from the end
+    register = crc ^ 0xFFFFFFFF
+    for byte in reversed(suffix):
+        index = by_top_byte[register >> 24]
+        register = ((register ^ table[index]) << 8 & 0xFFFFFFFF) | (index ^ byte)
+
+    # The table indices that register needs depend on its top bytes alone
+    indices: list[int] = []
+    for _ in range(4):
+        index = by_top_byte[register >> 24]
+        indices.insert(0, index)
+        register = (register ^ table[index]) << 8 & 0xFFFFFFFF
+
+    register = zlib.crc32(prefix) ^ 0xFFFFFFFF
+    forged = bytearray()
+    for index in indices:
+        forged.append((register ^ index) & 0xFF)
+        register = table[index] ^ (register >> 8)
+    return prefix + bytes(forged) + suffix
 
 
 def negotiation_steps_through(

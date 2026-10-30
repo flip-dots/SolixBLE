@@ -356,6 +356,20 @@ PRIME_CHARGER_250W_TEST_COMMANDS = [
         ValueError,
         id="prime_charger_250w_screensaver_window_invalid_day",
     ),
+    pytest.param(
+        PrimeCharger250w,
+        "turn_time_display_on",
+        [],
+        [("4222", "a10121a2020101")],
+        id="prime_charger_250w_time_display_on",
+    ),
+    pytest.param(
+        PrimeCharger250w,
+        "turn_time_display_off",
+        [],
+        [("4222", "a10121a2020100")],
+        id="prime_charger_250w_time_display_off",
+    ),
 ]
 
 

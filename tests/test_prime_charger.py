@@ -3,6 +3,9 @@
 .. moduleauthor:: kb1ibt
 """
 
+import dataclasses
+import struct
+import zlib
 from collections.abc import Callable
 from unittest import mock
 
@@ -13,11 +16,15 @@ from SolixBLE.const import DEFAULT_METADATA_INT, DEFAULT_METADATA_STRING
 from SolixBLE.constructs import Packet
 from SolixBLE.devices.prime_charger_250w import (
     KEEP_ALIVE_INTERVAL,
+    THEME_IMAGE_LIMITS,
+    UPLOAD_RETRIES,
     CatalogTheme,
     ChargingMode,
     KnobDirection,
     ScreensaverWindow,
+    ThemeImageState,
 )
+from SolixBLE.images import JpegLimits, check_jpeg
 from SolixBLE.protocols import EncryptedOuter, NegotiatedSession
 from SolixBLE.states import (
     ClockFormat,
@@ -27,7 +34,18 @@ from SolixBLE.states import (
     PortTimer,
 )
 from tests.const import MOCK_BLE_DEVICE, NEGOTIATION_RESPONSES_PRIME
-from tests.helpers import MockDevice
+from tests.helpers import (
+    MockDevice,
+    chunk_payload,
+    connect_recorded,
+    jpeg_image,
+    jpeg_scan,
+    jpeg_segment,
+    sent_payloads,
+    session_reply,
+    window_acks,
+    with_crc32,
+)
 
 #: A 4303 stream frame with the six ports at a2-a7 (USB C1 reads 0.297 A).
 STREAM_PORTS = (
@@ -687,3 +705,802 @@ async def test_pd_gate_unknown_before_the_check() -> None:
     )
 
     assert device.device_name_display_supported is None
+
+
+#: The app's theme frames for Rhythmic Hue (BLE, app 3.23.0), before their
+#: timestamps: 4205 choosing the catalog theme with the placeholder URL, the
+#: 4311 pushes asking for its image and reporting it stored, and 4220 opening
+#: the upload of its 26 242-byte image (CRC32 b5d0abf9) in 137 chunks of 192 B.
+RHYTHMIC_HUE_SET_THEME = (
+    "a10121a2020183a30503d4f89e1da40503f9abd0b5a50503ffffffff"
+    "a6110431323334353637383930313233343536"
+)
+RHYTHMIC_HUE_NEEDS_UPLOAD = "a10131a20504d4f89e1da3020104a4020103"
+RHYTHMIC_HUE_STORED = "a10131a20504d4f89e1da3020101a4020103"
+RHYTHMIC_HUE_PREPARE = (
+    "a10121a2020100a30503d4f89e1da40503f9abd0b5a5050382660000a602010a"
+    "a70302c000a803028900a9110431323334353637383930313233343536"
+)
+RHYTHMIC_HUE_SIZE = 26242
+RHYTHMIC_HUE_CRC = 0xB5D0ABF9
+RHYTHMIC_HUE_CHUNKS = 137
+
+#: The charger's ack to 4205 and 4220, and its last 4a21 for that upload:
+#: done, 137 chunks.
+ACK = "00a10131"
+RHYTHMIC_HUE_DONE = "10a10131a203028900"
+
+#: A 4311 push: the theme ID (u32 LE), the image state and the kind (03
+#: catalog, 05 custom).
+THEME_STATE = "a10131a20504{theme}a30201{state:02x}a40201{kind:02x}"
+KIND_CATALOG = 3
+KIND_CUSTOM = 5
+
+#: The placeholder URL's TLV body (type 04, 16 ASCII digits), sent in 4205 a6
+#: and 4220 a9 when no URL is given.
+PLACEHOLDER = "110431323334353637383930313233343536"
+
+#: An image URL for the charger to fetch itself.
+THEME_URL = "https://example.com/themes/rhythmic-hue.jpg"
+
+#: The app's catalog JPEGs from SOI through the scan header: SOI, JFIF, an
+#: sRGB ICC profile, two quantisation tables, a 480x200 4:2:0 baseline frame,
+#: four Huffman tables and the scan header.
+CELESTIAL_HEADER = bytes.fromhex(
+    "ffd8ffe000104a46494600010100000100010000ffe201d84943435f50524f46494c45000101"
+    "000001c800000000043000006d6e74725247422058595a2007e0000100010000000000006163"
+    "7370000000000000000000000000000000000000000000000000000000010000f6d600010000"
+    "0000d32d00000000000000000000000000000000000000000000000000000000000000000000"
+    "00000000000000000000000000000000000964657363000000f0000000247258595a00000114"
+    "000000146758595a00000128000000146258595a0000013c0000001477747074000001500000"
+    "0014725452430000016400000028675452430000016400000028625452430000016400000028"
+    "637072740000018c0000003c6d6c756300000000000000010000000c656e5553000000080000"
+    "001c007300520047004258595a200000000000006fa2000038f50000039058595a2000000000"
+    "000062990000b785000018da58595a2000000000000024a000000f840000b6cf58595a200000"
+    "00000000f6d6000100000000d32d706172610000000000040000000266660000f2a700000d59"
+    "000013d000000a5b00000000000000006d6c756300000000000000010000000c656e55530000"
+    "00200000001c0047006f006f0067006c006500200049006e0063002e00200032003000310036"
+    "ffdb004300010101010101010101010101010101010101010101010101010101010101010101"
+    "01010102020101020101010202020202020202020102020202020202020202ffdb0043010101"
+    "0101010101010101020101010202020202020202020202020202020202020202020202020202"
+    "020202020202020202020202020202020202020202020202ffc000110800c801e00301220002"
+    "1101031101ffc4001e0001010001050101010000000000000000000605010204070803090aff"
+    "c40047100001020403050506040404020b010000010002030411210531410612516171078191"
+    "a1f0081322b1c1d11432e1f115234252163372a20962182425344344536392a3d2e2ffc4001c"
+    "0101000105010100000000000000000000000503040607080201ffc4003b1100020102030602"
+    "09020503050000000000010203110421310512415161f0067113228191a1b1c1d1e132421423"
+    "62b2f107154324527282a2ffda000c03010002110311003f00",
+)
+RHYTHMIC_HUE_HEADER = bytes.fromhex(
+    "ffd8ffe000104a46494600010100000100010000ffe201d84943435f50524f46494c45000101"
+    "000001c800000000043000006d6e74725247422058595a2007e0000100010000000000006163"
+    "7370000000000000000000000000000000000000000000000000000000010000f6d600010000"
+    "0000d32d00000000000000000000000000000000000000000000000000000000000000000000"
+    "00000000000000000000000000000000000964657363000000f0000000247258595a00000114"
+    "000000146758595a00000128000000146258595a0000013c0000001477747074000001500000"
+    "0014725452430000016400000028675452430000016400000028625452430000016400000028"
+    "637072740000018c0000003c6d6c756300000000000000010000000c656e5553000000080000"
+    "001c007300520047004258595a200000000000006fa2000038f50000039058595a2000000000"
+    "000062990000b785000018da58595a2000000000000024a000000f840000b6cf58595a200000"
+    "00000000f6d6000100000000d32d706172610000000000040000000266660000f2a700000d59"
+    "000013d000000a5b00000000000000006d6c756300000000000000010000000c656e55530000"
+    "00200000001c0047006f006f0067006c006500200049006e0063002e00200032003000310036"
+    "ffdb004300010101010101010101010101010101010101010101010101010101010101010101"
+    "01010102020101020101010202020202020202020102020202020202020202ffdb0043010101"
+    "0101010101010101020101010202020202020202020202020202020202020202020202020202"
+    "020202020202020202020202020202020202020202020202ffc000110800c801e00301220002"
+    "1101031101ffc4001e0001000104030101000000000000000000000504060809020307010aff"
+    "c4006b100001000803040506050d061109080300010002030405061121073141081251610913"
+    "718191142232a1b1f01752c1d1f1151623242526273334425472e13544556294d53637454647"
+    "535664667582859295a2b2c2192843576793b5c6d318636573748697a6b3d2d4ffc4001d0101"
+    "00020203010100000000000000000000050604070203080109ffc40062110001020403030508"
+    "090c0d080b0000000102030004051106071221315108131441612232527191d1d2f015166263"
+    "81a1b1c1d324253334535564729293d5e1171823354354657382838494d40926424574b2c2c3"
+    "274466a2a3a5b3b5c5d6f1ffda000c03010002110311003f00",
+)
+
+#: Limits of a display other than the 250W charger's: 320x240, 4:4:4 only.
+OTHER_LIMITS = JpegLimits(
+    width=320,
+    height=240,
+    max_size=4096,
+    components=3,
+    luma_sampling=frozenset({(1, 1)}),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+async def test_catalog_theme_upload_matches_the_app() -> None:
+    """A catalog theme the charger lacks: the app's 4205 and 4220, then 137 chunks."""
+    image = with_crc32(
+        jpeg_scan(RHYTHMIC_HUE_HEADER, RHYTHMIC_HUE_SIZE),
+        RHYTHMIC_HUE_CRC,
+    )
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        start = len(mock_bluetooth.writes)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(device, "4a05", ACK),
+                session_reply(device, "4311", RHYTHMIC_HUE_NEEDS_UPLOAD),
+            ],
+        )
+        mock_bluetooth.expect_ordered(None, [session_reply(device, "4a20", ACK)])
+        for replies in window_acks(
+            device,
+            RHYTHMIC_HUE_CHUNKS,
+            [
+                session_reply(device, "4311", RHYTHMIC_HUE_STORED),
+                session_reply(device, "4a21", RHYTHMIC_HUE_DONE),
+            ],
+        ):
+            mock_bluetooth.expect_ordered(None, replies)
+        await device.set_display_catalog_theme(CatalogTheme.RHYTHMIC_HUE, image)
+        mock_bluetooth.check_assertions()
+
+    timestamp = f"fe0503{device._timestamp().hex()}"  # noqa: SLF001
+    assert sent_payloads(device, mock_bluetooth.writes[start:]) == [
+        (0x205, RHYTHMIC_HUE_SET_THEME + timestamp),
+        (0x220, RHYTHMIC_HUE_PREPARE + timestamp),
+        *(
+            (0x221, chunk_payload(image, index) + timestamp)
+            for index in range(RHYTHMIC_HUE_CHUNKS)
+        ),
+    ]
+    assert set(mock_bluetooth.write_responses) == {False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+async def test_catalog_theme_already_stored_sends_no_image() -> None:
+    """A theme the charger already holds is reported stored at once: no upload."""
+    image = with_crc32(
+        jpeg_scan(RHYTHMIC_HUE_HEADER, RHYTHMIC_HUE_SIZE),
+        RHYTHMIC_HUE_CRC,
+    )
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        start = len(mock_bluetooth.writes)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(device, "4a05", ACK),
+                session_reply(device, "4311", RHYTHMIC_HUE_STORED),
+            ],
+        )
+        await device.set_display_catalog_theme(CatalogTheme.RHYTHMIC_HUE, image)
+        mock_bluetooth.check_assertions()
+
+    timestamp = f"fe0503{device._timestamp().hex()}"  # noqa: SLF001
+    assert sent_payloads(device, mock_bluetooth.writes[start:]) == [
+        (0x205, RHYTHMIC_HUE_SET_THEME + timestamp),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+@pytest.mark.parametrize(
+    ("size", "count"),
+    [
+        pytest.param(1000, 6, id="one_short_window"),
+        pytest.param(2200, 12, id="two_windows"),
+        pytest.param(1920, 10, id="exactly_one_window"),
+        pytest.param(385, 3, id="unpadded_one_byte_last_chunk"),
+    ],
+)
+async def test_custom_theme_upload(size: int, count: int) -> None:
+    """A custom image goes up as kind 2 under its CRC32, in windows of 10 chunks."""
+    image = jpeg_image(size=size)
+    crc = struct.pack("<I", zlib.crc32(image)).hex()
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        start = len(mock_bluetooth.writes)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(device, "4a05", ACK),
+                session_reply(
+                    device,
+                    "4311",
+                    THEME_STATE.format(
+                        theme=crc,
+                        state=ThemeImageState.NEEDS_UPLOAD,
+                        kind=KIND_CUSTOM,
+                    ),
+                ),
+            ],
+        )
+        mock_bluetooth.expect_ordered(None, [session_reply(device, "4a20", ACK)])
+        for replies in window_acks(
+            device,
+            count,
+            [
+                session_reply(
+                    device,
+                    "4311",
+                    THEME_STATE.format(
+                        theme=crc,
+                        state=ThemeImageState.STORED,
+                        kind=KIND_CUSTOM,
+                    ),
+                ),
+                session_reply(
+                    device,
+                    "4a21",
+                    f"10a10131a20302{struct.pack('<H', count).hex()}",
+                ),
+            ],
+        ):
+            mock_bluetooth.expect_ordered(None, replies)
+        await device.set_display_custom_theme(image)
+        mock_bluetooth.check_assertions()
+
+    timestamp = f"fe0503{device._timestamp().hex()}"  # noqa: SLF001
+    assert sent_payloads(device, mock_bluetooth.writes[start:]) == [
+        (
+            0x205,
+            f"a10121a2020185a30503{crc}a40503{crc}a50503ffffffffa6{PLACEHOLDER}"
+            + timestamp,
+        ),
+        (
+            0x220,
+            f"a10121a2020102a30503{crc}a40503{crc}"
+            f"a50503{struct.pack('<I', size).hex()}a602010aa70302c000"
+            f"a80302{struct.pack('<H', count).hex()}a9{PLACEHOLDER}" + timestamp,
+        ),
+        *((0x221, chunk_payload(image, index) + timestamp) for index in range(count)),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+@pytest.mark.parametrize(
+    "final",
+    [
+        pytest.param(("4311", "4a21"), id="stored_then_done"),
+        pytest.param(("4a21",), id="done_only"),
+        pytest.param(("4311",), id="stored_only"),
+    ],
+)
+async def test_upload_ends_on_stored_or_done(final: tuple[str, ...]) -> None:
+    """Our 4311 stored or a 4a21 done, whichever comes first, ends the upload."""
+    image = jpeg_image(size=1000)
+    crc = struct.pack("<I", zlib.crc32(image)).hex()
+    replies = {
+        "4311": THEME_STATE.format(
+            theme=crc,
+            state=ThemeImageState.STORED,
+            kind=KIND_CUSTOM,
+        ),
+        "4a21": "10a10131a203020600",
+    }
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(device, "4a05", ACK),
+                session_reply(
+                    device,
+                    "4311",
+                    THEME_STATE.format(
+                        theme=crc,
+                        state=ThemeImageState.NEEDS_UPLOAD,
+                        kind=KIND_CUSTOM,
+                    ),
+                ),
+            ],
+        )
+        mock_bluetooth.expect_ordered(None, [session_reply(device, "4a20", ACK)])
+        for chunk_replies in window_acks(
+            device,
+            6,
+            [session_reply(device, cmd, replies[cmd]) for cmd in final],
+        ):
+            mock_bluetooth.expect_ordered(None, chunk_replies)
+        await device.set_display_custom_theme(image)
+        mock_bluetooth.check_assertions()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+async def test_upload_resends_from_the_index_the_charger_asks_for() -> None:
+    """A 12 at a window's end resends from its index to the end of that window."""
+    image = jpeg_image(size=2200)
+    crc = struct.pack("<I", zlib.crc32(image)).hex()
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+    resent = [*range(10), *range(4, 10), 10, 11]
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        start = len(mock_bluetooth.writes)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(device, "4a05", ACK),
+                session_reply(
+                    device,
+                    "4311",
+                    THEME_STATE.format(
+                        theme=crc,
+                        state=ThemeImageState.NEEDS_UPLOAD,
+                        kind=KIND_CUSTOM,
+                    ),
+                ),
+            ],
+        )
+        mock_bluetooth.expect_ordered(None, [session_reply(device, "4a20", ACK)])
+        for _ in range(9):
+            mock_bluetooth.expect_ordered(None)
+        mock_bluetooth.expect_ordered(
+            None,
+            [session_reply(device, "4a21", "12a10131a203020400")],
+        )
+        for _ in range(5):
+            mock_bluetooth.expect_ordered(None)
+        mock_bluetooth.expect_ordered(
+            None,
+            [session_reply(device, "4a21", "00a10131a203020a00")],
+        )
+        mock_bluetooth.expect_ordered(None)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(
+                    device,
+                    "4311",
+                    THEME_STATE.format(
+                        theme=crc,
+                        state=ThemeImageState.STORED,
+                        kind=KIND_CUSTOM,
+                    ),
+                ),
+                session_reply(device, "4a21", "10a10131a203020c00"),
+            ],
+        )
+        await device.set_display_custom_theme(image)
+        mock_bluetooth.check_assertions()
+
+    timestamp = f"fe0503{device._timestamp().hex()}"  # noqa: SLF001
+    assert sent_payloads(device, mock_bluetooth.writes[start + 2 :]) == [
+        (0x221, chunk_payload(image, index) + timestamp) for index in resent
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+async def test_upload_checksum_mismatch_raises() -> None:
+    """A 11 after the last chunk means the charger's CRC32 didn't match."""
+    image = jpeg_image(size=1000)
+    crc = struct.pack("<I", zlib.crc32(image)).hex()
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(device, "4a05", ACK),
+                session_reply(
+                    device,
+                    "4311",
+                    THEME_STATE.format(
+                        theme=crc,
+                        state=ThemeImageState.NEEDS_UPLOAD,
+                        kind=KIND_CUSTOM,
+                    ),
+                ),
+            ],
+        )
+        mock_bluetooth.expect_ordered(None, [session_reply(device, "4a20", ACK)])
+        for replies in window_acks(
+            device,
+            6,
+            [session_reply(device, "4a21", "11a10131a203020600")],
+        ):
+            mock_bluetooth.expect_ordered(None, replies)
+        with pytest.raises(ValueError, match="checksum"):
+            await device.set_display_custom_theme(image)
+        mock_bluetooth.check_assertions()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+async def test_upload_to_a_silent_charger_times_out() -> None:
+    """With no window ack the window is resent a bounded number of times."""
+    image = jpeg_image(size=1000)
+    crc = struct.pack("<I", zlib.crc32(image)).hex()
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+    sent = list(range(6)) * (UPLOAD_RETRIES + 1)
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        start = len(mock_bluetooth.writes)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(device, "4a05", ACK),
+                session_reply(
+                    device,
+                    "4311",
+                    THEME_STATE.format(
+                        theme=crc,
+                        state=ThemeImageState.NEEDS_UPLOAD,
+                        kind=KIND_CUSTOM,
+                    ),
+                ),
+            ],
+        )
+        mock_bluetooth.expect_ordered(None, [session_reply(device, "4a20", ACK)])
+        for _ in sent:
+            mock_bluetooth.expect_ordered(None)
+        with pytest.raises(TimeoutError):
+            await device.set_display_custom_theme(image)
+        mock_bluetooth.check_assertions()
+
+    timestamp = f"fe0503{device._timestamp().hex()}"  # noqa: SLF001
+    assert sent_payloads(device, mock_bluetooth.writes[start + 2 :]) == [
+        (0x221, chunk_payload(image, index) + timestamp) for index in sent
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+@pytest.mark.parametrize(
+    ("set_theme_reply", "states", "match"),
+    [
+        pytest.param(ACK, [ThemeImageState.FAILED], "could not store", id="failed"),
+        pytest.param(
+            ACK,
+            [ThemeImageState.FETCHING],
+            "fetch",
+            id="fetching_without_url",
+        ),
+        pytest.param("01a10131", [], "rejected", id="set_theme_rejected"),
+    ],
+)
+async def test_catalog_theme_refused(
+    set_theme_reply: str,
+    states: list[ThemeImageState],
+    match: str,
+) -> None:
+    """A rejected 4205, a failed image or a fetch with no URL raises; no upload."""
+    image = with_crc32(
+        jpeg_scan(RHYTHMIC_HUE_HEADER, RHYTHMIC_HUE_SIZE),
+        RHYTHMIC_HUE_CRC,
+    )
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        start = len(mock_bluetooth.writes)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(device, "4a05", set_theme_reply),
+                *(
+                    session_reply(
+                        device,
+                        "4311",
+                        THEME_STATE.format(
+                            theme="d4f89e1d",
+                            state=state,
+                            kind=KIND_CATALOG,
+                        ),
+                    )
+                    for state in states
+                ),
+            ],
+        )
+        with pytest.raises(ValueError, match=match):
+            await device.set_display_catalog_theme(CatalogTheme.RHYTHMIC_HUE, image)
+
+    assert [
+        msgtype
+        for msgtype, _ in sent_payloads(
+            device,
+            mock_bluetooth.writes[start:],
+        )
+    ] == [0x205]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+async def test_catalog_theme_fetched_by_the_charger() -> None:
+    """Given a URL the charger fetches the image itself: 2, 3, then 1."""
+    image = with_crc32(
+        jpeg_scan(RHYTHMIC_HUE_HEADER, RHYTHMIC_HUE_SIZE),
+        RHYTHMIC_HUE_CRC,
+    )
+    url = THEME_URL.encode()
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        start = len(mock_bluetooth.writes)
+        mock_bluetooth.expect_ordered(
+            None,
+            [
+                session_reply(device, "4a05", ACK),
+                *(
+                    session_reply(
+                        device,
+                        "4311",
+                        THEME_STATE.format(
+                            theme="d4f89e1d",
+                            state=state,
+                            kind=KIND_CATALOG,
+                        ),
+                    )
+                    for state in (
+                        ThemeImageState.FETCHING,
+                        ThemeImageState.FETCH_STARTED,
+                        ThemeImageState.STORED,
+                    )
+                ),
+            ],
+        )
+        await device.set_display_catalog_theme(
+            CatalogTheme.RHYTHMIC_HUE,
+            image,
+            url=THEME_URL,
+        )
+        mock_bluetooth.check_assertions()
+
+    timestamp = f"fe0503{device._timestamp().hex()}"  # noqa: SLF001
+    assert sent_payloads(device, mock_bluetooth.writes[start:]) == [
+        (
+            0x205,
+            (
+                "a10121a2020183a30503d4f89e1da40503f9abd0b5a50503ffffffff"
+                f"a6{len(url) + 1:02x}04{url.hex()}{timestamp}"
+            ),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_time", "fast_sleep", "fast_timeouts")
+@pytest.mark.parametrize(
+    "ours_follows",
+    [
+        pytest.param(True, id="other_then_ours"),
+        pytest.param(False, id="other_only"),
+    ],
+)
+async def test_theme_state_for_another_theme_is_ignored(
+    ours_follows: bool,  # noqa: FBT001
+) -> None:
+    """A 4311 for another theme ID neither ends nor fails the call."""
+    image = with_crc32(
+        jpeg_scan(RHYTHMIC_HUE_HEADER, RHYTHMIC_HUE_SIZE),
+        RHYTHMIC_HUE_CRC,
+    )
+    other = THEME_STATE.format(
+        theme="57058f38",
+        state=ThemeImageState.STORED,
+        kind=KIND_CATALOG,
+    )
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._KEEP_ALIVE_INTERVAL = None  # noqa: SLF001
+
+    async with MockDevice() as mock_bluetooth:
+        await connect_recorded(device, mock_bluetooth, NEGOTIATION_RESPONSES_PRIME)
+        replies = [
+            session_reply(device, "4a05", ACK),
+            session_reply(device, "4311", other),
+        ]
+        if ours_follows:
+            replies.append(session_reply(device, "4311", RHYTHMIC_HUE_STORED))
+        mock_bluetooth.expect_ordered(None, replies)
+        if ours_follows:
+            await device.set_display_catalog_theme(CatalogTheme.RHYTHMIC_HUE, image)
+        else:
+            with pytest.raises(TimeoutError):
+                await device.set_display_catalog_theme(
+                    CatalogTheme.RHYTHMIC_HUE,
+                    image,
+                )
+        mock_bluetooth.check_assertions()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "arguments", "match"),
+    [
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(), "https://a.b/c.j"],
+            "url",
+            id="url_15_chars",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(), "https://example.com/" + "a" * 235],
+            "url",
+            id="url_255_chars",
+        ),
+        pytest.param(
+            "set_display_catalog_theme",
+            [CatalogTheme.UNKNOWN, jpeg_image()],
+            "UNKNOWN",
+            id="catalog_unknown",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [with_crc32(jpeg_image(), 0)],
+            "checksum of 0",
+            id="checksum_0",
+        ),
+        pytest.param("set_display_custom_theme", [b""], "size", id="empty"),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(size=65535)],
+            "size",
+            id="over_65534_bytes",
+        ),
+        pytest.param(
+            "set_display_catalog_theme",
+            [CatalogTheme.CELESTIAL, jpeg_image(size=65535)],
+            "size",
+            id="catalog_over_65534_bytes",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image()[2:]],
+            "JPEG",
+            id="no_soi",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(frame_marker=0xC2)],
+            "marker",
+            id="progressive",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(before_frame=jpeg_segment(0xDD, b"\x00\x10"))],
+            "marker",
+            id="restart_interval",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(before_frame=b"\xff\xd0")],
+            "marker",
+            id="restart_marker",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(components=1)],
+            "components",
+            id="grayscale",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(precision=12)],
+            "precision",
+            id="12_bit",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(luma_sampling=0x12)],
+            "sampling",
+            id="sampling_1x2",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(width=481)],
+            "480x200",
+            id="width_481",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(height=199)],
+            "480x200",
+            id="height_199",
+        ),
+        pytest.param(
+            "set_display_custom_theme",
+            [jpeg_image(width=200, height=480)],
+            "480x200",
+            id="portrait",
+        ),
+    ],
+)
+async def test_theme_checks_before_writing(
+    method: str,
+    arguments: list[object],
+    match: str,
+) -> None:
+    """A bad image, URL or theme raises before anything is written."""
+    device = PrimeCharger250w(MOCK_BLE_DEVICE)
+    device._client = mock.AsyncMock()  # noqa: SLF001
+    with (
+        mock.patch("SolixBLE.SolixBLEDevice.negotiated", return_value=True),
+        pytest.raises(ValueError, match=match),
+    ):
+        await getattr(device, method)(*arguments)
+
+    device._client.write_gatt_char.assert_not_called()  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        pytest.param(jpeg_scan(CELESTIAL_HEADER), id="celestial"),
+        pytest.param(jpeg_scan(RHYTHMIC_HUE_HEADER), id="rhythmic_hue"),
+        pytest.param(jpeg_image(luma_sampling=0x11), id="sampling_4_4_4"),
+        pytest.param(jpeg_image(luma_sampling=0x21), id="sampling_4_2_2"),
+        pytest.param(jpeg_image(size=65534), id="65534_bytes"),
+    ],
+)
+def test_theme_image_check_accepts(image: bytes) -> None:
+    """The app's catalog JPEGs and every baseline layout the charger decodes pass."""
+    check_jpeg(image, THEME_IMAGE_LIMITS)
+
+
+@pytest.mark.parametrize(
+    ("image", "limits", "match"),
+    [
+        pytest.param(
+            jpeg_image(width=320, height=240, luma_sampling=0x11),
+            OTHER_LIMITS,
+            None,
+            id="other_display",
+        ),
+        pytest.param(
+            jpeg_image(luma_sampling=0x11),
+            OTHER_LIMITS,
+            "320x240",
+            id="wrong_size",
+        ),
+        pytest.param(
+            jpeg_image(width=320, height=240),
+            OTHER_LIMITS,
+            "sampling",
+            id="sampling_4_2_0",
+        ),
+        pytest.param(
+            jpeg_image(width=320, height=240, luma_sampling=0x11, size=4097),
+            OTHER_LIMITS,
+            "size",
+            id="over_4096_bytes",
+        ),
+        pytest.param(
+            jpeg_image(width=320, height=240, components=1, luma_sampling=0x11),
+            dataclasses.replace(OTHER_LIMITS, components=1),
+            None,
+            id="grayscale_display",
+        ),
+    ],
+)
+def test_image_check_follows_its_limits(
+    image: bytes,
+    limits: JpegLimits,
+    match: str | None,
+) -> None:
+    """The check takes its size, sampling and component limits from its argument."""
+    if match is None:
+        check_jpeg(image, limits)
+    else:
+        with pytest.raises(ValueError, match=match):
+            check_jpeg(image, limits)
