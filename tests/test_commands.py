@@ -10,6 +10,8 @@ from unittest import mock
 
 import pytest
 
+from SolixBLE import C300
+from SolixBLE.constructs import Channel, PacketCommand
 from SolixBLE.device import SolixBLEDevice
 from tests.const import MOCK_BLE_DEVICE
 from tests.devices.c300 import (
@@ -35,6 +37,7 @@ from tests.devices.f2600 import (
     F2600_TEST_COMMANDS_RESPONSES,
 )
 from tests.devices.f3800 import F3800_TEST_COMMANDS, F3800_TEST_COMMANDS_E2E
+from tests.devices.maggo_3in1 import MAGGO_3IN1_TEST_COMMANDS
 from tests.devices.prime_160w_charger import (
     PRIME_CHARGER_160W_TEST_COMMANDS,
     PRIME_CHARGER_160W_TEST_COMMANDS_E2E,
@@ -43,7 +46,10 @@ from tests.devices.prime_250w_charger import (
     PRIME_CHARGER_250W_TEST_COMMANDS,
     PRIME_CHARGER_250W_TEST_COMMANDS_E2E,
 )
-from tests.helpers import MockDevice
+from tests.helpers import MockDevice, install_session_keys
+
+#: A session message type (the C300's AC output switch).
+AC_OUTPUT = 0x101
 
 
 @pytest.mark.asyncio
@@ -57,6 +63,7 @@ from tests.helpers import MockDevice
         *C1000G2_TEST_COMMANDS,
         *F2600_TEST_COMMANDS,
         *F3800_TEST_COMMANDS,
+        *MAGGO_3IN1_TEST_COMMANDS,
         *PRIME_CHARGER_160W_TEST_COMMANDS,
         *PRIME_CHARGER_250W_TEST_COMMANDS,
     ],
@@ -94,10 +101,45 @@ async def test_send_command(
 
         for call in expected:
             mock_build.assert_called_once_with({
-                "pattern": bytes.fromhex("03000f"),
-                "cmd": bytes.fromhex(call[0]),
+                **PacketCommand.parse(bytes.fromhex(call[0])),
+                "channel": Channel.SESSION,
                 "payload_bytes": bytes.fromhex(call[1] + timestamp_bytes),
             })
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("secret", "encrypted"),
+    [
+        pytest.param(bytes(range(32)), True, id="keyed_session"),
+        pytest.param(b"", False, id="plain_before_keys"),
+    ],
+)
+async def test_send_command_message_type(
+    fake_time,  # noqa: ANN001, ARG001
+    secret: bytes,
+    encrypted: bool,  # noqa: FBT001
+) -> None:
+    """A message type is sent with the encrypted flag the session sets on its frames."""
+    device = C300(MOCK_BLE_DEVICE)
+    device._client = mock.AsyncMock()  # noqa: SLF001
+    install_session_keys(device, secret)
+    with (
+        mock.patch.object(
+            device, "_encrypt_payload", side_effect=lambda payload: payload,
+        ),
+        mock.patch("SolixBLE.constructs.Packet.build") as mock_build,
+        mock.patch("SolixBLE.SolixBLEDevice.negotiated", return_value=True),
+    ):
+        await device._send_command(AC_OUTPUT, {})  # noqa: SLF001
+
+    built = mock_build.call_args.args[0]
+    assert (built["channel"], built["fragmented"], built["encrypted"]) == (
+        Channel.SESSION,
+        False,
+        encrypted,
+    )
+    assert built["msgtype"] == AC_OUTPUT
 
 
 @pytest.mark.asyncio
@@ -155,8 +197,8 @@ async def test_send_command_response(  # noqa: PLR0913, PLR0917
 
         for call in expected:
             mock_build.assert_called_once_with({
-                "pattern": bytes.fromhex("03000f"),
-                "cmd": bytes.fromhex(call[0]),
+                **PacketCommand.parse(bytes.fromhex(call[0])),
+                "channel": Channel.SESSION,
                 "payload_bytes": bytes.fromhex(call[1] + timestamp_bytes),
             })
 

@@ -18,7 +18,7 @@ from construct import (  # type: ignore[import-untyped]  # construct ships no ty
 from SolixBLE.const import NEGOTIATION_AAD, NEGOTIATION_KEY, NEGOTIATION_NONCE
 from SolixBLE.utilities import cbc_decrypt, cbc_encrypt, gcm_decrypt, gcm_encrypt
 
-from .base import CLIENT_MTU, Keys, Outer, override
+from .base import CLIENT_MTU, Announcement, Keys, Outer, override
 
 #: Static key material of the encrypted outer before a path installs keys.
 STATIC_KEYS = Keys.parse(bytes.fromhex(NEGOTIATION_KEY + NEGOTIATION_NONCE))
@@ -34,8 +34,8 @@ class PlainOuter(Outer):
     authorizes_at_key_exchange: ClassVar[bool] = True
 
     @override
-    def x005_tags(self, announcement: Container) -> tuple[bytes, bytes | None]:  # noqa: ARG002  # the protocol's signature
-        """Return the app's plain-outer ``0005`` tags: its MTU ceiling, no ``a6``.
+    def x005_tags(self, announcement: Announcement) -> tuple[bytes, bytes | None]:  # noqa: ARG002  # the protocol's signature
+        """Return the app's plain-outer ``SET_CAPABILITY`` tags: MTU ceiling, no ``a6``.
 
         The app sends these whatever the device declared.
 
@@ -74,10 +74,10 @@ class EncryptedOuter(Outer):
     authorizes_at_key_exchange: ClassVar[bool] = False
 
     @override
-    def x005_tags(self, announcement: Container) -> tuple[bytes, bytes | None]:
-        """Return the app's encrypted-outer ``4005`` tags: device MTU and auth mode.
+    def x005_tags(self, announcement: Announcement) -> tuple[bytes, bytes | None]:
+        """Return the app's encrypted-outer ``SET_CAPABILITY`` tags: MTU and auth mode.
 
-        :param announcement: What the device declared in ``x803``.
+        :param announcement: What the device declared in its capability reply.
         """
         mtu = Int16ul.build(announcement.mtu or CLIENT_MTU)
         auth = (
