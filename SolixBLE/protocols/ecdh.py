@@ -89,6 +89,13 @@ class EcdhPath(Path):
                 if self._key is None:
                     msg = "x821 before the client key was generated"
                     raise RuntimeError(msg)
+                if "a1" not in parameters:
+                    _LOGGER.info(
+                        "x821 reply contained no public key (status %02x); device does not use ECDH encryption",
+                        status,
+                    )
+                    self.authorized = True
+                    return
                 self.keys = Keys.parse(
                     ecdh_shared_secret(self._key, parameters["a1"].value_legacy),
                 )

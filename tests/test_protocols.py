@@ -362,6 +362,29 @@ async def test_key_exchange_sets_the_clock(
 
 
 @pytest.mark.asyncio
+async def test_key_exchange_unencrypted_device() -> None:
+    """x821 without public key (e.g. F2000 on plain outer) authorizes without keys."""
+    flow = (
+        ("0801", PLAIN_X801),
+        ("0803", PLAIN_X803),
+        ("0829", PLAIN_X829),
+        ("0805", STATUS_OK),
+        ("0821", STATUS_OK),
+    )
+    link = RecordingLink()
+    session = NegotiatedSession(PlainOuter(), link)
+    for cmd, plaintext in flow:
+        await session.on_plaintext(
+            NEGOTIATION,
+            bytes.fromhex(cmd),
+            bytes.fromhex(plaintext),
+        )
+    assert session.path is not None
+    assert session.path.keys is None
+    assert session.authorized is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("outer", "flow", "registration"),
     [
