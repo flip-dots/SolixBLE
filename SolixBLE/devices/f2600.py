@@ -5,59 +5,35 @@
 
 """
 
-import logging
 from datetime import datetime, timedelta
-
-from SolixBLE.constructs import ParameterDict, Parameters
 
 from ..const import (
     DEFAULT_METADATA_BOOL,
     DEFAULT_METADATA_INT,
-    TELEMETRY_PATTERN_A,
 )
 from ..states import ChargingStatus, DisplayTimeout, LightStatus, PortStatus
 from . import F2000
+
+# The commands the F2000 shares now live there. They stay importable from here.
+from .f2000 import (
+    CMD_AC_OUTPUT as CMD_AC_OUTPUT,
+    CMD_DC_OUTPUT as CMD_DC_OUTPUT,
+    CMD_DISPLAY_ON_OFF as CMD_DISPLAY_ON_OFF,
+    CMD_GET_STATUS as CMD_GET_STATUS,
+    CMD_LIGHT_MODE as CMD_LIGHT_MODE,
+    CMD_POWER_SAVING_MODE as CMD_POWER_SAVING_MODE,
+    CMD_RESPONSE_GET_STATUS as CMD_RESPONSE_GET_STATUS,
+    PARAMETERS_GET_STATUS as PARAMETERS_GET_STATUS,
+    PARAMETERS_LIGHT_MODE,
+    PARAMETERS_OFF as PARAMETERS_OFF,
+    PARAMETERS_ON as PARAMETERS_ON,
+)
 
 CMD_AC_TIMER = "4042"
 CMD_DC_TIMER = "4043"
 CMD_AC_CHARGING_POWER = "4044"
 CMD_DISPLAY_TIMEOUT = "4046"
-CMD_DISPLAY_ON_OFF = "4052"
-CMD_AC_OUTPUT = "404a"
-CMD_DC_OUTPUT = "404b"
 CMD_DISPLAY_MODE = "404c"
-CMD_POWER_SAVING_MODE = "404e"
-CMD_LIGHT_MODE = "404f"
-CMD_GET_STATUS = "4040"
-
-CMD_RESPONSE_GET_STATUS = "c840"
-
-PARAMETERS_ON = {
-    "a1": {
-        "value": "21",
-    }, "a2": {
-        "type": 1,
-        "value": 1,
-    },
-}
-
-PARAMETERS_OFF = {
-    "a1": {
-        "value": "21",
-    }, "a2": {
-        "type": 1,
-        "value": 0,
-    },
-}
-
-PARAMETERS_LIGHT_MODE = {
-    "a1": {
-        "value": "21",
-    }, "a2": {
-        "type": 1,
-        "value": lambda mode: mode.value,
-    },
-}
 
 PARAMETERS_TIMEOUT_TIME = {
     "a1": {
@@ -97,15 +73,6 @@ PARAMETERS_TIMER = {
         ),
     },
 }
-
-PARAMETERS_GET_STATUS = {
-    "a1": {
-        "value": "21",
-    },
-}
-
-_LOGGER = logging.getLogger(__name__)
-
 
 class F2600(F2000):
     """
@@ -359,38 +326,6 @@ class F2600(F2000):
             return LightStatus.UNKNOWN
         return LightStatus(self._parse_int("d9", begin=1))
 
-    async def turn_ac_on(self) -> None:
-        """Turn the AC output on.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_ON)
-
-    async def turn_ac_off(self) -> None:
-        """Turn the AC output off.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_OFF)
-
-    async def turn_dc_on(self) -> None:
-        """Turn the DC output on.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_ON)
-
-    async def turn_dc_off(self) -> None:
-        """Turn the DC output off.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_OFF)
-
     async def set_ac_timer(self, seconds: int) -> None:
         """Set the AC auto-off timer.
 
@@ -415,22 +350,6 @@ class F2600(F2000):
             cmd=CMD_DC_TIMER,
             parameters=PARAMETERS_TIMER,
             seconds=seconds,
-        )
-
-    async def set_light_mode(self, mode: LightStatus) -> None:
-        """Set the light mode of the LED bar.
-
-        :param mode: Mode to set light bar to.
-        :raises ValueError: If requested mode is invalid.
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        if mode is LightStatus.UNKNOWN:
-            raise ValueError("You cannot set the light status to unknown")
-        await self._send_command(
-            cmd=CMD_LIGHT_MODE,
-            parameters=PARAMETERS_LIGHT_MODE,
-            mode=mode,
         )
 
     async def set_display_mode(self, mode: LightStatus) -> None:
@@ -468,38 +387,6 @@ class F2600(F2000):
             time=timeout,
         )
 
-    async def turn_display_on(self) -> None:
-        """Turn the display on.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_ON)
-
-    async def turn_display_off(self) -> None:
-        """Turn the display off.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_OFF)
-
-    async def turn_power_saving_mode_on(self) -> None:
-        """Turn the power saving mode on.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(cmd=CMD_POWER_SAVING_MODE, parameters=PARAMETERS_ON)
-
-    async def turn_power_saving_mode_off(self) -> None:
-        """Turn the power saving mode off.
-
-        :raises ConnectionError: If not connected to device.
-        :raises BleakError: If command transmission fails.
-        """
-        await self._send_command(cmd=CMD_POWER_SAVING_MODE, parameters=PARAMETERS_OFF)
-
     async def set_ac_charging_power(self, watts: int) -> None:
         """Set the AC charging power limit in watts.
 
@@ -518,25 +405,3 @@ class F2600(F2000):
             parameters=PARAMETERS_CHARGE_POWER,
             watts=watts,
         )
-
-    async def get_status_update(self) -> ParameterDict:
-        """Request and retrieve a status update from the device.
-
-        :raises ConnectionError: If not connected to device.
-        :raises TimeoutError: If no response from device.
-        :raises BleakError: If command transmission fails.
-        :returns: Dictionary containing telemetry parameters.
-        """
-        await self._send_command(cmd=CMD_GET_STATUS, parameters=PARAMETERS_GET_STATUS)
-        payload = await self._listen_for_packet(
-            bytes.fromhex(TELEMETRY_PATTERN_A), bytes.fromhex(CMD_RESPONSE_GET_STATUS),
-        )
-        if not payload:
-            raise TimeoutError("Timed out waiting for payload!")
-
-        parameters = Parameters.parse(payload)
-        _LOGGER.debug(f"Parameters: {parameters}")
-        await self._process_telemetry(
-            parameters,
-        )  # update the internal parameters as well
-        return parameters
