@@ -3,11 +3,11 @@
 # Script name   : patch.sh
 # Description   : Script for injecting Frida gadget into Anker Android app
 # Author        : Harvey Lelliott (@flip-dots)
-# Date          : 23/03/26
+# Date          : 16/07/26
 # Usage         : ./patch.sh [ADB device (e.g 192.168.1.1:1234)]
 # 
 # License       : MIT
-# Revision      : 1.0.0
+# Revision      : 1.1.0
 #
 set -euxo pipefail
 
@@ -16,7 +16,7 @@ set -euxo pipefail
 # Constants #
 #############
 
-FRIDA_VERSION="17.8.2"
+FRIDA_VERSION="17.8.3"
 
 UBER_APK_SIGNER_VERSION="1.3.0"
 
@@ -53,7 +53,7 @@ WORKING_FOLDER=$(pwd)
 
 # Folder to put all data in
 DATA_FOLDER="${WORKING_FOLDER}/data"
-mkdir -p $DATA_FOLDER
+rm -rf $DATA_FOLDER && mkdir -p $DATA_FOLDER
 
 # Folder to put source APK inside
 APK_SOURCE_FOLDER="${DATA_FOLDER}/source_apks"
@@ -73,7 +73,7 @@ mkdir -p $APK_SIGNED_FOLDER
 
 # Folder to put tools in
 TOOLS_FOLDER="${WORKING_FOLDER}/tools"
-mkdir -p $TOOLS_FOLDER
+rm -rf $TOOLS_FOLDER && mkdir -p $TOOLS_FOLDER
 
 # Folder to put Frida gadgets in
 FRIDA_FOLDER="${TOOLS_FOLDER}/frida"
@@ -124,10 +124,11 @@ cp "${WORKING_FOLDER}/frida_config.json" "${APK_DECOMPILED_FOLDER}/lib/armeabi-v
 cp "${WORKING_FOLDER}/frida_config.json" "${APK_DECOMPILED_FOLDER}/lib/arm64-v8a/libnative-utils.config.so"
 
 # Add Frida gadget to app startup
-sed -i '' '34c \
-const-string v0, "native-utils"\
-invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\
-' "${APK_DECOMPILED_FOLDER}/smali/s/h/e/l/l/A.smali"
+sed -i '' 's/\.locals 5/\.locals 6/g' "${APK_DECOMPILED_FOLDER}/smali/s/h/e/l/l/S.smali"
+sed -i '' '2386c \
+const-string v5, "native-utils"\
+invoke-static {v5}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\
+' "${APK_DECOMPILED_FOLDER}/smali/s/h/e/l/l/S.smali"
 
 # Modify manifest to enable Frida loading
 sed -i '' '/<application/,/>/ s/android:allowBackup="false"/android:allowBackup="true"/' "${APK_DECOMPILED_FOLDER}/AndroidManifest.xml"
