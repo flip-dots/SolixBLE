@@ -25,6 +25,7 @@ from .devices import (
 )
 from .factory import device_class_from_advertisement
 from .prime_device import PrimeDevice
+from .protocols import UnsupportedNegotiation
 from .states import (
     ChargingStatus,
     ChargingStatusF3800,
@@ -65,4 +66,5 @@ __all__ = [
     "device_class_from_advertisement",
     "discover_devices",
     "set_region",
+    "UnsupportedNegotiation",
 ]

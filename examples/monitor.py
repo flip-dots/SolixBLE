@@ -16,6 +16,7 @@ async def main():
 
     # Find device
     devices = await discover_devices()
+    print(f"Discovered Anker devices: {devices}")
 
     selected_device = None
     for device in devices:

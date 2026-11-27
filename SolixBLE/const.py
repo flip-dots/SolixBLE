@@ -53,6 +53,11 @@ NEGOTIATION_RESPONSE_TIMEOUT = 15
 #: Maximum time to get no response in the 1st negotiation stage before retrying
 NEGOTIATION_RESPONSE_DELAY = 10
 
+#: Extra time allowed past a pairing confirmation window before giving up,
+#: matching the firmware's own grace past its ``auth_timeout`` before it
+#: drops the link (``auth_timeout + 5`` s).
+PAIRING_CONFIRMATION_GRACE = 5
+
 #: String value for unknown string attributes.
 DEFAULT_METADATA_STRING = "Unknown"
 
@@ -68,14 +73,19 @@ DEFAULT_METADATA_BOOL = None
 #: The pattern used in telemetry packers from some Anker devices
 TELEMETRY_PATTERN_A = "03010f"
 
-#: The pattern used in negotiation packets from Anker devices
-NEGOTIATION_PATTERN = "030001"
-
 #: Static AES-GCM key, nonce and additional authenticated data used on the
-#: encrypted negotiation path before the ECDH shared secret exists.
+#: encrypted negotiation path before the ECDH shared secret exists. The nonce
+#: is the full 16-byte CBC IV the legacy AES path also seals its bootstrap
+#: exchange under on the encrypted outer; GCM uses only its first 12 bytes.
 NEGOTIATION_KEY = "b8ff7422955d4eb6d554a2c470280559"
-NEGOTIATION_NONCE = "6ba3e3f2f3a60f2971ce5d1f"
+NEGOTIATION_NONCE = "6ba3e3f2f3a60f2971ce5d1fd821cfa3"
 NEGOTIATION_AAD = "3322110077665544bbaa9988ffeeddcc"
+
+#: Public default account a device bootstraps legacy AES from (its first 16
+#: bytes) when a plain-outer ``CONNECT`` carries no client id (``a2``). This
+#: library always sends one; the encrypted outer bootstraps from the static
+#: key and IV instead.
+ANKER_DEFAULT_ACCOUNT_1 = "ANKER_DEFAULT_ACCOUNT_1"
 
 # POSIX timezone to use if determining the system time zone fails
 FALLBACK_TZ = "GMT0BST,M3.5.0/1,M10.5.0"
