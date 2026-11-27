@@ -21,7 +21,12 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
     derive_private_key,
 )
 
+from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Container,
+)
+
 from SolixBLE.const import FALLBACK_TZ
+from SolixBLE.constructs import Composer, Packet, PacketCommand, PacketPattern
 from SolixBLE.device import SolixBLEDevice
 from SolixBLE.protocols import EcdhPath, Keys, NegotiatedSession
 from SolixBLE.utilities import _to_bytes
@@ -458,17 +463,18 @@ class RecordingLink:
         self.sent: list[tuple[str, str, dict[str, bytes]]] = []
 
     async def _send_packet(
-        self, pattern: str, cmd: str, parameters: dict[str, Any],
+        self, channel: int, command: Container, parameters: dict[str, Any],
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         """
         Record a packet instead of sending it.
 
-        :param pattern: Pattern of the packet.
-        :param cmd: Command of the packet.
+        :param channel: Channel of the packet.
+        :param command: The command's fields.
         :param parameters: Parameters by tag, values may be lambdas taking self.
         """
-        self.sent.append((pattern, cmd, {
+        pattern = PacketPattern.build({"composer": Composer.REPLY, "channel": channel})
+        self.sent.append((pattern.hex(), PacketCommand.build(command).hex(), {
             tag: _to_bytes(data=item["value"], **kwargs | { "self": self })
             for tag, item in parameters.items()
         }))
@@ -491,3 +497,48 @@ class RecordingLink:
             int.from_bytes(bytes.fromhex(SOLIX_TEST_PRIVATE_KEY), byteorder="big"),
             SECP256R1(),
         )
+
+
+async def feed_negotiation(
+    session: NegotiatedSession, replies: list[tuple[str, str]],
+) -> None:
+    """
+    Feed a negotiation session decrypted device replies in order.
+
+    :param session: Session under test.
+    :param replies: Pairs of command and plaintext payload, both as hex.
+    """
+    for cmd, plaintext in replies:
+        await session.on_plaintext(frame_header(cmd), bytes.fromhex(plaintext))
+
+
+def build_frame(pattern: str, cmd: str, payload: bytes = b"") -> bytes:
+    """
+    Build a frame from its header bytes as written on the wire.
+
+    :param pattern: The 3-byte pattern as hex (e.g. ``03010f``).
+    :param cmd: The 2-byte command as hex (e.g. ``c402``).
+    :param payload: The payload bytes.
+    :returns: The whole frame, checksum included.
+    """
+    header = PacketPattern.parse(bytes.fromhex(pattern))
+    command = PacketCommand.parse(bytes.fromhex(cmd))
+    return Packet.build({
+        "composer": header.composer,
+        "channel": header.channel,
+        "fragmented": command.fragmented,
+        "encrypted": command.encrypted,
+        "msgtype": command.msgtype,
+        "payload_bytes": payload,
+    })
+
+
+def frame_header(cmd: str, pattern: str = "030001") -> Container:
+    """
+    Return the parsed header of a frame, as the device hands it on.
+
+    :param cmd: The 2-byte command as hex (e.g. ``4801``).
+    :param pattern: The 3-byte pattern as hex.
+    :returns: The parsed packet, with an empty payload.
+    """
+    return Packet.parse(build_frame(pattern, cmd))

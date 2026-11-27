@@ -9,15 +9,18 @@ decoding the packet format used by Anker devices.
 
 import json
 import operator
+from enum import IntEnum
 from functools import reduce
 from typing import Any, Self
 
-from construct import (
+from construct import (  # type: ignore[import-untyped]  # construct ships no type stubs
+    Adapter,
     BitsInteger,
     BitStruct,
     Bytes,
     Checksum,
     Const,
+    Construct,
     Container,
     ExprAdapter,
     ExprValidator,
@@ -56,6 +59,199 @@ def _get_val(obj: Any, key: str, default: Any=None) -> Any:
         return obj.get(key, default)
     return getattr(obj, key, default)
 
+class Channel(IntEnum):
+    """Dispatch channel of a packet, the last byte of its pattern."""
+
+    #: Negotiation requests, replies and the grant.
+    NEGOTIATION = 0x01
+
+    #: Session commands, replies and pushes.
+    SESSION = 0x0F
+
+    #: App session pushes and relayed replies.
+    APP = 0x11
+
+
+class Composer(IntEnum):
+    """Module composer that built a packet, the middle byte of its pattern."""
+
+    #: A reply, which echoes the request's pattern (requests carry ``00`` too).
+    REPLY = 0x00
+
+    #: A frame the device sends on its own (pushes, relayed replies, grants).
+    SEND = 0x01
+
+
+class Negotiation(IntEnum):
+    """Negotiation message types on the negotiation channel, named after the app's."""
+
+    #: ``ConnectCmd``, the opening request.
+    CONNECT = 0x001
+
+    #: Capability negotiation: the device's capability bits, MTU and auth method.
+    NEGOTIATE_CAPABILITY = 0x003
+
+    #: ``SetCapabilityCmd``: the method the client chose.
+    SET_CAPABILITY = 0x005
+
+    #: ``getPublicKey``: the ECDH key exchange.
+    GET_PUBLIC_KEY = 0x021
+
+    #: ``GetAesKeyCmd``: the clock, and the session key on the legacy AES path.
+    GET_AES_KEY = 0x022
+
+    #: Bind user: the client's account and the device serial.
+    BIND_USER = 0x023
+
+    #: ``getAuthentication``: registration of the client token.
+    GET_AUTHENTICATION = 0x027
+
+    #: ``getDeviceInfo``: the device's serial and MAC.
+    GET_DEVICE_INFO = 0x029
+
+
+def _to_enum(enum: type[IntEnum], value: int) -> int:
+    """Return the enum member for a value, or the value itself if it has none."""
+    try:
+        return enum(value)
+    except ValueError:
+        return value
+
+
+class IntEnumAdapter(Adapter):  # type: ignore[misc]  # construct ships no type stubs
+    """Decode an integer as an :class:`~enum.IntEnum` member, unknown values as is.
+
+    A plain construct ``Enum`` decodes to a string, which no longer compares
+    equal to the integer; an ``IntEnum`` member does.
+    """
+
+    def __init__(self, subcon: Construct, enum: type[IntEnum]) -> None:
+        """Adapt ``subcon``'s integer to members of ``enum``."""
+        super().__init__(subcon)
+        self.enum = enum
+
+    def _decode(self, obj: int, _context: Container, _path: str) -> int:
+        return _to_enum(self.enum, obj)
+
+    def _encode(self, obj: int, _context: Container, _path: str) -> int:
+        return int(obj)
+
+
+PacketPattern = Struct(
+    "family" / Const(0x03, Int8ub),
+    "composer" / IntEnumAdapter(Int8ub, Composer),
+    "channel" / IntEnumAdapter(Int8ub, Channel),
+)
+"""
+Pattern of an Anker packet: ``03 <composer> <channel>``.
+
+The channel is the module's dispatch key; the composer tells a frame the
+device sends on its own from a reply. Both decode to their enum where one
+exists (:class:`Channel`, :class:`Composer`), else to the integer.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        pattern = PacketPattern.parse(bytes.fromhex("03010f"))
+        print(f"composer: {pattern.composer!r}, channel: {pattern.channel!r}")
+
+"""
+
+#: Bit of the 12-bit message type that marks a response.
+RESPONSE_BIT = 0x800
+
+
+def _encode_command(obj: Container, _: Container) -> dict[str, object]:
+    """Return the command's bit fields from its message and response bit, or msgtype."""
+    msgtype = _get_val(obj, "msgtype")
+    if msgtype is None:
+        response = RESPONSE_BIT if _get_val(obj, "response") else 0
+        msgtype = _get_val(obj, "message") | response
+    return {
+        "fragmented": bool(_get_val(obj, "fragmented")),
+        "encrypted": bool(_get_val(obj, "encrypted")),
+        "reserved": 0,
+        "response": bool(msgtype & RESPONSE_BIT),
+        "message": msgtype & ~RESPONSE_BIT,
+    }
+
+
+PacketCommand = ExprAdapter(
+    BitStruct(
+        "fragmented" / Flag,
+        "encrypted" / Flag,
+        "reserved" / BitsInteger(2),
+        "response" / Flag,
+        "message" / BitsInteger(11),
+    ),
+    decoder=lambda obj, _: Container(
+        fragmented=obj.fragmented,
+        encrypted=obj.encrypted,
+        response=obj.response,
+        message=obj.message,
+        msgtype=obj.message | (RESPONSE_BIT if obj.response else 0),
+    ),
+    encoder=_encode_command,
+)
+"""
+Command of an Anker packet: link flags, the response bit and the message.
+
+``fragmented`` (``0x80``) marks a fragment, whose payload opens with
+index << 4 | total; ``encrypted`` (``0x40``) an encrypted/authorized link. A
+response is the request's message with ``response`` set. ``msgtype`` is the
+12-bit message type, response bit included (``c900`` is ``0x900``), and is
+what replies and telemetry are matched on. It builds from either ``message``
+and ``response`` or ``msgtype``.
+
+Usage:
+    .. code-block:: python
+       :linenos:
+
+        command = PacketCommand.parse(bytes.fromhex("c900"))
+        print(f"message: {command.message:03x}, response: {command.response}")
+
+        cmd_bytes = PacketCommand.build({"encrypted": True, "message": 0x005})
+
+"""
+
+
+def _decode_packet(p: Container, _: Container) -> Container:
+    """Return the packet's fields; a negotiation message as a :class:`Negotiation`."""
+    content = p.content.value
+    channel = content.pattern.channel
+    message = content.command.message
+    if channel == Channel.NEGOTIATION:
+        message = _to_enum(Negotiation, message)
+    return Container(
+        composer=content.pattern.composer,
+        channel=channel,
+        fragmented=content.command.fragmented,
+        encrypted=content.command.encrypted,
+        response=content.command.response,
+        message=message,
+        msgtype=content.command.msgtype,
+        payload_bytes=content.payload_bytes,
+    )
+
+
+def _encode_packet(p: Container, _: Container) -> dict[str, object]:
+    """Return the packet's structure from its fields."""
+    return {
+        "content": {
+            "value": {
+                "header": _to_bytes(_get_val(p, "header", "ff09")),
+                "pattern": {
+                    "composer": _get_val(p, "composer", Composer.REPLY),
+                    "channel": _get_val(p, "channel"),
+                },
+                "command": p,
+                "payload_bytes": _to_bytes(_get_val(p, "payload_bytes", b"")),
+            },
+        },
+    }
+
+
 Packet = ExprAdapter(
 
     # Structure of the packet
@@ -71,11 +267,11 @@ Packet = ExprAdapter(
                 # Length of the entire packet
                 "length" / Rebuild(Int16ul, lambda this: 10 + len(this.payload_bytes)),
 
-                # Pattern of the packet (e.g negotiation type, telemetry type etc)
-                "pattern" / Hex(Bytes(3)),
+                # Pattern of the packet: family, composer and channel
+                "pattern" / PacketPattern,
 
-                # Command of the packet (e.g turn on, off, etc)
-                "cmd" / Hex(Bytes(2)),
+                # Command of the packet: link flags, response bit and message
+                "command" / PacketCommand,
 
                 # Payload bytes of the packet (may be encrypted or fragmented)
                 "payload_bytes" / HexDump(Bytes(lambda this: this.length - 10)),
@@ -90,112 +286,37 @@ Packet = ExprAdapter(
         )),
     ),
 
-    # Encoders and decoders which allow for direct access
-    # (e.g packet.cmd rather than packet.content.cmd)
-    decoder=lambda p, _: p.content.value,
-    encoder=lambda p, _: {
-            "content": {
-                "value": {
-                    "header": _to_bytes(_get_val(p, "header", "ff09")),
-                    "pattern": _to_bytes(_get_val(p, "pattern")),
-                    "cmd": _to_bytes(_get_val(p, "cmd")),
-                    "payload_bytes": _to_bytes(_get_val(p, "payload_bytes", b"")),
-                },
-            },
-    },
+    # Encoders and decoders which allow for direct access to the fields
+    # (e.g packet.channel rather than packet.content.pattern.channel)
+    decoder=_decode_packet,
+    encoder=_encode_packet,
 )
 """
 Anker device packet.
 
 This class represents a packet of an Anker device. Packets are made up of a
-header, size, pattern, cmd, payload, and a checksum.
+header, size, pattern, command, payload, and a checksum.
 
-Structure: <Header 2B> <Size 2B> <Pattern 3B> <CMD 2B> <Payload nB> <Checksum 1B>.
+Structure: <Header 2B> <Size 2B> <Pattern 3B> <Command 2B> <Payload nB> <Checksum 1B>.
+
+A parsed packet gives the pattern's ``composer`` and ``channel``
+(:data:`PacketPattern`), the command's ``fragmented``, ``encrypted``,
+``response``, ``message`` and ``msgtype`` (:data:`PacketCommand`), and the
+``payload_bytes``. On the negotiation channel ``message`` is a
+:class:`Negotiation` member. A packet builds from the same fields; the
+composer defaults to :attr:`Composer.REPLY`, the flags to unset.
 
 Usage:
     .. code-block:: python
        :linenos:
 
         packet = Packet.parse(packet_bytes)
-        print(f"p: {packet.pattern}, c: {packet.cmd}, b: {packet.payload_bytes}")
+        print(f"channel: {packet.channel!r}, msgtype: {packet.msgtype:03x}")
 
         packet_bytes = Packet.build({
-            "pattern": "030001",
-            "cmd": "0000",
+            "channel": Channel.NEGOTIATION,
+            "message": Negotiation.CONNECT,
             "payload_bytes": "a101a20200a303010000",
-        })
-
-"""
-
-#: Dispatch channel of negotiation requests, replies and the grant.
-CHANNEL_NEGOTIATION = 0x01
-
-#: Dispatch channel of session commands, replies and pushes.
-CHANNEL_SESSION = 0x0F
-
-#: Dispatch channel of app session pushes.
-CHANNEL_APP = 0x11
-
-#: Composer of a reply that echoes the request's pattern.
-COMPOSER_REPLY = 0x00
-
-#: Composer of a frame the device sends on its own.
-COMPOSER_SEND = 0x01
-
-PacketPattern = Struct(
-    "family" / Int8ub,
-    "composer" / Int8ub,
-    "channel" / Int8ub,
-)
-"""
-Pattern of an Anker packet: ``03 <composer> <channel>``.
-
-The channel is the module's dispatch key (``0x01`` negotiation, ``0x0f`` /
-``0x11`` session); the composer is ``01`` on frames the module sends on its
-own and ``00`` on replies that echo the request.
-
-Usage:
-    .. code-block:: python
-       :linenos:
-
-        pattern = PacketPattern.parse(packet.pattern)
-        print(f"composer: {pattern.composer}, channel: {pattern.channel}")
-
-"""
-
-PacketCommand = ExprAdapter(
-    BitStruct(
-        "fragmented" / Flag,
-        "encrypted" / Flag,
-        "reserved" / BitsInteger(2),
-        "msgtype" / BitsInteger(12),
-    ),
-    decoder=lambda obj, _: Container(
-        fragmented=obj.fragmented,
-        encrypted=obj.encrypted,
-        msgtype=obj.msgtype,
-        response=bool(obj.msgtype & 0x800),
-    ),
-    encoder=lambda obj, _: {"reserved": 0, **obj},
-)
-"""
-Command of an Anker packet: link flags in the high nibble, a 12-bit message type.
-
-``0x80`` marks a fragment (the payload's first byte is index << 4 | total) and
-``0x40`` an encrypted/authorized link; a response is the request's message
-type with ``0x800`` set.
-
-Usage:
-    .. code-block:: python
-       :linenos:
-
-        command = PacketCommand.parse(packet.cmd)
-        print(f"msgtype: {command.msgtype:03x}, encrypted: {command.encrypted}")
-
-        cmd_bytes = PacketCommand.build({
-            "fragmented": False,
-            "encrypted": True,
-            "msgtype": 0x005,
         })
 
 """

@@ -57,7 +57,8 @@ ECDH_SECRET_LENGTH = 32
     ],
 )
 def test_util_tz(
-    tz: str | Exception, output: str | None,
+    tz: str | Exception,
+    output: str | None,
 ) -> None:
     """
     Test the generation of POSIX timezone strings.
@@ -97,7 +98,8 @@ def test_util_offset_seconds_west(gmtoff: int, output: str) -> None:
     :param output: Expected output of function as hex.
     """
     local_time = time.struct_time(
-        (2026, 7, 1, 12, 0, 0, 2, 182, 1), {"tm_zone": "LOCAL", "tm_gmtoff": gmtoff},
+        (2026, 7, 1, 12, 0, 0, 2, 182, 1),
+        {"tm_zone": "LOCAL", "tm_gmtoff": gmtoff},
     )
     with mock.patch("SolixBLE.utilities.time.localtime", return_value=local_time):
         assert _offset_seconds_west() == bytes.fromhex(output)
@@ -158,25 +160,35 @@ def test_util_cbc_round_trip(payload: bytes) -> None:
     ],
 )
 def test_util_gcm_known_frame(
-    key: str, nonce: str, aad: str, payload: str, encrypted: str,
+    key: str,
+    nonce: str,
+    aad: str,
+    payload: str,
+    encrypted: str,
 ) -> None:
     """
     Test AES-GCM against a recorded frame on the static negotiation key.
 
     :param key: AES key as hex.
-    :param nonce: Nonce as hex.
+    :param nonce: Nonce as hex; GCM uses only its first 12 bytes.
     :param aad: Additional authenticated data as hex.
     :param payload: Plain-text bytes as hex.
     :param encrypted: Cipher-text and MAC as hex.
     """
     key_bytes = bytes.fromhex(key)
-    nonce_bytes = bytes.fromhex(nonce)
+    nonce_bytes = bytes.fromhex(nonce)[:12]
     aad_bytes = bytes.fromhex(aad)
     assert gcm_decrypt(
-        key_bytes, nonce_bytes, aad_bytes, bytes.fromhex(encrypted),
+        key_bytes,
+        nonce_bytes,
+        aad_bytes,
+        bytes.fromhex(encrypted),
     ) == bytes.fromhex(payload)
     assert gcm_encrypt(
-        key_bytes, nonce_bytes, aad_bytes, bytes.fromhex(payload),
+        key_bytes,
+        nonce_bytes,
+        aad_bytes,
+        bytes.fromhex(payload),
     ) == bytes.fromhex(encrypted)
 
 
