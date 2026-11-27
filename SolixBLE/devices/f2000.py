@@ -4,14 +4,63 @@
 
 """
 
+import logging
 from datetime import datetime, timedelta
+
+from SolixBLE.constructs import ParameterDict, Parameters
 
 from ..const import (
     DEFAULT_METADATA_FLOAT,
     DEFAULT_METADATA_INT,
     DEFAULT_METADATA_STRING,
+    TELEMETRY_PATTERN_A,
 )
 from ..device import SolixBLEDevice
+from ..states import LightStatus
+
+CMD_DISPLAY_ON_OFF = "4052"
+CMD_AC_OUTPUT = "404a"
+CMD_DC_OUTPUT = "404b"
+CMD_POWER_SAVING_MODE = "404e"
+CMD_LIGHT_MODE = "404f"
+CMD_GET_STATUS = "4040"
+
+CMD_RESPONSE_GET_STATUS = "c840"
+
+PARAMETERS_ON = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 1,
+    },
+}
+
+PARAMETERS_OFF = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": 0,
+    },
+}
+
+PARAMETERS_LIGHT_MODE = {
+    "a1": {
+        "value": "21",
+    }, "a2": {
+        "type": 1,
+        "value": lambda mode: mode.value,
+    },
+}
+
+PARAMETERS_GET_STATUS = {
+    "a1": {
+        "value": "21",
+    },
+}
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class F2000(SolixBLEDevice):
@@ -22,8 +71,9 @@ class F2000(SolixBLEDevice):
     This model is also known as the A1780 or the 767 PowerHouse.
 
     .. note::
-        This model was added using data from anker-solix-api. It has not been
-        tested!
+        This model was added using data from anker-solix-api. The commands
+        below have been confirmed on real units (see issue #29), but not all
+        of the telemetry has been tested.
 
     .. note::
         It should be possible to add more sensors. I think devices with lots of
@@ -282,3 +332,105 @@ class F2000(SolixBLEDevice):
         :returns: Device serial number or default str value.
         """
         return self._parse_string("d0", begin=1)
+
+    async def turn_ac_on(self) -> None:
+        """Turn the AC output on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_ON)
+
+    async def turn_ac_off(self) -> None:
+        """Turn the AC output off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_AC_OUTPUT, parameters=PARAMETERS_OFF)
+
+    async def turn_dc_on(self) -> None:
+        """Turn the DC output on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_ON)
+
+    async def turn_dc_off(self) -> None:
+        """Turn the DC output off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_DC_OUTPUT, parameters=PARAMETERS_OFF)
+
+    async def set_light_mode(self, mode: LightStatus) -> None:
+        """Set the light mode of the LED bar.
+
+        :param mode: Mode to set light bar to.
+        :raises ValueError: If requested mode is invalid.
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        if mode is LightStatus.UNKNOWN:
+            raise ValueError("You cannot set the light status to unknown")
+        await self._send_command(
+            cmd=CMD_LIGHT_MODE,
+            parameters=PARAMETERS_LIGHT_MODE,
+            mode=mode,
+        )
+
+    async def turn_display_on(self) -> None:
+        """Turn the display on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_ON)
+
+    async def turn_display_off(self) -> None:
+        """Turn the display off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_DISPLAY_ON_OFF, parameters=PARAMETERS_OFF)
+
+    async def turn_power_saving_mode_on(self) -> None:
+        """Turn the power saving mode on.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_POWER_SAVING_MODE, parameters=PARAMETERS_ON)
+
+    async def turn_power_saving_mode_off(self) -> None:
+        """Turn the power saving mode off.
+
+        :raises ConnectionError: If not connected to device.
+        :raises BleakError: If command transmission fails.
+        """
+        await self._send_command(cmd=CMD_POWER_SAVING_MODE, parameters=PARAMETERS_OFF)
+
+    async def get_status_update(self) -> ParameterDict:
+        """Request and retrieve a status update from the device.
+
+        :raises ConnectionError: If not connected to device.
+        :raises TimeoutError: If no response from device.
+        :raises BleakError: If command transmission fails.
+        :returns: Dictionary containing telemetry parameters.
+        """
+        await self._send_command(cmd=CMD_GET_STATUS, parameters=PARAMETERS_GET_STATUS)
+        payload = await self._listen_for_packet(
+            bytes.fromhex(TELEMETRY_PATTERN_A), bytes.fromhex(CMD_RESPONSE_GET_STATUS),
+        )
+        if not payload:
+            raise TimeoutError("Timed out waiting for payload!")
+
+        parameters = Parameters.parse(payload)
+        _LOGGER.debug(f"Parameters: {parameters}")
+        await self._process_telemetry(
+            parameters,
+        )  # update the internal parameters as well
+        return parameters

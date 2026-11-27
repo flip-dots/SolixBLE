@@ -29,6 +29,11 @@ from tests.devices.c1000 import (
     C1000_TEST_COMMANDS_RESPONSES,
 )
 from tests.devices.c1000g2 import C1000G2_TEST_COMMANDS, C1000G2_TEST_COMMANDS_E2E
+from tests.devices.f2000 import (
+    F2000_TEST_COMMANDS,
+    F2000_TEST_COMMANDS_E2E,
+    F2000_TEST_COMMANDS_RESPONSES,
+)
 from tests.devices.f2600 import (
     F2600_TEST_COMMANDS,
     F2600_TEST_COMMANDS_E2E,
@@ -55,6 +60,7 @@ from tests.helpers import MockDevice
         *C800_TEST_COMMANDS,
         *C1000_TEST_COMMANDS,
         *C1000G2_TEST_COMMANDS,
+        *F2000_TEST_COMMANDS,
         *F2600_TEST_COMMANDS,
         *F3800_TEST_COMMANDS,
         *PRIME_CHARGER_160W_TEST_COMMANDS,
@@ -107,6 +113,7 @@ async def test_send_command(
         *C300_TEST_COMMANDS_RESPONSES,
         *C800_TEST_COMMANDS_RESPONSES,
         *C1000_TEST_COMMANDS_RESPONSES,
+        *F2000_TEST_COMMANDS_RESPONSES,
         *F2600_TEST_COMMANDS_RESPONSES,
     ],
 )
@@ -176,6 +183,7 @@ async def test_send_command_response(  # noqa: PLR0913, PLR0917
         *C800_TEST_COMMANDS_E2E,
         *C1000_TEST_COMMANDS_E2E,
         *C1000G2_TEST_COMMANDS_E2E,
+        *F2000_TEST_COMMANDS_E2E,
         *F2600_TEST_COMMANDS_E2E,
         *F3800_TEST_COMMANDS_E2E,
         *PRIME_CHARGER_160W_TEST_COMMANDS_E2E,
