@@ -16,6 +16,7 @@ the list of properties for that class.
    c300dc
    c800
    c1000
+   as220
    c1000g2
    f2000
    f2600
