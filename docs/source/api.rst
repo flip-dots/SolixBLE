@@ -12,6 +12,7 @@ the list of properties for that class.
    :maxdepth: 2
    :hidden:
 
+   c200dc
    c300
    c300dc
    c800
