@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from .advertisement import record_from_advertisement
 from .const import LEGACY_SERVICE, SERVICE_2215
 from .devices import (
+    C200DC,
     C300DC,
     C800,
     C1000,
@@ -51,6 +52,7 @@ MODELS_BY_NAME: dict[str, type[SolixBLEDevice]] = {
     "SOLIX C1000 Plus": C1000G2,
     "SOLIX C1000X Gen 2": C1000G2,
     "Anker SOLIX C1000": C1000,
+    "Anker SOLIX C200 DC": C200DC,
     "Anker SOLIX C300 DC": C300DC,
     "Anker SOLIX F3800": F3800,
     "Anker SOLIX F3800 Plus": F3800,

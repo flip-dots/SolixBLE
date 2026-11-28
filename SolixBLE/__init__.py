@@ -7,6 +7,7 @@
 from .advertisement import capability_from_advertisement
 from .device import SolixBLEDevice
 from .devices import (
+    C200DC,
     C300,
     C300DC,
     C800,
@@ -37,6 +38,7 @@ from .states import (
 from .utilities import discover_devices, set_region
 
 __all__ = [
+    "C200DC",
     "C300",
     "C300DC",
     "C800",
