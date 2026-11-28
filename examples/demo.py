@@ -14,6 +14,7 @@ from aioconsole import ainput
 from bleak import BLEDevice
 
 from SolixBLE import (
+    C200DC,
     C300,
     C300DC,
     C800,
@@ -33,6 +34,7 @@ from SolixBLE import (
 )
 
 MODELS = {
+    "C200DC": C200DC,
     "C300": C300,
     "C300DC": C300DC,
     "C800": C800,

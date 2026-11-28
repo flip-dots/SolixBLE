@@ -17,6 +17,7 @@ from tests.devices.c300 import (
     C300_TEST_COMMANDS_E2E,
     C300_TEST_COMMANDS_RESPONSES,
 )
+from tests.devices.c200dc import C200DC_TEST_COMMANDS, C200DC_TEST_COMMANDS_E2E
 from tests.devices.c300dc import C300DC_TEST_COMMANDS, C300DC_TEST_COMMANDS_E2E
 from tests.devices.c800 import (
     C800_TEST_COMMANDS,
@@ -55,6 +56,7 @@ from tests.helpers import MockDevice
 @pytest.mark.parametrize(
     ("device_class", "function", "arguments", "expected"),
     [
+        *C200DC_TEST_COMMANDS,
         *C300_TEST_COMMANDS,
         *C300DC_TEST_COMMANDS,
         *C800_TEST_COMMANDS,
@@ -178,6 +180,7 @@ async def test_send_command_response(  # noqa: PLR0913, PLR0917
 @pytest.mark.parametrize(
     ("device_class", "negotiation", "function", "arguments", "expected"),
     [
+        *C200DC_TEST_COMMANDS_E2E,
         *C300_TEST_COMMANDS_E2E,
         *C300DC_TEST_COMMANDS_E2E,
         *C800_TEST_COMMANDS_E2E,

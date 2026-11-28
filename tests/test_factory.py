@@ -6,6 +6,7 @@
 import pytest
 
 from SolixBLE import (
+    C200DC,
     C300DC,
     C800,
     C1000,
@@ -48,6 +49,7 @@ from tests.helpers import make_advertisement
         pytest.param(None, "SOLIX C1000 Gen 2", C1000G2, id="name_c1000_gen_2"),
         pytest.param(None, "SOLIX C1000X Gen 2", C1000G2, id="name_c1000x_gen_2"),
         pytest.param(None, "Anker SOLIX C1000", C1000, id="name_c1000"),
+        pytest.param(None, "Anker SOLIX C200 DC", C200DC, id="name_c200dc"),
         pytest.param(None, "Anker SOLIX C300 DC", C300DC, id="name_c300dc"),
         pytest.param(None, "Anker SOLIX F3800 Plus", F3800, id="name_f3800_plus"),
         pytest.param(None, "A1763_A370", Generic, id="no_part_number_entry"),
